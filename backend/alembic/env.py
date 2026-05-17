@@ -20,6 +20,10 @@ if config.config_file_name is not None:
 # target_metadata = mymodel.Base.metadata
 from app.db.base import Base
 from app.models.purchase_batch import PurchaseBatch
+from app.models.receipt import Receipt
+from app.models.gift_card import GiftCard
+from app.models.card_image import CardImage
+from app.models.extraction_attempt import ExtractionAttempt
 
 target_metadata = Base.metadata
 
