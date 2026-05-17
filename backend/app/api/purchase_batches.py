@@ -46,3 +46,17 @@ def list_purchase_batches():
         return db.query(PurchaseBatch).order_by(PurchaseBatch.created_at.desc()).all()
     finally:
         db.close()
+        
+@router.get("/{purchase_batch_id}")
+def get_purchase_batch(purchase_batch_id: int):
+    db: Session = SessionLocal()
+
+    try:
+        return (
+            db.query(PurchaseBatch)
+            .filter(PurchaseBatch.id == purchase_batch_id)
+            .first()
+        )
+
+    finally:
+        db.close()

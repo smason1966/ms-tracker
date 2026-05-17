@@ -1,0 +1,440 @@
+"use client";
+
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useParams } from "next/navigation";
+
+type PurchaseBatch = {
+  id: number;
+  store_name: string;
+  purchase_date: string;
+  total_amount: string | number;
+  notes: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+type GiftCard = {
+  id: number;
+  brand: string;
+  face_value: string | number;
+  status: string;
+  notes: string | null;
+  purchase_batch_id?: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+type GiftCardForm = {
+  brand: string;
+  face_value: string;
+  notes: string;
+};
+
+const emptyGiftCardForm: GiftCardForm = {
+  brand: "",
+  face_value: "",
+  notes: "",
+};
+
+export default function PurchaseDetailPage() {
+  const params = useParams<{ id: string | string[] }>();
+  const purchaseId = useMemo(() => {
+    const rawId = params.id;
+    return Array.isArray(rawId) ? rawId[0] : rawId;
+  }, [params.id]);
+
+  const [purchase, setPurchase] = useState<PurchaseBatch | null>(null);
+  const [giftCards, setGiftCards] = useState<GiftCard[]>([]);
+  const [form, setForm] = useState<GiftCardForm>(emptyGiftCardForm);
+  const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
+  const [isLoadingGiftCards, setIsLoadingGiftCards] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const purchaseUrl = `http://localhost:8000/purchase-batches/${purchaseId}`;
+  const giftCardsUrl = `http://localhost:8000/gift-cards/purchase/${purchaseId}`;
+
+  const loadGiftCards = useCallback(
+    async (options: { showLoading?: boolean } = {}) => {
+      if (!purchaseId) {
+        return;
+      }
+
+      if (options.showLoading ?? true) {
+        setIsLoadingGiftCards(true);
+      }
+
+      setError(null);
+
+      try {
+        const response = await fetch(giftCardsUrl);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load gift cards (${response.status})`);
+        }
+
+        const data = (await response.json()) as GiftCard[];
+        setGiftCards(data);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to load gift cards.",
+        );
+      } finally {
+        setIsLoadingGiftCards(false);
+      }
+    },
+    [giftCardsUrl, purchaseId],
+  );
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadPurchase() {
+      if (!purchaseId) {
+        return;
+      }
+
+      setIsLoadingPurchase(true);
+      setError(null);
+
+      try {
+        const response = await fetch(purchaseUrl);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load purchase (${response.status})`);
+        }
+
+        const data = (await response.json()) as PurchaseBatch;
+
+        if (isMounted) {
+          setPurchase(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setError(
+            err instanceof Error ? err.message : "Failed to load purchase.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingPurchase(false);
+        }
+      }
+    }
+
+    loadPurchase();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [purchaseId, purchaseUrl]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadInitialGiftCards() {
+      if (!purchaseId) {
+        return;
+      }
+
+      setIsLoadingGiftCards(true);
+      setError(null);
+
+      try {
+        const response = await fetch(giftCardsUrl);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load gift cards (${response.status})`);
+        }
+
+        const data = (await response.json()) as GiftCard[];
+
+        if (isMounted) {
+          setGiftCards(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setError(
+            err instanceof Error ? err.message : "Failed to load gift cards.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingGiftCards(false);
+        }
+      }
+    }
+
+    loadInitialGiftCards();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [giftCardsUrl, purchaseId]);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFormError(null);
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch("http://localhost:8000/gift-cards/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          brand: form.brand.trim(),
+          face_value: form.face_value,
+          notes: form.notes.trim() || null,
+          purchase_batch_id: Number(purchaseId),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create gift card (${response.status})`);
+      }
+
+      setForm(emptyGiftCardForm);
+      await loadGiftCards({ showLoading: false });
+    } catch (err) {
+      setFormError(
+        err instanceof Error ? err.message : "Failed to create gift card.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  function updateFormField(field: keyof GiftCardForm, value: string) {
+    setForm((currentForm) => ({
+      ...currentForm,
+      [field]: value,
+    }));
+  }
+
+  function formatDate(value: string) {
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(date);
+  }
+
+  function formatAmount(value: string | number) {
+    const amount = Number(value);
+
+    if (Number.isNaN(amount)) {
+      return String(value);
+    }
+
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+    }).format(amount);
+  }
+
+  return (
+    <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-950 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-6xl space-y-8">
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-slate-500">
+              Purchase Batch #{purchaseId}
+            </p>
+            <h1 className="mt-1 text-3xl font-semibold tracking-tight">
+              Purchase Detail
+            </h1>
+          </div>
+
+          <button
+            className="h-10 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+            type="button"
+            onClick={() => loadGiftCards()}
+            disabled={isLoadingGiftCards}
+          >
+            {isLoadingGiftCards ? "Loading..." : "Refresh Gift Cards"}
+          </button>
+        </header>
+
+        {error ? (
+          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+            {error}
+          </div>
+        ) : null}
+
+        <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold">Purchase</h2>
+
+          {isLoadingPurchase ? (
+            <div className="mt-6 text-sm text-slate-500">
+              Loading purchase details...
+            </div>
+          ) : purchase ? (
+            <dl className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <dt className="text-sm font-medium text-slate-500">Store</dt>
+                <dd className="mt-1 text-base font-semibold">
+                  {purchase.store_name}
+                </dd>
+              </div>
+
+              <div>
+                <dt className="text-sm font-medium text-slate-500">
+                  Purchase Date
+                </dt>
+                <dd className="mt-1 text-base font-semibold">
+                  {formatDate(purchase.purchase_date)}
+                </dd>
+              </div>
+
+              <div>
+                <dt className="text-sm font-medium text-slate-500">
+                  Total Amount
+                </dt>
+                <dd className="mt-1 text-base font-semibold">
+                  {formatAmount(purchase.total_amount)}
+                </dd>
+              </div>
+
+              <div>
+                <dt className="text-sm font-medium text-slate-500">Notes</dt>
+                <dd className="mt-1 text-base text-slate-800">
+                  {purchase.notes || "-"}
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            <div className="mt-6 text-sm text-slate-500">
+              No purchase details found.
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold">Add Gift Card</h2>
+
+          {formError ? (
+            <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+              {formError}
+            </div>
+          ) : null}
+
+          <form
+            className="mt-5 grid gap-5 md:grid-cols-3"
+            onSubmit={handleSubmit}
+          >
+            <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Brand</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="text"
+                value={form.brand}
+                onChange={(event) =>
+                  updateFormField("brand", event.target.value)
+                }
+                placeholder="Target"
+                required
+              />
+            </label>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Face Value</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.face_value}
+                onChange={(event) =>
+                  updateFormField("face_value", event.target.value)
+                }
+                placeholder="25.00"
+                required
+              />
+            </label>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700 md:row-span-2">
+              <span>Notes</span>
+              <textarea
+                className="min-h-28 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                value={form.notes}
+                onChange={(event) =>
+                  updateFormField("notes", event.target.value)
+                }
+                placeholder="Optional notes"
+              />
+            </label>
+
+            <div className="flex items-end">
+              <button
+                className="h-11 rounded-md bg-slate-900 px-5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                type="submit"
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? "Adding..." : "Add Gift Card"}
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-6 py-4">
+            <h2 className="text-lg font-semibold">Gift Cards</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {giftCards.length} {giftCards.length === 1 ? "card" : "cards"}
+            </p>
+          </div>
+
+          {isLoadingGiftCards ? (
+            <div className="px-6 py-12 text-center text-sm text-slate-500">
+              Loading gift cards...
+            </div>
+          ) : giftCards.length === 0 ? (
+            <div className="px-6 py-12 text-center text-sm text-slate-500">
+              No gift cards found for this purchase.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  <tr>
+                    <th className="px-6 py-3">Brand</th>
+                    <th className="px-6 py-3">Face Value</th>
+                    <th className="px-6 py-3">Status</th>
+                    <th className="px-6 py-3">Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 bg-white">
+                  {giftCards.map((giftCard) => (
+                    <tr key={giftCard.id} className="hover:bg-slate-50">
+                      <td className="whitespace-nowrap px-6 py-4 font-medium">
+                        {giftCard.brand}
+                      </td>
+                      <td className="whitespace-nowrap px-6 py-4 text-slate-700">
+                        {formatAmount(giftCard.face_value)}
+                      </td>
+                      <td className="whitespace-nowrap px-6 py-4 text-slate-700">
+                        {giftCard.status}
+                      </td>
+                      <td className="max-w-md px-6 py-4 text-slate-700">
+                        {giftCard.notes || "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
+    </main>
+  );
+}
