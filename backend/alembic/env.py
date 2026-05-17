@@ -24,6 +24,8 @@ from app.models.receipt import Receipt
 from app.models.gift_card import GiftCard
 from app.models.card_image import CardImage
 from app.models.extraction_attempt import ExtractionAttempt
+from app.models.store import Store
+from app.models.card_brand import CardBrand
 
 target_metadata = Base.metadata
 
