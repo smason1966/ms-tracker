@@ -19,21 +19,43 @@ type PurchaseBatchForm = {
   notes: string;
 };
 
-const API_URL = "http://localhost:8000/purchase-batches/";
-
-const emptyForm: PurchaseBatchForm = {
-  store_name: "",
-  purchase_date: "",
-  total_amount: "",
-  notes: "",
+type Store = {
+  id: number;
+  name: string;
+  store_type: string | null;
+  active: boolean;
 };
+
+const API_URL = "http://localhost:8000/purchase-batches/";
+const STORES_URL = "http://localhost:8000/stores/";
+
+function getTodayDateString() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function createEmptyForm(): PurchaseBatchForm {
+  return {
+    store_name: "",
+    purchase_date: getTodayDateString(),
+    total_amount: "",
+    notes: "",
+  };
+}
 
 export default function PurchaseBatchDashboard() {
   const [batches, setBatches] = useState<PurchaseBatch[]>([]);
-  const [form, setForm] = useState<PurchaseBatchForm>(emptyForm);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [form, setForm] = useState<PurchaseBatchForm>(() => createEmptyForm());
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingStores, setIsLoadingStores] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [storesError, setStoresError] = useState<string | null>(null);
 
   async function loadBatches(options: { showLoading?: boolean } = {}) {
     if (options.showLoading ?? true) {
@@ -65,6 +87,35 @@ export default function PurchaseBatchDashboard() {
   useEffect(() => {
     let isMounted = true;
 
+    async function loadStores() {
+      setIsLoadingStores(true);
+      setStoresError(null);
+
+      try {
+        const response = await fetch(STORES_URL);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load stores (${response.status})`);
+        }
+
+        const data = (await response.json()) as Store[];
+
+        if (isMounted) {
+          setStores(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setStoresError(
+            err instanceof Error ? err.message : "Failed to load stores.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingStores(false);
+        }
+      }
+    }
+
     async function loadInitialBatches() {
       try {
         const response = await fetch(API_URL);
@@ -93,6 +144,7 @@ export default function PurchaseBatchDashboard() {
       }
     }
 
+    loadStores();
     loadInitialBatches();
 
     return () => {
@@ -123,7 +175,7 @@ export default function PurchaseBatchDashboard() {
         throw new Error(`Failed to create purchase batch (${response.status})`);
       }
 
-      setForm(emptyForm);
+      setForm(createEmptyForm());
       await loadBatches({ showLoading: false });
     } catch (err) {
       setError(
@@ -188,17 +240,35 @@ export default function PurchaseBatchDashboard() {
             onSubmit={handleSubmit}
           >
             <label className="space-y-2 text-sm font-medium text-slate-700">
-              <span>Store Name</span>
-              <input
+              <span>Store</span>
+              <select
                 className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                type="text"
                 value={form.store_name}
                 onChange={(event) =>
                   updateFormField("store_name", event.target.value)
                 }
-                placeholder="Costco"
+                disabled={isLoadingStores || Boolean(storesError)}
                 required
-              />
+              >
+                <option value="">
+                  {isLoadingStores
+                    ? "Loading stores..."
+                    : stores.length === 0
+                      ? "No stores available"
+                      : "Select a store"}
+                </option>
+                {stores.map((store) => (
+                  <option key={store.id} value={store.name}>
+                    {store.name}
+                    {store.active ? "" : " (Inactive)"}
+                  </option>
+                ))}
+              </select>
+              {storesError ? (
+                <p className="text-xs font-medium text-red-700">
+                  {storesError}
+                </p>
+              ) : null}
             </label>
 
             <label className="space-y-2 text-sm font-medium text-slate-700">
@@ -246,7 +316,12 @@ export default function PurchaseBatchDashboard() {
               <button
                 className="h-11 rounded-md bg-slate-900 px-5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                 type="submit"
-                disabled={isSubmitting}
+                disabled={
+                  isSubmitting ||
+                  isLoadingStores ||
+                  Boolean(storesError) ||
+                  stores.length === 0
+                }
               >
                 {isSubmitting ? "Creating..." : "Create Batch"}
               </button>

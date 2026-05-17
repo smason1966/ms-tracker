@@ -30,6 +30,12 @@ type GiftCardForm = {
   notes: string;
 };
 
+type CardBrand = {
+  id: number;
+  name: string;
+  active: boolean;
+};
+
 const emptyGiftCardForm: GiftCardForm = {
   brand: "",
   face_value: "",
@@ -45,15 +51,19 @@ export default function PurchaseDetailPage() {
 
   const [purchase, setPurchase] = useState<PurchaseBatch | null>(null);
   const [giftCards, setGiftCards] = useState<GiftCard[]>([]);
+  const [cardBrands, setCardBrands] = useState<CardBrand[]>([]);
   const [form, setForm] = useState<GiftCardForm>(emptyGiftCardForm);
   const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
   const [isLoadingGiftCards, setIsLoadingGiftCards] = useState(true);
+  const [isLoadingCardBrands, setIsLoadingCardBrands] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [cardBrandsError, setCardBrandsError] = useState<string | null>(null);
 
   const purchaseUrl = `http://localhost:8000/purchase-batches/${purchaseId}`;
   const giftCardsUrl = `http://localhost:8000/gift-cards/purchase/${purchaseId}`;
+  const cardBrandsUrl = "http://localhost:8000/card-brands/";
 
   const loadGiftCards = useCallback(
     async (options: { showLoading?: boolean } = {}) => {
@@ -86,6 +96,45 @@ export default function PurchaseDetailPage() {
     },
     [giftCardsUrl, purchaseId],
   );
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadCardBrands() {
+      setIsLoadingCardBrands(true);
+      setCardBrandsError(null);
+
+      try {
+        const response = await fetch(cardBrandsUrl);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load card brands (${response.status})`);
+        }
+
+        const data = (await response.json()) as CardBrand[];
+
+        if (isMounted) {
+          setCardBrands(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setCardBrandsError(
+            err instanceof Error ? err.message : "Failed to load card brands.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingCardBrands(false);
+        }
+      }
+    }
+
+    loadCardBrands();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [cardBrandsUrl]);
 
   useEffect(() => {
     let isMounted = true;
@@ -196,7 +245,10 @@ export default function PurchaseDetailPage() {
         throw new Error(`Failed to create gift card (${response.status})`);
       }
 
-      setForm(emptyGiftCardForm);
+      setForm((currentForm) => ({
+        ...currentForm,
+        notes: "",
+      }));
       await loadGiftCards({ showLoading: false });
     } catch (err) {
       setFormError(
@@ -333,16 +385,34 @@ export default function PurchaseDetailPage() {
           >
             <label className="space-y-2 text-sm font-medium text-slate-700">
               <span>Brand</span>
-              <input
+              <select
                 className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                type="text"
                 value={form.brand}
                 onChange={(event) =>
                   updateFormField("brand", event.target.value)
                 }
-                placeholder="Target"
+                disabled={isLoadingCardBrands || Boolean(cardBrandsError)}
                 required
-              />
+              >
+                <option value="">
+                  {isLoadingCardBrands
+                    ? "Loading brands..."
+                    : cardBrands.length === 0
+                      ? "No brands available"
+                      : "Select a brand"}
+                </option>
+                {cardBrands.map((brand) => (
+                  <option key={brand.id} value={brand.name}>
+                    {brand.name}
+                    {brand.active ? "" : " (Inactive)"}
+                  </option>
+                ))}
+              </select>
+              {cardBrandsError ? (
+                <p className="text-xs font-medium text-red-700">
+                  {cardBrandsError}
+                </p>
+              ) : null}
             </label>
 
             <label className="space-y-2 text-sm font-medium text-slate-700">
@@ -377,7 +447,12 @@ export default function PurchaseDetailPage() {
               <button
                 className="h-11 rounded-md bg-slate-900 px-5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                 type="submit"
-                disabled={isSubmitting}
+                disabled={
+                  isSubmitting ||
+                  isLoadingCardBrands ||
+                  Boolean(cardBrandsError) ||
+                  cardBrands.length === 0
+                }
               >
                 {isSubmitting ? "Adding..." : "Add Gift Card"}
               </button>
