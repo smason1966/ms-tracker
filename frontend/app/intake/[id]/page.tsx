@@ -39,6 +39,21 @@ const initialForm: GiftCardForm = {
   notes: "",
 };
 
+const cardImageAccept = "image/jpeg,image/png,.jpg,.jpeg,.png";
+
+function shouldUseEnvironmentCapture() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  const userAgent = window.navigator.userAgent;
+
+  return (
+    /Android|iPhone|iPad|iPod/i.test(userAgent) ||
+    (userAgent.includes("Macintosh") && window.navigator.maxTouchPoints > 1)
+  );
+}
+
 export default function RapidCardIntakePage() {
   const params = useParams<{ id: string | string[] }>();
   const purchaseId = Array.isArray(params.id) ? params.id[0] : params.id;
@@ -58,6 +73,7 @@ export default function RapidCardIntakePage() {
   const [giftCardsError, setGiftCardsError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const useCameraCapture = shouldUseEnvironmentCapture();
 
   async function loadGiftCards(options: { showLoading?: boolean } = {}) {
     if (!purchaseId) {
@@ -371,8 +387,8 @@ export default function RapidCardIntakePage() {
                 className="sr-only"
                 key={fileInputKey}
                 type="file"
-                accept="image/*"
-                capture="environment"
+                accept={cardImageAccept}
+                capture={useCameraCapture ? "environment" : undefined}
                 onChange={handleCardImageChange}
                 required
               />

@@ -51,6 +51,8 @@ const emptyGiftCardForm: GiftCardForm = {
   notes: "",
 };
 
+const cardImageAccept = "image/jpeg,image/png,image/webp,image/heic,.jpg,.jpeg,.png,.webp,.heic";
+
 export default function PurchaseDetailPage() {
   const params = useParams<{ id: string | string[] }>();
   const purchaseId = useMemo(() => {
@@ -66,6 +68,8 @@ export default function PurchaseDetailPage() {
     Record<number, boolean>
   >({});
   const [form, setForm] = useState<GiftCardForm>(emptyGiftCardForm);
+  const [cardImageFile, setCardImageFile] = useState<File | null>(null);
+  const [cardImageInputKey, setCardImageInputKey] = useState(0);
   const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
   const [isLoadingReceipts, setIsLoadingReceipts] = useState(true);
   const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
@@ -338,10 +342,32 @@ export default function PurchaseDetailPage() {
         throw new Error(`Failed to create gift card (${response.status})`);
       }
 
+      const giftCard = (await response.json()) as GiftCard;
+
+      if (cardImageFile) {
+        const formData = new FormData();
+        formData.append("gift_card_id", String(giftCard.id));
+        formData.append("file", cardImageFile);
+
+        const imageResponse = await fetch(`${API_BASE_URL}/card-images/upload`, {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!imageResponse.ok) {
+          await loadGiftCards({ showLoading: false });
+          throw new Error(
+            `Gift card created, but image upload failed (${imageResponse.status})`,
+          );
+        }
+      }
+
       setForm((currentForm) => ({
         ...currentForm,
         notes: "",
       }));
+      setCardImageFile(null);
+      setCardImageInputKey((currentKey) => currentKey + 1);
       await loadGiftCards({ showLoading: false });
     } catch (err) {
       setFormError(
@@ -689,6 +715,22 @@ export default function PurchaseDetailPage() {
               />
             </label>
 
+            <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Card Image</span>
+              <div className="flex h-11 cursor-pointer items-center rounded-md border border-dashed border-slate-300 px-3 text-sm text-slate-600 transition hover:bg-slate-50">
+                {cardImageFile ? cardImageFile.name : "Optional image upload"}
+              </div>
+              <input
+                accept={cardImageAccept}
+                className="sr-only"
+                key={cardImageInputKey}
+                onChange={(event) =>
+                  setCardImageFile(event.target.files?.[0] ?? null)
+                }
+                type="file"
+              />
+            </label>
+
             <label className="space-y-2 text-sm font-medium text-slate-700 md:row-span-2">
               <span>Notes</span>
               <textarea
@@ -701,7 +743,7 @@ export default function PurchaseDetailPage() {
               />
             </label>
 
-            <div className="flex items-end">
+            <div className="flex items-end md:col-span-2">
               <button
                 className="h-11 rounded-md bg-slate-900 px-5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                 type="submit"

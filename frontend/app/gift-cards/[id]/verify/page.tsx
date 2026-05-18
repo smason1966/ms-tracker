@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -51,6 +51,15 @@ type VerificationForm = {
   card_number: string;
   pin: string;
 };
+
+type VerificationDetails = {
+  giftCard: GiftCard;
+  cardImages: CardImage[];
+  extractionAttempts: ExtractionAttempt[];
+  extractionCandidates: ExtractionCandidate[];
+};
+
+const cardImageAccept = "image/jpeg,image/png,image/webp,image/heic,.jpg,.jpeg,.png,.webp,.heic";
 
 function buildUploadUrl(path: string | null | undefined) {
   if (!path) {
@@ -141,6 +150,70 @@ function getUsefulCandidates(
     });
 }
 
+async function loadGiftCardVerificationDetails(
+  giftCardId: string,
+): Promise<VerificationDetails> {
+  const [
+    giftCardResponse,
+    imagesResponse,
+    attemptsResponse,
+    candidatesResponse,
+  ] = await Promise.all([
+    fetch(`${API_BASE_URL}/gift-cards/${giftCardId}`),
+    fetch(`${API_BASE_URL}/card-images/gift-card/${giftCardId}`),
+    fetch(`${API_BASE_URL}/extraction-attempts/gift-card/${giftCardId}`),
+    fetch(`${API_BASE_URL}/extraction-candidates/gift-card/${giftCardId}`),
+  ]);
+
+  if (!giftCardResponse.ok) {
+    throw new Error(`Failed to load gift card (${giftCardResponse.status})`);
+  }
+
+  if (!imagesResponse.ok) {
+    throw new Error(`Failed to load card images (${imagesResponse.status})`);
+  }
+
+  if (!attemptsResponse.ok) {
+    throw new Error(
+      `Failed to load extraction attempts (${attemptsResponse.status})`,
+    );
+  }
+
+  if (!candidatesResponse.ok) {
+    throw new Error(
+      `Failed to load extraction candidates (${candidatesResponse.status})`,
+    );
+  }
+
+  return {
+    giftCard: (await giftCardResponse.json()) as GiftCard,
+    cardImages: (await imagesResponse.json()) as CardImage[],
+    extractionAttempts: (await attemptsResponse.json()) as ExtractionAttempt[],
+    extractionCandidates:
+      (await candidatesResponse.json()) as ExtractionCandidate[],
+  };
+}
+
+function getInitialVerificationForm(details: VerificationDetails) {
+  const bestLoadedCardNumberCandidate = getBestCandidate(
+    details.extractionCandidates,
+    "card_number",
+  );
+  const bestLoadedPinCandidate = getBestCandidate(
+    details.extractionCandidates,
+    "pin",
+  );
+
+  return {
+    // TODO: Mask and encrypt these values before production.
+    card_number:
+      details.giftCard.card_number_encrypted ??
+      bestLoadedCardNumberCandidate?.value ??
+      "",
+    pin: details.giftCard.pin_encrypted ?? bestLoadedPinCandidate?.value ?? "",
+  };
+}
+
 export default function GiftCardVerificationPage() {
   const params = useParams<{ id: string | string[] }>();
   const router = useRouter();
@@ -164,6 +237,11 @@ export default function GiftCardVerificationPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [imageRotation, setImageRotation] = useState(0);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [imageUploadError, setImageUploadError] = useState<string | null>(null);
+  const [imageUploadMessage, setImageUploadMessage] = useState<string | null>(
+    null,
+  );
 
   const primaryImage = useMemo(() => {
     return (
@@ -204,85 +282,89 @@ export default function GiftCardVerificationPage() {
     : "/";
 
   useEffect(() => {
+    let isMounted = true;
+
     async function loadVerificationDetails() {
       setIsLoading(true);
       setError(null);
       setSuccessMessage(null);
 
       try {
-        const [
-          giftCardResponse,
-          imagesResponse,
-          attemptsResponse,
-          candidatesResponse,
-        ] = await Promise.all([
-          fetch(`${API_BASE_URL}/gift-cards/${giftCardId}`),
-          fetch(`${API_BASE_URL}/card-images/gift-card/${giftCardId}`),
-          fetch(`${API_BASE_URL}/extraction-attempts/gift-card/${giftCardId}`),
-          fetch(`${API_BASE_URL}/extraction-candidates/gift-card/${giftCardId}`),
-        ]);
+        const details = await loadGiftCardVerificationDetails(giftCardId);
 
-        if (!giftCardResponse.ok) {
-          throw new Error(`Failed to load gift card (${giftCardResponse.status})`);
+        if (isMounted) {
+          setGiftCard(details.giftCard);
+          setCardImages(details.cardImages);
+          setExtractionAttempts(details.extractionAttempts);
+          setExtractionCandidates(details.extractionCandidates);
+          setForm(getInitialVerificationForm(details));
         }
-
-        if (!imagesResponse.ok) {
-          throw new Error(`Failed to load card images (${imagesResponse.status})`);
-        }
-
-        if (!attemptsResponse.ok) {
-          throw new Error(
-            `Failed to load extraction attempts (${attemptsResponse.status})`,
-          );
-        }
-
-        if (!candidatesResponse.ok) {
-          throw new Error(
-            `Failed to load extraction candidates (${candidatesResponse.status})`,
-          );
-        }
-
-        const loadedGiftCard = (await giftCardResponse.json()) as GiftCard;
-        const loadedImages = (await imagesResponse.json()) as CardImage[];
-        const loadedAttempts =
-          (await attemptsResponse.json()) as ExtractionAttempt[];
-        const loadedCandidates =
-          (await candidatesResponse.json()) as ExtractionCandidate[];
-
-        const bestLoadedCardNumberCandidate = getBestCandidate(
-          loadedCandidates,
-          "card_number",
-        );
-        const bestLoadedPinCandidate = getBestCandidate(loadedCandidates, "pin");
-
-        setGiftCard(loadedGiftCard);
-        setCardImages(loadedImages);
-        setExtractionAttempts(loadedAttempts);
-        setExtractionCandidates(loadedCandidates);
-        setForm({
-          // TODO: Mask and encrypt these values before production.
-          card_number:
-            loadedGiftCard.card_number_encrypted ??
-            bestLoadedCardNumberCandidate?.value ??
-            "",
-          pin:
-            loadedGiftCard.pin_encrypted ?? bestLoadedPinCandidate?.value ?? "",
-        });
       } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Failed to load verification details.",
-        );
+        if (isMounted) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Failed to load verification details.",
+          );
+        }
       } finally {
-        setIsLoading(false);
+        if (isMounted) {
+          setIsLoading(false);
+        }
       }
     }
 
     if (giftCardId) {
       void loadVerificationDetails();
     }
+
+    return () => {
+      isMounted = false;
+    };
   }, [giftCardId]);
+
+  async function handleImageUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    setIsUploadingImage(true);
+    setImageUploadError(null);
+    setImageUploadMessage(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("gift_card_id", giftCardId);
+      formData.append("file", file);
+
+      const response = await fetch(`${API_BASE_URL}/card-images/upload`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to upload image (${response.status})`);
+      }
+
+      const details = await loadGiftCardVerificationDetails(giftCardId);
+      setGiftCard(details.giftCard);
+      setCardImages(details.cardImages);
+      setExtractionAttempts(details.extractionAttempts);
+      setExtractionCandidates(details.extractionCandidates);
+      setForm(getInitialVerificationForm(details));
+      setImageRotation(0);
+      setImageUploadMessage("Image uploaded.");
+    } catch (err) {
+      setImageUploadError(
+        err instanceof Error ? err.message : "Failed to upload image.",
+      );
+    } finally {
+      event.target.value = "";
+      setIsUploadingImage(false);
+    }
+  }
 
   async function handleVerify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -376,8 +458,31 @@ export default function GiftCardVerificationPage() {
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="text-lg font-semibold">Uploaded Card Image</h2>
-                {primaryImage && (
-                  <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <label
+                    className={`inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-sm font-medium transition ${
+                      isUploadingImage
+                        ? "cursor-not-allowed bg-slate-100 text-slate-400"
+                        : "text-slate-700 hover:bg-slate-100"
+                    }`}
+                  >
+                    <span>
+                      {isUploadingImage
+                        ? "Uploading..."
+                        : primaryImage
+                          ? "Replace Image"
+                          : "Upload Image"}
+                    </span>
+                    <input
+                      accept={cardImageAccept}
+                      className="sr-only"
+                      disabled={isUploadingImage}
+                      onChange={handleImageUpload}
+                      type="file"
+                    />
+                  </label>
+                  {primaryImage && (
+                    <>
                     <button
                       className="h-9 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
                       onClick={() =>
@@ -403,9 +508,20 @@ export default function GiftCardVerificationPage() {
                     >
                       Reset Rotation
                     </button>
+                    </>
+                  )}
                   </div>
-                )}
               </div>
+              {imageUploadMessage ? (
+                <p className="mb-3 text-sm font-medium text-emerald-700">
+                  {imageUploadMessage}
+                </p>
+              ) : null}
+              {imageUploadError ? (
+                <p className="mb-3 text-sm font-medium text-red-700">
+                  {imageUploadError}
+                </p>
+              ) : null}
               {primaryImage ? (
                 <div className="flex min-h-80 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-4">
                   <Image
@@ -425,7 +541,8 @@ export default function GiftCardVerificationPage() {
                 </div>
               ) : (
                 <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                  No image uploaded.
+                  No image uploaded. Upload an image to review and verify this
+                  card.
                 </div>
               )}
             </div>
