@@ -26,6 +26,8 @@ type GiftCard = {
   brand: string;
   face_value: string | number;
   status: string;
+  card_number_encrypted: string | null;
+  pin_encrypted: string | null;
   notes: string | null;
   purchase_batch_id?: number;
   created_at?: string;
@@ -64,6 +66,11 @@ type ExtractionAttempt = {
   created_at: string;
 };
 
+type VerificationForm = {
+  card_number: string;
+  pin: string;
+};
+
 const emptyGiftCardForm: GiftCardForm = {
   brand: "",
   face_value: "",
@@ -96,6 +103,15 @@ export default function PurchaseDetailPage() {
   >({});
   const [latestAttemptsByCardId, setLatestAttemptsByCardId] = useState<
     Record<number, ExtractionAttempt | null>
+  >({});
+  const [verificationFormsByCardId, setVerificationFormsByCardId] = useState<
+    Record<number, VerificationForm>
+  >({});
+  const [isVerifyingByCardId, setIsVerifyingByCardId] = useState<
+    Record<number, boolean>
+  >({});
+  const [verificationErrorsByCardId, setVerificationErrorsByCardId] = useState<
+    Record<number, string | null>
   >({});
   const [form, setForm] = useState<GiftCardForm>(emptyGiftCardForm);
   const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
@@ -460,6 +476,32 @@ export default function PurchaseDetailPage() {
     };
   }, [giftCardsUrl, purchaseId]);
 
+  useEffect(() => {
+    setVerificationFormsByCardId((currentForms) => {
+      const nextForms: Record<number, VerificationForm> = {};
+
+      for (const giftCard of giftCards) {
+        const latestAttempt = latestAttemptsByCardId[giftCard.id];
+        const currentForm = currentForms[giftCard.id];
+        const cardNumber =
+          giftCard.card_number_encrypted ??
+          (currentForm?.card_number || latestAttempt?.extracted_card_number) ??
+          "";
+        const pin =
+          giftCard.pin_encrypted ??
+          (currentForm?.pin || latestAttempt?.extracted_pin) ??
+          "";
+
+        nextForms[giftCard.id] = {
+          card_number: cardNumber,
+          pin,
+        };
+      }
+
+      return nextForms;
+    });
+  }, [giftCards, latestAttemptsByCardId]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
@@ -550,10 +592,75 @@ export default function PurchaseDetailPage() {
     }
   }
 
+  async function handleVerifyGiftCard(giftCardId: number) {
+    const verificationForm = verificationFormsByCardId[giftCardId];
+
+    if (!verificationForm) {
+      return;
+    }
+
+    setIsVerifyingByCardId((currentVerifying) => ({
+      ...currentVerifying,
+      [giftCardId]: true,
+    }));
+    setVerificationErrorsByCardId((currentErrors) => ({
+      ...currentErrors,
+      [giftCardId]: null,
+    }));
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/gift-cards/${giftCardId}/verify`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            card_number: verificationForm.card_number.trim(),
+            pin: verificationForm.pin.trim(),
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to verify gift card (${response.status})`);
+      }
+
+      await loadGiftCards({ showLoading: false });
+    } catch (err) {
+      setVerificationErrorsByCardId((currentErrors) => ({
+        ...currentErrors,
+        [giftCardId]:
+          err instanceof Error ? err.message : "Failed to verify gift card.",
+      }));
+    } finally {
+      setIsVerifyingByCardId((currentVerifying) => ({
+        ...currentVerifying,
+        [giftCardId]: false,
+      }));
+    }
+  }
+
   function updateFormField(field: keyof GiftCardForm, value: string) {
     setForm((currentForm) => ({
       ...currentForm,
       [field]: value,
+    }));
+  }
+
+  function updateVerificationField(
+    giftCardId: number,
+    field: keyof VerificationForm,
+    value: string,
+  ) {
+    setVerificationFormsByCardId((currentForms) => ({
+      ...currentForms,
+      [giftCardId]: {
+        card_number: currentForms[giftCardId]?.card_number ?? "",
+        pin: currentForms[giftCardId]?.pin ?? "",
+        [field]: value,
+      },
     }));
   }
 
@@ -698,6 +805,66 @@ export default function PurchaseDetailPage() {
           <dd>{formatDate(attempt.created_at)}</dd>
         </div>
       </dl>
+    );
+  }
+
+  function renderVerificationForm(giftCard: GiftCard) {
+    const verificationForm = verificationFormsByCardId[giftCard.id] ?? {
+      card_number: "",
+      pin: "",
+    };
+    const isVerifying = Boolean(isVerifyingByCardId[giftCard.id]);
+    const verificationError = verificationErrorsByCardId[giftCard.id];
+    const canVerify =
+      verificationForm.card_number.trim().length > 0 &&
+      verificationForm.pin.trim().length > 0;
+
+    return (
+      <div className="space-y-3">
+        {/* TODO: Mask these values in the UI and encrypt before production. */}
+        <label className="block space-y-1 text-xs font-medium text-slate-700">
+          <span>Confirmed Card Number</span>
+          <input
+            className="h-9 w-56 rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+            type="text"
+            value={verificationForm.card_number}
+            onChange={(event) =>
+              updateVerificationField(
+                giftCard.id,
+                "card_number",
+                event.target.value,
+              )
+            }
+          />
+        </label>
+
+        <label className="block space-y-1 text-xs font-medium text-slate-700">
+          <span>Confirmed PIN</span>
+          <input
+            className="h-9 w-40 rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+            type="text"
+            value={verificationForm.pin}
+            onChange={(event) =>
+              updateVerificationField(giftCard.id, "pin", event.target.value)
+            }
+          />
+        </label>
+
+        <button
+          className="h-9 rounded-md bg-slate-900 px-4 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+          type="button"
+          disabled={isVerifying || !canVerify}
+          onClick={() => handleVerifyGiftCard(giftCard.id)}
+        >
+          {isVerifying ? "Verifying..." : "Verify Card"}
+        </button>
+
+        {verificationError ? (
+          <p className="max-w-56 text-xs font-medium text-red-700">
+            {verificationError}
+          </p>
+        ) : null}
+      </div>
     );
   }
 
@@ -901,6 +1068,7 @@ export default function PurchaseDetailPage() {
                     <th className="px-6 py-3">Brand</th>
                     <th className="px-6 py-3">Face Value</th>
                     <th className="px-6 py-3">Status</th>
+                    <th className="px-6 py-3">Verification</th>
                     <th className="px-6 py-3">Notes</th>
                   </tr>
                 </thead>
@@ -923,6 +1091,9 @@ export default function PurchaseDetailPage() {
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 text-slate-700">
                         {giftCard.status}
+                      </td>
+                      <td className="px-6 py-4 align-top">
+                        {renderVerificationForm(giftCard)}
                       </td>
                       <td className="max-w-md px-6 py-4 text-slate-700">
                         {giftCard.notes || "-"}
