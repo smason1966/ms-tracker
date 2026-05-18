@@ -1,6 +1,13 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ChangeEvent,
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import Image from "next/image";
 import { useParams } from "next/navigation";
 
@@ -70,6 +77,12 @@ export default function PurchaseDetailPage() {
   const [imageLoadErrorsByCardId, setImageLoadErrorsByCardId] = useState<
     Record<number, boolean>
   >({});
+  const [isUploadingImageByCardId, setIsUploadingImageByCardId] = useState<
+    Record<number, boolean>
+  >({});
+  const [uploadErrorsByCardId, setUploadErrorsByCardId] = useState<
+    Record<number, string | null>
+  >({});
   const [form, setForm] = useState<GiftCardForm>(emptyGiftCardForm);
   const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
   const [isLoadingGiftCards, setIsLoadingGiftCards] = useState(true);
@@ -117,6 +130,47 @@ export default function PurchaseDetailPage() {
     [giftCardsUrl, purchaseId],
   );
 
+  const fetchPrimaryImageForCard = useCallback(async (giftCardId: number) => {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/card-images/gift-card/${giftCardId}`,
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to load card images (${response.status})`);
+      }
+
+      const images = (await response.json()) as CardImage[];
+      const primaryImage =
+        images.find((image) => image.image_type === "primary") ?? null;
+
+      return { image: primaryImage, failed: false };
+    } catch {
+      return { image: null, failed: true };
+    }
+  }, []);
+
+  const loadPrimaryImageForCard = useCallback(
+    async (giftCardId: number) => {
+      const result = await fetchPrimaryImageForCard(giftCardId);
+
+      setPrimaryImagesByCardId((currentImages) => ({
+        ...currentImages,
+        [giftCardId]: result.image,
+      }));
+
+      if (!result.failed) {
+        setImageLoadErrorsByCardId((currentErrors) => ({
+          ...currentErrors,
+          [giftCardId]: false,
+        }));
+      }
+
+      return result.failed;
+    },
+    [fetchPrimaryImageForCard],
+  );
+
   useEffect(() => {
     let isMounted = true;
 
@@ -136,23 +190,8 @@ export default function PurchaseDetailPage() {
       try {
         const imageResults = await Promise.all(
           giftCards.map(async (giftCard) => {
-            try {
-              const response = await fetch(
-                `${API_BASE_URL}/card-images/gift-card/${giftCard.id}`,
-              );
-
-              if (!response.ok) {
-                return [giftCard.id, null, true] as const;
-              }
-
-              const images = (await response.json()) as CardImage[];
-              const primaryImage =
-                images.find((image) => image.image_type === "primary") ?? null;
-
-              return [giftCard.id, primaryImage, false] as const;
-            } catch {
-              return [giftCard.id, null, true] as const;
-            }
+            const result = await fetchPrimaryImageForCard(giftCard.id);
+            return [giftCard.id, result.image, result.failed] as const;
           }),
         );
 
@@ -189,7 +228,7 @@ export default function PurchaseDetailPage() {
     return () => {
       isMounted = false;
     };
-  }, [giftCards]);
+  }, [fetchPrimaryImageForCard, giftCards]);
 
   useEffect(() => {
     let isMounted = true;
@@ -353,6 +392,59 @@ export default function PurchaseDetailPage() {
     }
   }
 
+  async function handleImageUpload(
+    giftCardId: number,
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    setIsUploadingImageByCardId((currentUploads) => ({
+      ...currentUploads,
+      [giftCardId]: true,
+    }));
+    setUploadErrorsByCardId((currentErrors) => ({
+      ...currentErrors,
+      [giftCardId]: null,
+    }));
+
+    try {
+      const formData = new FormData();
+      formData.append("gift_card_id", String(giftCardId));
+      formData.append("file", file);
+
+      const response = await fetch(`${API_BASE_URL}/card-images/upload`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to upload image (${response.status})`);
+      }
+
+      const imageFailed = await loadPrimaryImageForCard(giftCardId);
+
+      if (imageFailed) {
+        throw new Error("Image uploaded, but the thumbnail could not be loaded.");
+      }
+    } catch (err) {
+      setUploadErrorsByCardId((currentErrors) => ({
+        ...currentErrors,
+        [giftCardId]:
+          err instanceof Error ? err.message : "Failed to upload image.",
+      }));
+    } finally {
+      event.target.value = "";
+      setIsUploadingImageByCardId((currentUploads) => ({
+        ...currentUploads,
+        [giftCardId]: false,
+      }));
+    }
+  }
+
   function updateFormField(field: keyof GiftCardForm, value: string) {
     setForm((currentForm) => ({
       ...currentForm,
@@ -399,34 +491,61 @@ export default function PurchaseDetailPage() {
 
   function renderGiftCardImage(giftCard: GiftCard) {
     const primaryImage = primaryImagesByCardId[giftCard.id];
-
-    if (isLoadingCardImages && primaryImage === undefined) {
-      return <span className="text-xs text-slate-500">Loading image...</span>;
-    }
-
-    if (primaryImage === null || primaryImage === undefined) {
-      return <span className="text-xs text-slate-500">No image uploaded</span>;
-    }
-
-    if (imageLoadErrorsByCardId[giftCard.id]) {
-      return <span className="text-xs text-slate-500">No image uploaded</span>;
-    }
+    const isUploadingImage = Boolean(isUploadingImageByCardId[giftCard.id]);
+    const uploadError = uploadErrorsByCardId[giftCard.id];
 
     return (
-      <Image
-        className="h-16 w-24 rounded-md border border-slate-200 bg-slate-100 object-cover"
-        src={getImageUrl(primaryImage)}
-        alt={`${giftCard.brand} gift card`}
-        width={96}
-        height={64}
-        unoptimized
-        onError={() => {
-          setImageLoadErrorsByCardId((currentErrors) => ({
-            ...currentErrors,
-            [giftCard.id]: true,
-          }));
-        }}
-      />
+      <div className="space-y-2">
+        <div className="flex h-16 w-24 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-center">
+          {isLoadingCardImages && primaryImage === undefined ? (
+            <span className="px-2 text-xs text-slate-500">Loading image...</span>
+          ) : primaryImage === null ||
+            primaryImage === undefined ||
+            imageLoadErrorsByCardId[giftCard.id] ? (
+            <span className="px-2 text-xs text-slate-500">
+              No image uploaded
+            </span>
+          ) : (
+            <Image
+              className="h-16 w-24 rounded-md object-cover"
+              src={getImageUrl(primaryImage)}
+              alt={`${giftCard.brand} gift card`}
+              width={96}
+              height={64}
+              unoptimized
+              onError={() => {
+                setImageLoadErrorsByCardId((currentErrors) => ({
+                  ...currentErrors,
+                  [giftCard.id]: true,
+                }));
+              }}
+            />
+          )}
+        </div>
+
+        <label
+          className={`inline-flex h-8 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-xs font-medium transition ${
+            isUploadingImage
+              ? "cursor-not-allowed bg-slate-100 text-slate-400"
+              : "text-slate-700 hover:bg-slate-100"
+          }`}
+        >
+          <span>{isUploadingImage ? "Uploading..." : "Upload Image"}</span>
+          <input
+            className="sr-only"
+            type="file"
+            accept="image/*"
+            disabled={isUploadingImage}
+            onChange={(event) => handleImageUpload(giftCard.id, event)}
+          />
+        </label>
+
+        {uploadError ? (
+          <p className="max-w-32 text-xs font-medium text-red-700">
+            {uploadError}
+          </p>
+        ) : null}
+      </div>
     );
   }
 
