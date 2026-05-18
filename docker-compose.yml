@@ -7,7 +7,9 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
-    command: npm run dev
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://192.168.4.134:8000
+    command: npm run dev -- --hostname 0.0.0.0
     depends_on:
       - api
 

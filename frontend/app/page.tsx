@@ -2,6 +2,8 @@
 
 import { FormEvent, useEffect, useState } from "react";
 
+import { API_BASE_URL } from "@/lib/api";
+
 type PurchaseBatch = {
   id: number;
   store_name: string;
@@ -26,8 +28,8 @@ type Store = {
   active: boolean;
 };
 
-const API_URL = "http://localhost:8000/purchase-batches/";
-const STORES_URL = "http://localhost:8000/stores/";
+const API_URL = `${API_BASE_URL}/purchase-batches/`;
+const STORES_URL = `${API_BASE_URL}/stores/`;
 
 function getTodayDateString() {
   const today = new Date();

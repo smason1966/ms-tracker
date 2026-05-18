@@ -11,6 +11,8 @@ import {
 import Image from "next/image";
 import { useParams } from "next/navigation";
 
+import { API_BASE_URL } from "@/lib/api";
+
 type PurchaseBatch = {
   id: number;
   store_name: string;
@@ -85,8 +87,6 @@ const emptyGiftCardForm: GiftCardForm = {
   face_value: "",
   notes: "",
 };
-
-const API_BASE_URL = "http://localhost:8000";
 
 export default function PurchaseDetailPage() {
   const params = useParams<{ id: string | string[] }>();
