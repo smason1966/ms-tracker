@@ -9,6 +9,7 @@ from app.api.card_images import router as card_images_router
 from fastapi.staticfiles import StaticFiles
 from app.api.card_image_queries import router as card_image_queries_router
 from app.api.extraction_attempts import router as extraction_attempts_router
+from app.api.extraction_candidates import router as extraction_candidates_router
 from app.api.receipts import router as receipts_router
 
 app = FastAPI(title="MS Tracker API")
@@ -32,8 +33,10 @@ app.include_router(card_images_router)
 app.include_router(card_image_queries_router)
 app.include_router(extraction_attempts_router)
 app.include_router(receipts_router)
+app.include_router(extraction_candidates_router)
 
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 
 @app.get("/health")
 def health_check():

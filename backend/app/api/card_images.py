@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.card_image import CardImage
 from app.models.extraction_attempt import ExtractionAttempt
+from app.models.extraction_candidate import ExtractionCandidate
 from app.services.barcode import decode_barcodes
 from app.services.card_parser import parse_card_data
 from app.services.extraction_candidates import build_extraction_candidates
@@ -83,6 +84,23 @@ async def upload_card_image(
             )
 
             db.add(extraction)
+            db.commit()
+
+            db.refresh(extraction)
+
+            for candidate in candidates:
+                candidate_row = ExtractionCandidate(
+                    extraction_attempt_id=extraction.id,
+                    gift_card_id=gift_card_id,
+                    candidate_type=candidate.candidate_type,
+                    source=candidate.source,
+                    value=candidate.value,
+                    confidence_score=candidate.confidence_score,
+                    notes=candidate.notes,
+                )
+
+                db.add(candidate_row)
+
             db.commit()
 
         except Exception as e:
