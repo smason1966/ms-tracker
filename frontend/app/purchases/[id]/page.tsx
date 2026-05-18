@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { useParams } from "next/navigation";
 
 type PurchaseBatch = {
@@ -36,11 +37,22 @@ type CardBrand = {
   active: boolean;
 };
 
+type CardImage = {
+  id: number;
+  gift_card_id: number;
+  image_type: string;
+  original_image_url: string;
+  processed_image_url: string | null;
+  created_at?: string;
+};
+
 const emptyGiftCardForm: GiftCardForm = {
   brand: "",
   face_value: "",
   notes: "",
 };
+
+const API_BASE_URL = "http://localhost:8000";
 
 export default function PurchaseDetailPage() {
   const params = useParams<{ id: string | string[] }>();
@@ -52,18 +64,26 @@ export default function PurchaseDetailPage() {
   const [purchase, setPurchase] = useState<PurchaseBatch | null>(null);
   const [giftCards, setGiftCards] = useState<GiftCard[]>([]);
   const [cardBrands, setCardBrands] = useState<CardBrand[]>([]);
+  const [primaryImagesByCardId, setPrimaryImagesByCardId] = useState<
+    Record<number, CardImage | null>
+  >({});
+  const [imageLoadErrorsByCardId, setImageLoadErrorsByCardId] = useState<
+    Record<number, boolean>
+  >({});
   const [form, setForm] = useState<GiftCardForm>(emptyGiftCardForm);
   const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
   const [isLoadingGiftCards, setIsLoadingGiftCards] = useState(true);
   const [isLoadingCardBrands, setIsLoadingCardBrands] = useState(true);
+  const [isLoadingCardImages, setIsLoadingCardImages] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [cardBrandsError, setCardBrandsError] = useState<string | null>(null);
+  const [cardImagesError, setCardImagesError] = useState<string | null>(null);
 
-  const purchaseUrl = `http://localhost:8000/purchase-batches/${purchaseId}`;
-  const giftCardsUrl = `http://localhost:8000/gift-cards/purchase/${purchaseId}`;
-  const cardBrandsUrl = "http://localhost:8000/card-brands/";
+  const purchaseUrl = `${API_BASE_URL}/purchase-batches/${purchaseId}`;
+  const giftCardsUrl = `${API_BASE_URL}/gift-cards/purchase/${purchaseId}`;
+  const cardBrandsUrl = `${API_BASE_URL}/card-brands/`;
 
   const loadGiftCards = useCallback(
     async (options: { showLoading?: boolean } = {}) => {
@@ -96,6 +116,80 @@ export default function PurchaseDetailPage() {
     },
     [giftCardsUrl, purchaseId],
   );
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadPrimaryImages() {
+      if (giftCards.length === 0) {
+        setPrimaryImagesByCardId({});
+        setImageLoadErrorsByCardId({});
+        setCardImagesError(null);
+        setIsLoadingCardImages(false);
+        return;
+      }
+
+      setIsLoadingCardImages(true);
+      setCardImagesError(null);
+      setImageLoadErrorsByCardId({});
+
+      try {
+        const imageResults = await Promise.all(
+          giftCards.map(async (giftCard) => {
+            try {
+              const response = await fetch(
+                `${API_BASE_URL}/card-images/gift-card/${giftCard.id}`,
+              );
+
+              if (!response.ok) {
+                return [giftCard.id, null, true] as const;
+              }
+
+              const images = (await response.json()) as CardImage[];
+              const primaryImage =
+                images.find((image) => image.image_type === "primary") ?? null;
+
+              return [giftCard.id, primaryImage, false] as const;
+            } catch {
+              return [giftCard.id, null, true] as const;
+            }
+          }),
+        );
+
+        if (isMounted) {
+          setPrimaryImagesByCardId(
+            Object.fromEntries(
+              imageResults.map(([giftCardId, image]) => [giftCardId, image]),
+            ),
+          );
+          setCardImagesError(
+            imageResults.some(([, , failed]) => failed)
+              ? "Some card images could not be loaded."
+              : null,
+          );
+        }
+      } catch (err) {
+        if (isMounted) {
+          setCardImagesError(
+            err instanceof Error
+              ? err.message
+              : "Failed to load card images.",
+          );
+          setPrimaryImagesByCardId({});
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingCardImages(false);
+        }
+      }
+    }
+
+    loadPrimaryImages();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [giftCards]);
 
   useEffect(() => {
     let isMounted = true;
@@ -228,7 +322,7 @@ export default function PurchaseDetailPage() {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch("http://localhost:8000/gift-cards/", {
+      const response = await fetch(`${API_BASE_URL}/gift-cards/`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -291,6 +385,49 @@ export default function PurchaseDetailPage() {
       style: "currency",
       currency: "USD",
     }).format(amount);
+  }
+
+  function getImageUrl(image: CardImage) {
+    const rawUrl = image.processed_image_url ?? image.original_image_url;
+
+    if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+      return rawUrl;
+    }
+
+    return `${API_BASE_URL}/${rawUrl.replace(/^\/+/, "")}`;
+  }
+
+  function renderGiftCardImage(giftCard: GiftCard) {
+    const primaryImage = primaryImagesByCardId[giftCard.id];
+
+    if (isLoadingCardImages && primaryImage === undefined) {
+      return <span className="text-xs text-slate-500">Loading image...</span>;
+    }
+
+    if (primaryImage === null || primaryImage === undefined) {
+      return <span className="text-xs text-slate-500">No image uploaded</span>;
+    }
+
+    if (imageLoadErrorsByCardId[giftCard.id]) {
+      return <span className="text-xs text-slate-500">No image uploaded</span>;
+    }
+
+    return (
+      <Image
+        className="h-16 w-24 rounded-md border border-slate-200 bg-slate-100 object-cover"
+        src={getImageUrl(primaryImage)}
+        alt={`${giftCard.brand} gift card`}
+        width={96}
+        height={64}
+        unoptimized
+        onError={() => {
+          setImageLoadErrorsByCardId((currentErrors) => ({
+            ...currentErrors,
+            [giftCard.id]: true,
+          }));
+        }}
+      />
+    );
   }
 
   return (
@@ -466,6 +603,9 @@ export default function PurchaseDetailPage() {
             <p className="mt-1 text-sm text-slate-500">
               {giftCards.length} {giftCards.length === 1 ? "card" : "cards"}
             </p>
+            {cardImagesError ? (
+              <p className="mt-1 text-sm text-amber-700">{cardImagesError}</p>
+            ) : null}
           </div>
 
           {isLoadingGiftCards ? (
@@ -481,6 +621,7 @@ export default function PurchaseDetailPage() {
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                   <tr>
+                    <th className="px-6 py-3">Image</th>
                     <th className="px-6 py-3">Brand</th>
                     <th className="px-6 py-3">Face Value</th>
                     <th className="px-6 py-3">Status</th>
@@ -490,6 +631,9 @@ export default function PurchaseDetailPage() {
                 <tbody className="divide-y divide-slate-200 bg-white">
                   {giftCards.map((giftCard) => (
                     <tr key={giftCard.id} className="hover:bg-slate-50">
+                      <td className="w-32 px-6 py-4">
+                        {renderGiftCardImage(giftCard)}
+                      </td>
                       <td className="whitespace-nowrap px-6 py-4 font-medium">
                         {giftCard.brand}
                       </td>
