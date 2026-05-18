@@ -23,7 +23,6 @@ def extract_barcode_candidates(raw_text: str) -> list[str]:
         return []
 
     barcode_section = raw_text.split("BARCODE_CANDIDATES:", 1)[1]
-
     candidates: list[str] = []
 
     for line in barcode_section.splitlines():
@@ -37,7 +36,6 @@ def extract_barcode_candidates(raw_text: str) -> list[str]:
 
 def find_numeric_candidates(text: str) -> list[str]:
     candidates = re.findall(r"(?:\d[\s-]?){8,40}", text)
-
     results: list[str] = []
 
     for candidate in candidates:
@@ -50,27 +48,18 @@ def find_numeric_candidates(text: str) -> list[str]:
 
 
 def find_pin_candidates(text: str) -> list[str]:
-    pin_nearby = re.findall(
-        r"(?:PIN|Pin|pin)[^\d]{0,30}(\d{3,8})",
-        text,
-    )
+    pin_nearby = re.findall(r"(?:PIN|Pin|pin)[^\d]{0,30}(\d{3,8})", text)
 
-    filtered = [
-        pin for pin in pin_nearby if pin not in {"2024", "2025", "2026", "0525"}
-    ]
-
-    return filtered
+    return [pin for pin in pin_nearby if pin not in {"2024", "2025", "2026", "0525"}]
 
 
 def choose_card_number(raw_text: str) -> str | None:
     barcode_candidates = extract_barcode_candidates(raw_text)
 
-    # Prefer clean 16-digit barcode candidates.
     for candidate in barcode_candidates:
         if len(candidate) == 16:
             return candidate
 
-    # Deprioritize long POS/purchase barcodes.
     barcode_reasonable = [
         candidate for candidate in barcode_candidates if 12 <= len(candidate) <= 24
     ]
@@ -79,7 +68,6 @@ def choose_card_number(raw_text: str) -> str | None:
         return barcode_reasonable[0]
 
     all_numbers = find_numeric_candidates(raw_text)
-
     sixteen_digit_numbers = [number for number in all_numbers if len(number) == 16]
 
     if sixteen_digit_numbers:
@@ -93,23 +81,44 @@ def choose_card_number(raw_text: str) -> str | None:
     return None
 
 
+def calculate_confidence(
+    text: str,
+    card_number: str | None,
+    pin: str | None,
+    max_confidence: float,
+) -> float:
+    confidence = 0.1
+    barcode_candidates = extract_barcode_candidates(text)
+
+    if card_number and card_number in barcode_candidates and len(card_number) == 16:
+        confidence = 0.9
+    elif card_number and card_number in barcode_candidates:
+        confidence = 0.8
+    elif card_number:
+        confidence += 0.55
+
+    if pin:
+        confidence = min(confidence + 0.05, 0.95)
+
+    return min(confidence, max_confidence)
+
+
 def parse_best_buy(text: str) -> ParsedCardData:
     card_number = choose_card_number(text)
     pins = find_pin_candidates(text)
     pin = pins[0] if pins else None
 
-    confidence = 0.1
-
-    if card_number:
-        confidence += 0.65
-
-    if pin:
-        confidence += 0.2
+    confidence = calculate_confidence(
+        text=text,
+        card_number=card_number,
+        pin=pin,
+        max_confidence=0.95,
+    )
 
     return ParsedCardData(
         card_number=card_number,
         pin=pin,
-        confidence_score=min(confidence, 0.95),
+        confidence_score=confidence,
         notes="Best Buy parser. Barcode candidates preferred. Human verification required.",
     )
 
@@ -119,18 +128,17 @@ def parse_generic(text: str) -> ParsedCardData:
     pins = find_pin_candidates(text)
     pin = pins[0] if pins else None
 
-    confidence = 0.1
-
-    if card_number:
-        confidence += 0.55
-
-    if pin:
-        confidence += 0.2
+    confidence = calculate_confidence(
+        text=text,
+        card_number=card_number,
+        pin=pin,
+        max_confidence=0.85,
+    )
 
     return ParsedCardData(
         card_number=card_number,
         pin=pin,
-        confidence_score=min(confidence, 0.85),
+        confidence_score=confidence,
         notes="Generic parser. Barcode candidates preferred. Human verification required.",
     )
 
