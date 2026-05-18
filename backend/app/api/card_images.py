@@ -9,6 +9,7 @@ from app.models.card_image import CardImage
 from app.models.extraction_attempt import ExtractionAttempt
 from app.services.barcode import decode_barcodes
 from app.services.card_parser import parse_card_data
+from app.services.extraction_candidates import build_extraction_candidates
 from app.services.ocr import extract_text_from_image
 
 router = APIRouter(prefix="/card-images", tags=["card-images"])
@@ -58,6 +59,19 @@ async def upload_card_image(
                 raw_text=combined_text,
                 brand=None,
             )
+
+            candidates = build_extraction_candidates(combined_text)
+
+            if candidates:
+                combined_text += "\n\nEXTRACTION_CANDIDATES:\n"
+
+                for candidate in candidates:
+                    combined_text += (
+                        f"\n[{candidate.source}] "
+                        f"{candidate.candidate_type} "
+                        f"{candidate.value} "
+                        f"(confidence={candidate.confidence_score})"
+                    )
 
             extraction = ExtractionAttempt(
                 gift_card_id=gift_card_id,
