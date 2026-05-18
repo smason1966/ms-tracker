@@ -53,6 +53,17 @@ type CardImage = {
   created_at?: string;
 };
 
+type ExtractionAttempt = {
+  id: number;
+  gift_card_id: number;
+  method: string;
+  extracted_card_number: string | null;
+  extracted_pin: string | null;
+  confidence_score: number | null;
+  raw_text?: string | null;
+  created_at: string;
+};
+
 const emptyGiftCardForm: GiftCardForm = {
   brand: "",
   face_value: "",
@@ -83,16 +94,24 @@ export default function PurchaseDetailPage() {
   const [uploadErrorsByCardId, setUploadErrorsByCardId] = useState<
     Record<number, string | null>
   >({});
+  const [latestAttemptsByCardId, setLatestAttemptsByCardId] = useState<
+    Record<number, ExtractionAttempt | null>
+  >({});
   const [form, setForm] = useState<GiftCardForm>(emptyGiftCardForm);
   const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
   const [isLoadingGiftCards, setIsLoadingGiftCards] = useState(true);
   const [isLoadingCardBrands, setIsLoadingCardBrands] = useState(true);
   const [isLoadingCardImages, setIsLoadingCardImages] = useState(false);
+  const [isLoadingExtractionAttempts, setIsLoadingExtractionAttempts] =
+    useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [cardBrandsError, setCardBrandsError] = useState<string | null>(null);
   const [cardImagesError, setCardImagesError] = useState<string | null>(null);
+  const [extractionAttemptsError, setExtractionAttemptsError] = useState<
+    string | null
+  >(null);
 
   const purchaseUrl = `${API_BASE_URL}/purchase-batches/${purchaseId}`;
   const giftCardsUrl = `${API_BASE_URL}/gift-cards/purchase/${purchaseId}`;
@@ -171,6 +190,29 @@ export default function PurchaseDetailPage() {
     [fetchPrimaryImageForCard],
   );
 
+  const fetchLatestExtractionAttemptForCard = useCallback(
+    async (giftCardId: number) => {
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/extraction-attempts/gift-card/${giftCardId}`,
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            `Failed to load extraction attempts (${response.status})`,
+          );
+        }
+
+        const attempts = (await response.json()) as ExtractionAttempt[];
+
+        return { attempt: attempts[0] ?? null, failed: false };
+      } catch {
+        return { attempt: null, failed: true };
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     let isMounted = true;
 
@@ -229,6 +271,69 @@ export default function PurchaseDetailPage() {
       isMounted = false;
     };
   }, [fetchPrimaryImageForCard, giftCards]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadLatestExtractionAttempts() {
+      if (giftCards.length === 0) {
+        setLatestAttemptsByCardId({});
+        setExtractionAttemptsError(null);
+        setIsLoadingExtractionAttempts(false);
+        return;
+      }
+
+      setIsLoadingExtractionAttempts(true);
+      setExtractionAttemptsError(null);
+
+      try {
+        const attemptResults = await Promise.all(
+          giftCards.map(async (giftCard) => {
+            const result = await fetchLatestExtractionAttemptForCard(
+              giftCard.id,
+            );
+
+            return [giftCard.id, result.attempt, result.failed] as const;
+          }),
+        );
+
+        if (isMounted) {
+          setLatestAttemptsByCardId(
+            Object.fromEntries(
+              attemptResults.map(([giftCardId, attempt]) => [
+                giftCardId,
+                attempt,
+              ]),
+            ),
+          );
+          setExtractionAttemptsError(
+            attemptResults.some(([, , failed]) => failed)
+              ? "Some extraction attempts could not be loaded."
+              : null,
+          );
+        }
+      } catch (err) {
+        if (isMounted) {
+          setExtractionAttemptsError(
+            err instanceof Error
+              ? err.message
+              : "Failed to load extraction attempts.",
+          );
+          setLatestAttemptsByCardId({});
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingExtractionAttempts(false);
+        }
+      }
+    }
+
+    loadLatestExtractionAttempts();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [fetchLatestExtractionAttemptForCard, giftCards]);
 
   useEffect(() => {
     let isMounted = true;
@@ -479,6 +584,16 @@ export default function PurchaseDetailPage() {
     }).format(amount);
   }
 
+  function formatConfidenceScore(value: number | null) {
+    if (value === null) {
+      return "-";
+    }
+
+    return new Intl.NumberFormat("en-US", {
+      maximumFractionDigits: 2,
+    }).format(value);
+  }
+
   function getImageUrl(image: CardImage) {
     const rawUrl = image.processed_image_url ?? image.original_image_url;
 
@@ -546,6 +661,43 @@ export default function PurchaseDetailPage() {
           </p>
         ) : null}
       </div>
+    );
+  }
+
+  function renderExtractionAttempt(giftCardId: number) {
+    const attempt = latestAttemptsByCardId[giftCardId];
+
+    if (isLoadingExtractionAttempts && attempt === undefined) {
+      return <p className="text-xs text-slate-500">Loading extraction...</p>;
+    }
+
+    if (attempt === null || attempt === undefined) {
+      return <p className="text-xs text-slate-500">No extraction yet</p>;
+    }
+
+    return (
+      <dl className="space-y-1 text-xs text-slate-700">
+        <div>
+          <dt className="font-medium text-slate-500">Method</dt>
+          <dd>{attempt.method}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-slate-500">Card Number</dt>
+          <dd className="break-all">{attempt.extracted_card_number || "-"}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-slate-500">PIN</dt>
+          <dd className="break-all">{attempt.extracted_pin || "-"}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-slate-500">Confidence</dt>
+          <dd>{formatConfidenceScore(attempt.confidence_score)}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-slate-500">Created</dt>
+          <dd>{formatDate(attempt.created_at)}</dd>
+        </div>
+      </dl>
     );
   }
 
@@ -725,6 +877,11 @@ export default function PurchaseDetailPage() {
             {cardImagesError ? (
               <p className="mt-1 text-sm text-amber-700">{cardImagesError}</p>
             ) : null}
+            {extractionAttemptsError ? (
+              <p className="mt-1 text-sm text-amber-700">
+                {extractionAttemptsError}
+              </p>
+            ) : null}
           </div>
 
           {isLoadingGiftCards ? (
@@ -740,7 +897,7 @@ export default function PurchaseDetailPage() {
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                   <tr>
-                    <th className="px-6 py-3">Image</th>
+                    <th className="px-6 py-3">Image & Extraction</th>
                     <th className="px-6 py-3">Brand</th>
                     <th className="px-6 py-3">Face Value</th>
                     <th className="px-6 py-3">Status</th>
@@ -750,8 +907,13 @@ export default function PurchaseDetailPage() {
                 <tbody className="divide-y divide-slate-200 bg-white">
                   {giftCards.map((giftCard) => (
                     <tr key={giftCard.id} className="hover:bg-slate-50">
-                      <td className="w-32 px-6 py-4">
-                        {renderGiftCardImage(giftCard)}
+                      <td className="w-64 px-6 py-4 align-top">
+                        <div className="space-y-3">
+                          {renderGiftCardImage(giftCard)}
+                          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                            {renderExtractionAttempt(giftCard.id)}
+                          </div>
+                        </div>
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 font-medium">
                         {giftCard.brand}
