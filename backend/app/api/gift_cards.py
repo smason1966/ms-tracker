@@ -41,6 +41,21 @@ def create_gift_card(payload: GiftCardCreate):
         db.close()
 
 
+@router.get("/")
+def list_all_gift_cards():
+    db: Session = SessionLocal()
+
+    try:
+        return (
+            db.query(GiftCard)
+            .order_by(GiftCard.created_at.desc())
+            .all()
+        )
+
+    finally:
+        db.close()
+
+
 @router.get("/purchase/{purchase_batch_id}")
 def list_gift_cards(purchase_batch_id: int):
     db: Session = SessionLocal()
