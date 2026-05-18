@@ -421,11 +421,11 @@ export default function GiftCardVerificationPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-950">
-      <div className="mx-auto max-w-4xl space-y-6">
+    <main className="min-h-screen bg-slate-50 px-4 py-5 text-slate-950 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl space-y-6">
         <header className="space-y-3">
           <Link
-            className="inline-flex text-sm font-medium text-slate-600 underline-offset-4 hover:text-slate-950 hover:underline"
+            className="inline-flex min-h-11 items-center text-sm font-medium text-slate-600 underline-offset-4 hover:text-slate-950 hover:underline"
             href={purchaseHref}
           >
             Back to purchase
@@ -434,7 +434,7 @@ export default function GiftCardVerificationPage() {
             <p className="text-sm font-medium uppercase tracking-wide text-slate-500">
               Verify Gift Card
             </p>
-            <h1 className="text-3xl font-semibold tracking-tight">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               {giftCard.brand} {formatAmount(giftCard.face_value)}
             </h1>
             <p className="text-sm text-slate-600">Status: {giftCard.status}</p>
@@ -445,7 +445,7 @@ export default function GiftCardVerificationPage() {
           <div className="flex flex-col gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 sm:flex-row sm:items-center sm:justify-between">
             <span>{successMessage}</span>
             <Link
-              className="inline-flex h-10 items-center justify-center rounded-md bg-emerald-700 px-4 font-semibold text-white hover:bg-emerald-800"
+              className="inline-flex h-11 items-center justify-center rounded-md bg-emerald-700 px-4 font-semibold text-white hover:bg-emerald-800"
               href={purchaseHref}
             >
               Back to Purchase
@@ -453,14 +453,14 @@ export default function GiftCardVerificationPage() {
           </div>
         )}
 
-        <section className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+        <section className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(380px,0.7fr)]">
           <div className="space-y-4">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="text-lg font-semibold">Uploaded Card Image</h2>
                 <div className="flex flex-wrap gap-2">
                   <label
-                    className={`inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-sm font-medium transition ${
+                    className={`inline-flex h-11 cursor-pointer items-center rounded-md border border-slate-300 px-4 text-sm font-medium transition ${
                       isUploadingImage
                         ? "cursor-not-allowed bg-slate-100 text-slate-400"
                         : "text-slate-700 hover:bg-slate-100"
@@ -483,34 +483,38 @@ export default function GiftCardVerificationPage() {
                   </label>
                   {primaryImage && (
                     <>
-                    <button
-                      className="h-9 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                      onClick={() =>
-                        setImageRotation((currentRotation) => currentRotation - 90)
-                      }
-                      type="button"
-                    >
-                      Rotate Left
-                    </button>
-                    <button
-                      className="h-9 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                      onClick={() =>
-                        setImageRotation((currentRotation) => currentRotation + 90)
-                      }
-                      type="button"
-                    >
-                      Rotate Right
-                    </button>
-                    <button
-                      className="h-9 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                      onClick={() => setImageRotation(0)}
-                      type="button"
-                    >
-                      Reset Rotation
-                    </button>
+                      <button
+                        className="h-11 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                        onClick={() =>
+                          setImageRotation(
+                            (currentRotation) => currentRotation - 90,
+                          )
+                        }
+                        type="button"
+                      >
+                        Rotate Left
+                      </button>
+                      <button
+                        className="h-11 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                        onClick={() =>
+                          setImageRotation(
+                            (currentRotation) => currentRotation + 90,
+                          )
+                        }
+                        type="button"
+                      >
+                        Rotate Right
+                      </button>
+                      <button
+                        className="h-11 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                        onClick={() => setImageRotation(0)}
+                        type="button"
+                      >
+                        Reset
+                      </button>
                     </>
                   )}
-                  </div>
+                </div>
               </div>
               {imageUploadMessage ? (
                 <p className="mb-3 text-sm font-medium text-emerald-700">
@@ -523,10 +527,10 @@ export default function GiftCardVerificationPage() {
                 </p>
               ) : null}
               {primaryImage ? (
-                <div className="flex min-h-80 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-4">
+                <div className="flex min-h-[28rem] items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-3 sm:min-h-[34rem] md:min-h-[40rem] lg:min-h-[44rem]">
                   <Image
                     alt={`${giftCard.brand} card`}
-                    className="max-h-[70vh] w-full object-contain transition-transform duration-200"
+                    className="h-auto max-h-[78vh] w-full max-w-full object-contain transition-transform duration-200"
                     height={720}
                     src={buildUploadUrl(
                       primaryImage.processed_image_url ??
@@ -581,7 +585,7 @@ export default function GiftCardVerificationPage() {
           </div>
 
           <form
-            className="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+            className="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm xl:sticky xl:top-6 xl:self-start"
             onSubmit={handleVerify}
           >
             <div>
@@ -617,7 +621,7 @@ export default function GiftCardVerificationPage() {
                 </div>
                 {bestCardNumberCandidate && (
                   <button
-                    className="h-9 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium hover:bg-slate-100"
+                    className="h-11 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium hover:bg-slate-100"
                     onClick={() =>
                       setForm((currentForm) => ({
                         ...currentForm,
@@ -670,7 +674,7 @@ export default function GiftCardVerificationPage() {
                     </p>
                   </div>
                   <button
-                    className="h-9 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium hover:bg-slate-100"
+                    className="h-11 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium hover:bg-slate-100"
                     onClick={() =>
                       setForm((currentForm) => ({
                         ...currentForm,
@@ -710,7 +714,7 @@ export default function GiftCardVerificationPage() {
             <label className="block space-y-2 text-sm font-medium text-slate-700">
               <span>Confirmed Card Number</span>
               <input
-                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 onChange={(event) =>
                   setForm((currentForm) => ({
                     ...currentForm,
@@ -726,7 +730,7 @@ export default function GiftCardVerificationPage() {
             <label className="block space-y-2 text-sm font-medium text-slate-700">
               <span>Confirmed PIN</span>
               <input
-                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 onChange={(event) =>
                   setForm((currentForm) => ({
                     ...currentForm,
@@ -746,7 +750,7 @@ export default function GiftCardVerificationPage() {
             )}
 
             <button
-              className="h-11 w-full rounded-md bg-slate-950 px-4 font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+              className="h-12 w-full rounded-md bg-slate-950 px-4 font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
               disabled={isSubmitting}
               type="submit"
             >
@@ -767,7 +771,7 @@ function CandidateRow({
   onUse: () => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white p-2">
+    <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white p-3">
       <div className="min-w-0">
         <p className="break-all font-mono text-sm">{candidate.value}</p>
         <p className="text-xs text-slate-500">
@@ -775,7 +779,7 @@ function CandidateRow({
         </p>
       </div>
       <button
-        className="h-8 rounded-md border border-slate-300 px-3 text-xs font-medium hover:bg-slate-100"
+        className="h-11 rounded-md border border-slate-300 px-4 text-sm font-medium hover:bg-slate-100"
         onClick={onUse}
         type="button"
       >
