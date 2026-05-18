@@ -26,6 +26,7 @@ from app.models.card_image import CardImage
 from app.models.extraction_attempt import ExtractionAttempt
 from app.models.store import Store
 from app.models.card_brand import CardBrand
+from app.models.extraction_candidate import ExtractionCandidate
 
 target_metadata = Base.metadata
 
@@ -73,9 +74,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()
