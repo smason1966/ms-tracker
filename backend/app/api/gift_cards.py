@@ -57,6 +57,26 @@ def list_gift_cards(purchase_batch_id: int):
         db.close()
 
 
+@router.get("/{gift_card_id}")
+def get_gift_card(gift_card_id: int):
+    db: Session = SessionLocal()
+
+    try:
+        card = (
+            db.query(GiftCard)
+            .filter(GiftCard.id == gift_card_id)
+            .first()
+        )
+
+        if not card:
+            raise HTTPException(status_code=404, detail="Gift card not found")
+
+        return card
+
+    finally:
+        db.close()
+
+
 class GiftCardVerify(BaseModel):
     card_number: str
     pin: str

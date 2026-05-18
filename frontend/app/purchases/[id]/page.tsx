@@ -1,14 +1,8 @@
 "use client";
 
-import {
-  ChangeEvent,
-  FormEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 
 import { API_BASE_URL } from "@/lib/api";
@@ -19,8 +13,6 @@ type PurchaseBatch = {
   purchase_date: string;
   total_amount: string | number;
   notes: string | null;
-  created_at?: string;
-  updated_at?: string;
 };
 
 type Receipt = {
@@ -38,17 +30,7 @@ type GiftCard = {
   face_value: string | number;
   status: string;
   card_number_encrypted: string | null;
-  pin_encrypted: string | null;
   notes: string | null;
-  purchase_batch_id?: number;
-  created_at?: string;
-  updated_at?: string;
-};
-
-type GiftCardForm = {
-  brand: string;
-  face_value: string;
-  notes: string;
 };
 
 type CardBrand = {
@@ -57,29 +39,10 @@ type CardBrand = {
   active: boolean;
 };
 
-type CardImage = {
-  id: number;
-  gift_card_id: number;
-  image_type: string;
-  original_image_url: string;
-  processed_image_url: string | null;
-  created_at?: string;
-};
-
-type ExtractionAttempt = {
-  id: number;
-  gift_card_id: number;
-  method: string;
-  extracted_card_number: string | null;
-  extracted_pin: string | null;
-  confidence_score: number | null;
-  raw_text?: string | null;
-  created_at: string;
-};
-
-type VerificationForm = {
-  card_number: string;
-  pin: string;
+type GiftCardForm = {
+  brand: string;
+  face_value: string;
+  notes: string;
 };
 
 const emptyGiftCardForm: GiftCardForm = {
@@ -99,29 +62,8 @@ export default function PurchaseDetailPage() {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [giftCards, setGiftCards] = useState<GiftCard[]>([]);
   const [cardBrands, setCardBrands] = useState<CardBrand[]>([]);
-  const [primaryImagesByCardId, setPrimaryImagesByCardId] = useState<
-    Record<number, CardImage | null>
-  >({});
-  const [imageLoadErrorsByCardId, setImageLoadErrorsByCardId] = useState<
+  const [revealedCardNumbers, setRevealedCardNumbers] = useState<
     Record<number, boolean>
-  >({});
-  const [isUploadingImageByCardId, setIsUploadingImageByCardId] = useState<
-    Record<number, boolean>
-  >({});
-  const [uploadErrorsByCardId, setUploadErrorsByCardId] = useState<
-    Record<number, string | null>
-  >({});
-  const [latestAttemptsByCardId, setLatestAttemptsByCardId] = useState<
-    Record<number, ExtractionAttempt | null>
-  >({});
-  const [verificationFormsByCardId, setVerificationFormsByCardId] = useState<
-    Record<number, VerificationForm>
-  >({});
-  const [isVerifyingByCardId, setIsVerifyingByCardId] = useState<
-    Record<number, boolean>
-  >({});
-  const [verificationErrorsByCardId, setVerificationErrorsByCardId] = useState<
-    Record<number, string | null>
   >({});
   const [form, setForm] = useState<GiftCardForm>(emptyGiftCardForm);
   const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
@@ -129,21 +71,12 @@ export default function PurchaseDetailPage() {
   const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
   const [isLoadingGiftCards, setIsLoadingGiftCards] = useState(true);
   const [isLoadingCardBrands, setIsLoadingCardBrands] = useState(true);
-  const [isLoadingCardImages, setIsLoadingCardImages] = useState(false);
-  const [isLoadingExtractionAttempts, setIsLoadingExtractionAttempts] =
-    useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [receiptsError, setReceiptsError] = useState<string | null>(null);
-  const [receiptUploadError, setReceiptUploadError] = useState<string | null>(
-    null,
-  );
+  const [receiptUploadError, setReceiptUploadError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [cardBrandsError, setCardBrandsError] = useState<string | null>(null);
-  const [cardImagesError, setCardImagesError] = useState<string | null>(null);
-  const [extractionAttemptsError, setExtractionAttemptsError] = useState<
-    string | null
-  >(null);
 
   const purchaseUrl = `${API_BASE_URL}/purchase-batches/${purchaseId}`;
   const receiptsUrl = `${API_BASE_URL}/receipts/purchase/${purchaseId}`;
@@ -214,231 +147,6 @@ export default function PurchaseDetailPage() {
     [purchaseId, receiptsUrl],
   );
 
-  const fetchPrimaryImageForCard = useCallback(async (giftCardId: number) => {
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/card-images/gift-card/${giftCardId}`,
-      );
-
-      if (!response.ok) {
-        throw new Error(`Failed to load card images (${response.status})`);
-      }
-
-      const images = (await response.json()) as CardImage[];
-      const primaryImage =
-        images.find((image) => image.image_type === "primary") ?? null;
-
-      return { image: primaryImage, failed: false };
-    } catch {
-      return { image: null, failed: true };
-    }
-  }, []);
-
-  const loadPrimaryImageForCard = useCallback(
-    async (giftCardId: number) => {
-      const result = await fetchPrimaryImageForCard(giftCardId);
-
-      setPrimaryImagesByCardId((currentImages) => ({
-        ...currentImages,
-        [giftCardId]: result.image,
-      }));
-
-      if (!result.failed) {
-        setImageLoadErrorsByCardId((currentErrors) => ({
-          ...currentErrors,
-          [giftCardId]: false,
-        }));
-      }
-
-      return result.failed;
-    },
-    [fetchPrimaryImageForCard],
-  );
-
-  const fetchLatestExtractionAttemptForCard = useCallback(
-    async (giftCardId: number) => {
-      try {
-        const response = await fetch(
-          `${API_BASE_URL}/extraction-attempts/gift-card/${giftCardId}`,
-        );
-
-        if (!response.ok) {
-          throw new Error(
-            `Failed to load extraction attempts (${response.status})`,
-          );
-        }
-
-        const attempts = (await response.json()) as ExtractionAttempt[];
-
-        return { attempt: attempts[0] ?? null, failed: false };
-      } catch {
-        return { attempt: null, failed: true };
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadPrimaryImages() {
-      if (giftCards.length === 0) {
-        setPrimaryImagesByCardId({});
-        setImageLoadErrorsByCardId({});
-        setCardImagesError(null);
-        setIsLoadingCardImages(false);
-        return;
-      }
-
-      setIsLoadingCardImages(true);
-      setCardImagesError(null);
-      setImageLoadErrorsByCardId({});
-
-      try {
-        const imageResults = await Promise.all(
-          giftCards.map(async (giftCard) => {
-            const result = await fetchPrimaryImageForCard(giftCard.id);
-            return [giftCard.id, result.image, result.failed] as const;
-          }),
-        );
-
-        if (isMounted) {
-          setPrimaryImagesByCardId(
-            Object.fromEntries(
-              imageResults.map(([giftCardId, image]) => [giftCardId, image]),
-            ),
-          );
-          setCardImagesError(
-            imageResults.some(([, , failed]) => failed)
-              ? "Some card images could not be loaded."
-              : null,
-          );
-        }
-      } catch (err) {
-        if (isMounted) {
-          setCardImagesError(
-            err instanceof Error
-              ? err.message
-              : "Failed to load card images.",
-          );
-          setPrimaryImagesByCardId({});
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoadingCardImages(false);
-        }
-      }
-    }
-
-    loadPrimaryImages();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [fetchPrimaryImageForCard, giftCards]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadLatestExtractionAttempts() {
-      if (giftCards.length === 0) {
-        setLatestAttemptsByCardId({});
-        setExtractionAttemptsError(null);
-        setIsLoadingExtractionAttempts(false);
-        return;
-      }
-
-      setIsLoadingExtractionAttempts(true);
-      setExtractionAttemptsError(null);
-
-      try {
-        const attemptResults = await Promise.all(
-          giftCards.map(async (giftCard) => {
-            const result = await fetchLatestExtractionAttemptForCard(
-              giftCard.id,
-            );
-
-            return [giftCard.id, result.attempt, result.failed] as const;
-          }),
-        );
-
-        if (isMounted) {
-          setLatestAttemptsByCardId(
-            Object.fromEntries(
-              attemptResults.map(([giftCardId, attempt]) => [
-                giftCardId,
-                attempt,
-              ]),
-            ),
-          );
-          setExtractionAttemptsError(
-            attemptResults.some(([, , failed]) => failed)
-              ? "Some extraction attempts could not be loaded."
-              : null,
-          );
-        }
-      } catch (err) {
-        if (isMounted) {
-          setExtractionAttemptsError(
-            err instanceof Error
-              ? err.message
-              : "Failed to load extraction attempts.",
-          );
-          setLatestAttemptsByCardId({});
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoadingExtractionAttempts(false);
-        }
-      }
-    }
-
-    loadLatestExtractionAttempts();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [fetchLatestExtractionAttemptForCard, giftCards]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadCardBrands() {
-      setIsLoadingCardBrands(true);
-      setCardBrandsError(null);
-
-      try {
-        const response = await fetch(cardBrandsUrl);
-
-        if (!response.ok) {
-          throw new Error(`Failed to load card brands (${response.status})`);
-        }
-
-        const data = (await response.json()) as CardBrand[];
-
-        if (isMounted) {
-          setCardBrands(data);
-        }
-      } catch (err) {
-        if (isMounted) {
-          setCardBrandsError(
-            err instanceof Error ? err.message : "Failed to load card brands.",
-          );
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoadingCardBrands(false);
-        }
-      }
-    }
-
-    loadCardBrands();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [cardBrandsUrl]);
-
   useEffect(() => {
     let isMounted = true;
 
@@ -483,8 +191,86 @@ export default function PurchaseDetailPage() {
   }, [purchaseId, purchaseUrl]);
 
   useEffect(() => {
-    loadReceipts();
-  }, [loadReceipts]);
+    let isMounted = true;
+
+    async function loadCardBrands() {
+      setIsLoadingCardBrands(true);
+      setCardBrandsError(null);
+
+      try {
+        const response = await fetch(cardBrandsUrl);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load card brands (${response.status})`);
+        }
+
+        const data = (await response.json()) as CardBrand[];
+
+        if (isMounted) {
+          setCardBrands(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setCardBrandsError(
+            err instanceof Error ? err.message : "Failed to load card brands.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingCardBrands(false);
+        }
+      }
+    }
+
+    loadCardBrands();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [cardBrandsUrl]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadInitialReceipts() {
+      if (!purchaseId) {
+        return;
+      }
+
+      setIsLoadingReceipts(true);
+      setReceiptsError(null);
+
+      try {
+        const response = await fetch(receiptsUrl);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load receipts (${response.status})`);
+        }
+
+        const data = (await response.json()) as Receipt[];
+
+        if (isMounted) {
+          setReceipts(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setReceiptsError(
+            err instanceof Error ? err.message : "Failed to load receipts.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingReceipts(false);
+        }
+      }
+    }
+
+    loadInitialReceipts();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [purchaseId, receiptsUrl]);
 
   useEffect(() => {
     let isMounted = true;
@@ -529,32 +315,6 @@ export default function PurchaseDetailPage() {
     };
   }, [giftCardsUrl, purchaseId]);
 
-  useEffect(() => {
-    setVerificationFormsByCardId((currentForms) => {
-      const nextForms: Record<number, VerificationForm> = {};
-
-      for (const giftCard of giftCards) {
-        const latestAttempt = latestAttemptsByCardId[giftCard.id];
-        const currentForm = currentForms[giftCard.id];
-        const cardNumber =
-          giftCard.card_number_encrypted ??
-          (currentForm?.card_number || latestAttempt?.extracted_card_number) ??
-          "";
-        const pin =
-          giftCard.pin_encrypted ??
-          (currentForm?.pin || latestAttempt?.extracted_pin) ??
-          "";
-
-        nextForms[giftCard.id] = {
-          card_number: cardNumber,
-          pin,
-        };
-      }
-
-      return nextForms;
-    });
-  }, [giftCards, latestAttemptsByCardId]);
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
@@ -589,59 +349,6 @@ export default function PurchaseDetailPage() {
       );
     } finally {
       setIsSubmitting(false);
-    }
-  }
-
-  async function handleImageUpload(
-    giftCardId: number,
-    event: ChangeEvent<HTMLInputElement>,
-  ) {
-    const file = event.target.files?.[0];
-
-    if (!file) {
-      return;
-    }
-
-    setIsUploadingImageByCardId((currentUploads) => ({
-      ...currentUploads,
-      [giftCardId]: true,
-    }));
-    setUploadErrorsByCardId((currentErrors) => ({
-      ...currentErrors,
-      [giftCardId]: null,
-    }));
-
-    try {
-      const formData = new FormData();
-      formData.append("gift_card_id", String(giftCardId));
-      formData.append("file", file);
-
-      const response = await fetch(`${API_BASE_URL}/card-images/upload`, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to upload image (${response.status})`);
-      }
-
-      const imageFailed = await loadPrimaryImageForCard(giftCardId);
-
-      if (imageFailed) {
-        throw new Error("Image uploaded, but the thumbnail could not be loaded.");
-      }
-    } catch (err) {
-      setUploadErrorsByCardId((currentErrors) => ({
-        ...currentErrors,
-        [giftCardId]:
-          err instanceof Error ? err.message : "Failed to upload image.",
-      }));
-    } finally {
-      event.target.value = "";
-      setIsUploadingImageByCardId((currentUploads) => ({
-        ...currentUploads,
-        [giftCardId]: false,
-      }));
     }
   }
 
@@ -680,75 +387,10 @@ export default function PurchaseDetailPage() {
     }
   }
 
-  async function handleVerifyGiftCard(giftCardId: number) {
-    const verificationForm = verificationFormsByCardId[giftCardId];
-
-    if (!verificationForm) {
-      return;
-    }
-
-    setIsVerifyingByCardId((currentVerifying) => ({
-      ...currentVerifying,
-      [giftCardId]: true,
-    }));
-    setVerificationErrorsByCardId((currentErrors) => ({
-      ...currentErrors,
-      [giftCardId]: null,
-    }));
-
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/gift-cards/${giftCardId}/verify`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            card_number: verificationForm.card_number.trim(),
-            pin: verificationForm.pin.trim(),
-          }),
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(`Failed to verify gift card (${response.status})`);
-      }
-
-      await loadGiftCards({ showLoading: false });
-    } catch (err) {
-      setVerificationErrorsByCardId((currentErrors) => ({
-        ...currentErrors,
-        [giftCardId]:
-          err instanceof Error ? err.message : "Failed to verify gift card.",
-      }));
-    } finally {
-      setIsVerifyingByCardId((currentVerifying) => ({
-        ...currentVerifying,
-        [giftCardId]: false,
-      }));
-    }
-  }
-
   function updateFormField(field: keyof GiftCardForm, value: string) {
     setForm((currentForm) => ({
       ...currentForm,
       [field]: value,
-    }));
-  }
-
-  function updateVerificationField(
-    giftCardId: number,
-    field: keyof VerificationForm,
-    value: string,
-  ) {
-    setVerificationFormsByCardId((currentForms) => ({
-      ...currentForms,
-      [giftCardId]: {
-        card_number: currentForms[giftCardId]?.card_number ?? "",
-        pin: currentForms[giftCardId]?.pin ?? "",
-        [field]: value,
-      },
     }));
   }
 
@@ -777,26 +419,6 @@ export default function PurchaseDetailPage() {
       style: "currency",
       currency: "USD",
     }).format(amount);
-  }
-
-  function formatConfidenceScore(value: number | null) {
-    if (value === null) {
-      return "-";
-    }
-
-    return new Intl.NumberFormat("en-US", {
-      maximumFractionDigits: 2,
-    }).format(value);
-  }
-
-  function getImageUrl(image: CardImage) {
-    const rawUrl = image.processed_image_url ?? image.original_image_url;
-
-    if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
-      return rawUrl;
-    }
-
-    return `${API_BASE_URL}/${rawUrl.replace(/^\/+/, "")}`;
   }
 
   function getReceiptImageUrl(receipt: Receipt) {
@@ -846,161 +468,43 @@ export default function PurchaseDetailPage() {
     );
   }
 
-  function renderGiftCardImage(giftCard: GiftCard) {
-    const primaryImage = primaryImagesByCardId[giftCard.id];
-    const isUploadingImage = Boolean(isUploadingImageByCardId[giftCard.id]);
-    const uploadError = uploadErrorsByCardId[giftCard.id];
+  function getBrandTone(brand: string) {
+    const tones = [
+      "border-slate-300 bg-slate-100 text-slate-800",
+      "border-emerald-300 bg-emerald-50 text-emerald-900",
+      "border-sky-300 bg-sky-50 text-sky-900",
+      "border-amber-300 bg-amber-50 text-amber-900",
+      "border-rose-300 bg-rose-50 text-rose-900",
+    ];
+    const index = brand
+      .split("")
+      .reduce((total, character) => total + character.charCodeAt(0), 0);
 
-    return (
-      <div className="space-y-2">
-        <div className="flex h-16 w-24 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-center">
-          {isLoadingCardImages && primaryImage === undefined ? (
-            <span className="px-2 text-xs text-slate-500">Loading image...</span>
-          ) : primaryImage === null ||
-            primaryImage === undefined ||
-            imageLoadErrorsByCardId[giftCard.id] ? (
-            <span className="px-2 text-xs text-slate-500">
-              No image uploaded
-            </span>
-          ) : (
-            <Image
-              className="h-16 w-24 rounded-md object-cover"
-              src={getImageUrl(primaryImage)}
-              alt={`${giftCard.brand} gift card`}
-              width={96}
-              height={64}
-              unoptimized
-              onError={() => {
-                setImageLoadErrorsByCardId((currentErrors) => ({
-                  ...currentErrors,
-                  [giftCard.id]: true,
-                }));
-              }}
-            />
-          )}
-        </div>
-
-        <label
-          className={`inline-flex h-8 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-xs font-medium transition ${
-            isUploadingImage
-              ? "cursor-not-allowed bg-slate-100 text-slate-400"
-              : "text-slate-700 hover:bg-slate-100"
-          }`}
-        >
-          <span>{isUploadingImage ? "Uploading..." : "Upload Image"}</span>
-          <input
-            className="sr-only"
-            type="file"
-            accept="image/*"
-            disabled={isUploadingImage}
-            onChange={(event) => handleImageUpload(giftCard.id, event)}
-          />
-        </label>
-
-        {uploadError ? (
-          <p className="max-w-32 text-xs font-medium text-red-700">
-            {uploadError}
-          </p>
-        ) : null}
-      </div>
-    );
+    return tones[index % tones.length];
   }
 
-  function renderExtractionAttempt(giftCardId: number) {
-    const attempt = latestAttemptsByCardId[giftCardId];
+  function getCardNumberDisplay(giftCard: GiftCard) {
+    const cardNumber = giftCard.card_number_encrypted;
 
-    if (isLoadingExtractionAttempts && attempt === undefined) {
-      return <p className="text-xs text-slate-500">Loading extraction...</p>;
+    if (!cardNumber) {
+      return "Not verified";
     }
 
-    if (attempt === null || attempt === undefined) {
-      return <p className="text-xs text-slate-500">No extraction yet</p>;
+    if (revealedCardNumbers[giftCard.id]) {
+      return cardNumber;
     }
 
-    return (
-      <dl className="space-y-1 text-xs text-slate-700">
-        <div>
-          <dt className="font-medium text-slate-500">Method</dt>
-          <dd>{attempt.method}</dd>
-        </div>
-        <div>
-          <dt className="font-medium text-slate-500">Card Number</dt>
-          <dd className="break-all">{attempt.extracted_card_number || "-"}</dd>
-        </div>
-        <div>
-          <dt className="font-medium text-slate-500">PIN</dt>
-          <dd className="break-all">{attempt.extracted_pin || "-"}</dd>
-        </div>
-        <div>
-          <dt className="font-medium text-slate-500">Confidence</dt>
-          <dd>{formatConfidenceScore(attempt.confidence_score)}</dd>
-        </div>
-        <div>
-          <dt className="font-medium text-slate-500">Created</dt>
-          <dd>{formatDate(attempt.created_at)}</dd>
-        </div>
-      </dl>
-    );
+    const normalizedCardNumber = cardNumber.replace(/\s/g, "");
+    const lastFour = normalizedCardNumber.slice(-4);
+
+    return lastFour ? `Card ending ${lastFour}` : "Card number saved";
   }
 
-  function renderVerificationForm(giftCard: GiftCard) {
-    const verificationForm = verificationFormsByCardId[giftCard.id] ?? {
-      card_number: "",
-      pin: "",
-    };
-    const isVerifying = Boolean(isVerifyingByCardId[giftCard.id]);
-    const verificationError = verificationErrorsByCardId[giftCard.id];
-    const canVerify =
-      verificationForm.card_number.trim().length > 0 &&
-      verificationForm.pin.trim().length > 0;
-
-    return (
-      <div className="space-y-3">
-        {/* TODO: Mask these values in the UI and encrypt before production. */}
-        <label className="block space-y-1 text-xs font-medium text-slate-700">
-          <span>Confirmed Card Number</span>
-          <input
-            className="h-9 w-56 rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-            type="text"
-            value={verificationForm.card_number}
-            onChange={(event) =>
-              updateVerificationField(
-                giftCard.id,
-                "card_number",
-                event.target.value,
-              )
-            }
-          />
-        </label>
-
-        <label className="block space-y-1 text-xs font-medium text-slate-700">
-          <span>Confirmed PIN</span>
-          <input
-            className="h-9 w-40 rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-            type="text"
-            value={verificationForm.pin}
-            onChange={(event) =>
-              updateVerificationField(giftCard.id, "pin", event.target.value)
-            }
-          />
-        </label>
-
-        <button
-          className="h-9 rounded-md bg-slate-900 px-4 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-          type="button"
-          disabled={isVerifying || !canVerify}
-          onClick={() => handleVerifyGiftCard(giftCard.id)}
-        >
-          {isVerifying ? "Verifying..." : "Verify Card"}
-        </button>
-
-        {verificationError ? (
-          <p className="max-w-56 text-xs font-medium text-red-700">
-            {verificationError}
-          </p>
-        ) : null}
-      </div>
-    );
+  function toggleCardNumber(giftCardId: number) {
+    setRevealedCardNumbers((currentRevealedCardNumbers) => ({
+      ...currentRevealedCardNumbers,
+      [giftCardId]: !currentRevealedCardNumbers[giftCardId],
+    }));
   }
 
   return (
@@ -1220,14 +724,6 @@ export default function PurchaseDetailPage() {
             <p className="mt-1 text-sm text-slate-500">
               {giftCards.length} {giftCards.length === 1 ? "card" : "cards"}
             </p>
-            {cardImagesError ? (
-              <p className="mt-1 text-sm text-amber-700">{cardImagesError}</p>
-            ) : null}
-            {extractionAttemptsError ? (
-              <p className="mt-1 text-sm text-amber-700">
-                {extractionAttemptsError}
-              </p>
-            ) : null}
           </div>
 
           {isLoadingGiftCards ? (
@@ -1243,39 +739,65 @@ export default function PurchaseDetailPage() {
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                   <tr>
-                    <th className="px-6 py-3">Image & Extraction</th>
                     <th className="px-6 py-3">Brand</th>
                     <th className="px-6 py-3">Face Value</th>
-                    <th className="px-6 py-3">Status</th>
-                    <th className="px-6 py-3">Verification</th>
+                    <th className="px-6 py-3">Card Number</th>
+                    <th className="px-6 py-3">Action</th>
                     <th className="px-6 py-3">Notes</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 bg-white">
                   {giftCards.map((giftCard) => (
                     <tr key={giftCard.id} className="hover:bg-slate-50">
-                      <td className="w-64 px-6 py-4 align-top">
-                        <div className="space-y-3">
-                          {renderGiftCardImage(giftCard)}
-                          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                            {renderExtractionAttempt(giftCard.id)}
-                          </div>
+                      <td className="px-6 py-4">
+                        <div
+                          className={`flex h-16 w-28 items-center justify-center rounded-md border px-3 text-center text-sm font-semibold ${getBrandTone(
+                            giftCard.brand,
+                          )}`}
+                        >
+                          {giftCard.brand}
                         </div>
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 font-medium">
-                        {giftCard.brand}
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 text-slate-700">
                         {formatAmount(giftCard.face_value)}
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 text-slate-700">
-                        {giftCard.status}
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs">
+                            {getCardNumberDisplay(giftCard)}
+                          </span>
+                          {giftCard.card_number_encrypted ? (
+                            <button
+                              aria-label={
+                                revealedCardNumbers[giftCard.id]
+                                  ? "Hide card number"
+                                  : "Show card number"
+                              }
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-slate-600 transition hover:bg-slate-100 hover:text-slate-950"
+                              onClick={() => toggleCardNumber(giftCard.id)}
+                              type="button"
+                            >
+                              <EyeIcon hidden={revealedCardNumbers[giftCard.id]} />
+                            </button>
+                          ) : null}
+                        </div>
                       </td>
-                      <td className="px-6 py-4 align-top">
-                        {renderVerificationForm(giftCard)}
+                      <td className="whitespace-nowrap px-6 py-4">
+                        <Link
+                          className={`inline-flex h-9 items-center rounded-md px-4 text-xs font-semibold text-white transition ${
+                            giftCard.status === "VERIFIED_AVAILABLE"
+                              ? "bg-emerald-700 hover:bg-emerald-800"
+                              : "bg-red-700 hover:bg-red-800"
+                          }`}
+                          href={`/gift-cards/${giftCard.id}/verify`}
+                        >
+                          {giftCard.status === "VERIFIED_AVAILABLE"
+                            ? "Verified"
+                            : "Verify"}
+                        </Link>
                       </td>
-                      <td className="max-w-md px-6 py-4 text-slate-700">
-                        {giftCard.notes || "-"}
+                      <td className="max-w-md px-6 py-4 text-xs text-slate-500">
+                        {giftCard.notes || ""}
                       </td>
                     </tr>
                   ))}
@@ -1286,5 +808,24 @@ export default function PurchaseDetailPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+function EyeIcon({ hidden }: { hidden?: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+      {hidden ? <path d="m4 4 16 16" /> : null}
+    </svg>
   );
 }

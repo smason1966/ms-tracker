@@ -1,0 +1,669 @@
+"use client";
+
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
+import { API_BASE_URL } from "@/lib/api";
+
+type GiftCard = {
+  id: number;
+  purchase_batch_id: number;
+  brand: string;
+  face_value: string | number;
+  status: string;
+  card_number_encrypted: string | null;
+  pin_encrypted: string | null;
+  notes: string | null;
+};
+
+type CardImage = {
+  id: number;
+  gift_card_id: number;
+  image_type: string;
+  original_image_url: string;
+  processed_image_url: string | null;
+  created_at?: string;
+};
+
+type ExtractionAttempt = {
+  id: number;
+  gift_card_id: number;
+  method: string;
+  extracted_card_number: string | null;
+  extracted_pin: string | null;
+  confidence_score: number | null;
+  created_at: string;
+};
+
+type ExtractionCandidate = {
+  id: number;
+  gift_card_id: number;
+  candidate_type: string;
+  source: string;
+  value: string;
+  confidence_score: number | null;
+  notes: string | null;
+  created_at: string;
+};
+
+type VerificationForm = {
+  card_number: string;
+  pin: string;
+};
+
+function buildUploadUrl(path: string | null | undefined) {
+  if (!path) {
+    return "";
+  }
+
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+
+  return `${API_BASE_URL}/${path.replace(/^\/+/, "")}`;
+}
+
+function formatAmount(value: string | number) {
+  const amount = Number(value);
+
+  if (Number.isNaN(amount)) {
+    return String(value);
+  }
+
+  return amount.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+  });
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) {
+    return "Unknown";
+  }
+
+  return new Date(value).toLocaleString();
+}
+
+function formatConfidence(value: number | null) {
+  if (value === null || value === undefined) {
+    return "Unknown confidence";
+  }
+
+  return `${Math.round(value * 100)}% confidence`;
+}
+
+function candidateSourceRank(candidate: ExtractionCandidate) {
+  return candidate.source.toLowerCase() === "barcode" ? 1 : 0;
+}
+
+function getBestCandidate(
+  candidates: ExtractionCandidate[],
+  candidateType: string,
+) {
+  const matchingCandidates = candidates.filter(
+    (candidate) =>
+      candidate.candidate_type === candidateType &&
+      ((candidate.confidence_score ?? 0) >= 0.35 ||
+        candidate.source.toLowerCase() === "barcode"),
+  );
+
+  return matchingCandidates.sort((candidateA, candidateB) => {
+    const confidenceA = candidateA.confidence_score ?? 0;
+    const confidenceB = candidateB.confidence_score ?? 0;
+    const confidenceGap = Math.abs(confidenceA - confidenceB);
+
+    if (confidenceGap <= 0.05) {
+      return candidateSourceRank(candidateB) - candidateSourceRank(candidateA);
+    }
+
+    return confidenceB - confidenceA;
+  })[0];
+}
+
+function getUsefulCandidates(
+  candidates: ExtractionCandidate[],
+  candidateType: string,
+  bestCandidateId?: number,
+) {
+  return candidates
+    .filter(
+      (candidate) =>
+        candidate.candidate_type === candidateType &&
+        candidate.id !== bestCandidateId &&
+        (candidate.confidence_score ?? 0) >= 0.35,
+    )
+    .sort((candidateA, candidateB) => {
+      const confidenceA = candidateA.confidence_score ?? 0;
+      const confidenceB = candidateB.confidence_score ?? 0;
+
+      return confidenceB - confidenceA;
+    });
+}
+
+export default function GiftCardVerificationPage() {
+  const params = useParams<{ id: string | string[] }>();
+  const router = useRouter();
+  const giftCardId = Array.isArray(params.id) ? params.id[0] : params.id;
+
+  const [giftCard, setGiftCard] = useState<GiftCard | null>(null);
+  const [cardImages, setCardImages] = useState<CardImage[]>([]);
+  const [extractionAttempts, setExtractionAttempts] = useState<
+    ExtractionAttempt[]
+  >([]);
+  const [extractionCandidates, setExtractionCandidates] = useState<
+    ExtractionCandidate[]
+  >([]);
+  const [form, setForm] = useState<VerificationForm>({
+    card_number: "",
+    pin: "",
+  });
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [imageRotation, setImageRotation] = useState(0);
+
+  const primaryImage = useMemo(() => {
+    return (
+      cardImages.find((image) => image.image_type === "primary") ??
+      cardImages[0] ??
+      null
+    );
+  }, [cardImages]);
+
+  const bestCardNumberCandidate = useMemo(
+    () => getBestCandidate(extractionCandidates, "card_number"),
+    [extractionCandidates],
+  );
+
+  const bestPinCandidate = useMemo(
+    () => getBestCandidate(extractionCandidates, "pin"),
+    [extractionCandidates],
+  );
+
+  const otherCardNumberCandidates = useMemo(
+    () =>
+      getUsefulCandidates(
+        extractionCandidates,
+        "card_number",
+        bestCardNumberCandidate?.id,
+      ),
+    [bestCardNumberCandidate?.id, extractionCandidates],
+  );
+
+  const otherPinCandidates = useMemo(
+    () => getUsefulCandidates(extractionCandidates, "pin", bestPinCandidate?.id),
+    [bestPinCandidate?.id, extractionCandidates],
+  );
+
+  const latestExtractionAttempt = extractionAttempts[0] ?? null;
+  const purchaseHref = giftCard
+    ? `/purchases/${giftCard.purchase_batch_id}`
+    : "/";
+
+  useEffect(() => {
+    async function loadVerificationDetails() {
+      setIsLoading(true);
+      setError(null);
+      setSuccessMessage(null);
+
+      try {
+        const [
+          giftCardResponse,
+          imagesResponse,
+          attemptsResponse,
+          candidatesResponse,
+        ] = await Promise.all([
+          fetch(`${API_BASE_URL}/gift-cards/${giftCardId}`),
+          fetch(`${API_BASE_URL}/card-images/gift-card/${giftCardId}`),
+          fetch(`${API_BASE_URL}/extraction-attempts/gift-card/${giftCardId}`),
+          fetch(`${API_BASE_URL}/extraction-candidates/gift-card/${giftCardId}`),
+        ]);
+
+        if (!giftCardResponse.ok) {
+          throw new Error(`Failed to load gift card (${giftCardResponse.status})`);
+        }
+
+        if (!imagesResponse.ok) {
+          throw new Error(`Failed to load card images (${imagesResponse.status})`);
+        }
+
+        if (!attemptsResponse.ok) {
+          throw new Error(
+            `Failed to load extraction attempts (${attemptsResponse.status})`,
+          );
+        }
+
+        if (!candidatesResponse.ok) {
+          throw new Error(
+            `Failed to load extraction candidates (${candidatesResponse.status})`,
+          );
+        }
+
+        const loadedGiftCard = (await giftCardResponse.json()) as GiftCard;
+        const loadedImages = (await imagesResponse.json()) as CardImage[];
+        const loadedAttempts =
+          (await attemptsResponse.json()) as ExtractionAttempt[];
+        const loadedCandidates =
+          (await candidatesResponse.json()) as ExtractionCandidate[];
+
+        const bestLoadedCardNumberCandidate = getBestCandidate(
+          loadedCandidates,
+          "card_number",
+        );
+        const bestLoadedPinCandidate = getBestCandidate(loadedCandidates, "pin");
+
+        setGiftCard(loadedGiftCard);
+        setCardImages(loadedImages);
+        setExtractionAttempts(loadedAttempts);
+        setExtractionCandidates(loadedCandidates);
+        setForm({
+          // TODO: Mask and encrypt these values before production.
+          card_number:
+            loadedGiftCard.card_number_encrypted ??
+            bestLoadedCardNumberCandidate?.value ??
+            "",
+          pin:
+            loadedGiftCard.pin_encrypted ?? bestLoadedPinCandidate?.value ?? "",
+        });
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load verification details.",
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    if (giftCardId) {
+      void loadVerificationDetails();
+    }
+  }, [giftCardId]);
+
+  async function handleVerify(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSubmitting(true);
+    setSubmitError(null);
+    setSuccessMessage(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/gift-cards/${giftCardId}/verify`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(form),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to verify gift card (${response.status})`);
+      }
+
+      const updatedGiftCard = (await response.json()) as GiftCard;
+      setGiftCard(updatedGiftCard);
+      router.push(`/purchases/${updatedGiftCard.purchase_batch_id}`);
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "Failed to verify gift card.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-950">
+        <div className="mx-auto max-w-3xl rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+          Loading verification details...
+        </div>
+      </main>
+    );
+  }
+
+  if (error || !giftCard) {
+    return (
+      <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-950">
+        <div className="mx-auto max-w-3xl space-y-4 rounded-lg border border-red-200 bg-red-50 p-6 text-red-700">
+          <p>{error ?? "Gift card not found."}</p>
+          <Link className="text-sm font-semibold underline" href="/">
+            Back to purchases
+          </Link>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-950">
+      <div className="mx-auto max-w-4xl space-y-6">
+        <header className="space-y-3">
+          <Link
+            className="inline-flex text-sm font-medium text-slate-600 underline-offset-4 hover:text-slate-950 hover:underline"
+            href={purchaseHref}
+          >
+            Back to purchase
+          </Link>
+          <div className="space-y-1">
+            <p className="text-sm font-medium uppercase tracking-wide text-slate-500">
+              Verify Gift Card
+            </p>
+            <h1 className="text-3xl font-semibold tracking-tight">
+              {giftCard.brand} {formatAmount(giftCard.face_value)}
+            </h1>
+            <p className="text-sm text-slate-600">Status: {giftCard.status}</p>
+          </div>
+        </header>
+
+        {successMessage && (
+          <div className="flex flex-col gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 sm:flex-row sm:items-center sm:justify-between">
+            <span>{successMessage}</span>
+            <Link
+              className="inline-flex h-10 items-center justify-center rounded-md bg-emerald-700 px-4 font-semibold text-white hover:bg-emerald-800"
+              href={purchaseHref}
+            >
+              Back to Purchase
+            </Link>
+          </div>
+        )}
+
+        <section className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+          <div className="space-y-4">
+            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h2 className="text-lg font-semibold">Uploaded Card Image</h2>
+                {primaryImage && (
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className="h-9 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                      onClick={() =>
+                        setImageRotation((currentRotation) => currentRotation - 90)
+                      }
+                      type="button"
+                    >
+                      Rotate Left
+                    </button>
+                    <button
+                      className="h-9 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                      onClick={() =>
+                        setImageRotation((currentRotation) => currentRotation + 90)
+                      }
+                      type="button"
+                    >
+                      Rotate Right
+                    </button>
+                    <button
+                      className="h-9 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                      onClick={() => setImageRotation(0)}
+                      type="button"
+                    >
+                      Reset Rotation
+                    </button>
+                  </div>
+                )}
+              </div>
+              {primaryImage ? (
+                <div className="flex min-h-80 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-4">
+                  <Image
+                    alt={`${giftCard.brand} card`}
+                    className="max-h-[70vh] w-full object-contain transition-transform duration-200"
+                    height={720}
+                    src={buildUploadUrl(
+                      primaryImage.processed_image_url ??
+                        primaryImage.original_image_url,
+                    )}
+                    style={{
+                      transform: `rotate(${imageRotation}deg)`,
+                    }}
+                    unoptimized
+                    width={960}
+                  />
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                  No image uploaded.
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="text-lg font-semibold">Extraction Summary</h2>
+              {latestExtractionAttempt ? (
+                <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+                  <div>
+                    <dt className="font-medium text-slate-500">Method</dt>
+                    <dd>{latestExtractionAttempt.method}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-medium text-slate-500">Confidence</dt>
+                    <dd>
+                      {formatConfidence(latestExtractionAttempt.confidence_score)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="font-medium text-slate-500">Card Number</dt>
+                    <dd>{latestExtractionAttempt.extracted_card_number ?? "None"}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-medium text-slate-500">PIN</dt>
+                    <dd>{latestExtractionAttempt.extracted_pin ?? "None"}</dd>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <dt className="font-medium text-slate-500">Created</dt>
+                    <dd>{formatDate(latestExtractionAttempt.created_at)}</dd>
+                  </div>
+                </dl>
+              ) : (
+                <p className="mt-3 text-sm text-slate-500">No extraction yet.</p>
+              )}
+            </div>
+          </div>
+
+          <form
+            className="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+            onSubmit={handleVerify}
+          >
+            <div>
+              <h2 className="text-lg font-semibold">Confirm Values</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Review the suggestions, then save the confirmed card details.
+              </p>
+            </div>
+
+            <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Suggested Card Number
+                  </p>
+                  {bestCardNumberCandidate ? (
+                    <>
+                      <p className="mt-1 break-all font-mono text-base">
+                        {bestCardNumberCandidate.value}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {bestCardNumberCandidate.source} ·{" "}
+                        {formatConfidence(
+                          bestCardNumberCandidate.confidence_score,
+                        )}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="mt-1 text-sm text-slate-500">
+                      No useful card number candidate.
+                    </p>
+                  )}
+                </div>
+                {bestCardNumberCandidate && (
+                  <button
+                    className="h-9 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium hover:bg-slate-100"
+                    onClick={() =>
+                      setForm((currentForm) => ({
+                        ...currentForm,
+                        card_number: bestCardNumberCandidate.value,
+                      }))
+                    }
+                    type="button"
+                  >
+                    Use
+                  </button>
+                )}
+              </div>
+
+              {otherCardNumberCandidates.length > 0 && (
+                <details className="mt-3 text-sm">
+                  <summary className="cursor-pointer font-medium text-slate-600">
+                    Show other card number candidates
+                  </summary>
+                  <div className="mt-2 space-y-2">
+                    {otherCardNumberCandidates.map((candidate) => (
+                      <CandidateRow
+                        candidate={candidate}
+                        key={candidate.id}
+                        onUse={() =>
+                          setForm((currentForm) => ({
+                            ...currentForm,
+                            card_number: candidate.value,
+                          }))
+                        }
+                      />
+                    ))}
+                  </div>
+                </details>
+              )}
+            </section>
+
+            {bestPinCandidate && (
+              <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Suggested PIN
+                    </p>
+                    <p className="mt-1 break-all font-mono text-base">
+                      {bestPinCandidate.value}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {bestPinCandidate.source} ·{" "}
+                      {formatConfidence(bestPinCandidate.confidence_score)}
+                    </p>
+                  </div>
+                  <button
+                    className="h-9 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium hover:bg-slate-100"
+                    onClick={() =>
+                      setForm((currentForm) => ({
+                        ...currentForm,
+                        pin: bestPinCandidate.value,
+                      }))
+                    }
+                    type="button"
+                  >
+                    Use
+                  </button>
+                </div>
+
+                {otherPinCandidates.length > 0 && (
+                  <details className="mt-3 text-sm">
+                    <summary className="cursor-pointer font-medium text-slate-600">
+                      Show other PIN candidates
+                    </summary>
+                    <div className="mt-2 space-y-2">
+                      {otherPinCandidates.map((candidate) => (
+                        <CandidateRow
+                          candidate={candidate}
+                          key={candidate.id}
+                          onUse={() =>
+                            setForm((currentForm) => ({
+                              ...currentForm,
+                              pin: candidate.value,
+                            }))
+                          }
+                        />
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </section>
+            )}
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Confirmed Card Number</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                onChange={(event) =>
+                  setForm((currentForm) => ({
+                    ...currentForm,
+                    card_number: event.target.value,
+                  }))
+                }
+                required
+                type="text"
+                value={form.card_number}
+              />
+            </label>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Confirmed PIN</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                onChange={(event) =>
+                  setForm((currentForm) => ({
+                    ...currentForm,
+                    pin: event.target.value,
+                  }))
+                }
+                required
+                type="text"
+                value={form.pin}
+              />
+            </label>
+
+            {submitError && (
+              <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {submitError}
+              </p>
+            )}
+
+            <button
+              className="h-11 w-full rounded-md bg-slate-950 px-4 font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+              disabled={isSubmitting}
+              type="submit"
+            >
+              {isSubmitting ? "Verifying..." : "Verify Card"}
+            </button>
+          </form>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function CandidateRow({
+  candidate,
+  onUse,
+}: {
+  candidate: ExtractionCandidate;
+  onUse: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white p-2">
+      <div className="min-w-0">
+        <p className="break-all font-mono text-sm">{candidate.value}</p>
+        <p className="text-xs text-slate-500">
+          {candidate.source} · {formatConfidence(candidate.confidence_score)}
+        </p>
+      </div>
+      <button
+        className="h-8 rounded-md border border-slate-300 px-3 text-xs font-medium hover:bg-slate-100"
+        onClick={onUse}
+        type="button"
+      >
+        Use
+      </button>
+    </div>
+  );
+}
