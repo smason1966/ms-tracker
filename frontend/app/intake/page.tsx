@@ -17,6 +17,11 @@ type PurchaseBatch = {
   store_name: string;
   purchase_date: string;
   total_amount: string | number;
+  purchase_total_paid: string | number | null;
+  fuel_points_quantity: number | null;
+  fuel_points_unit: number | null;
+  fuel_points_notes: string | null;
+  financial_notes: string | null;
   notes: string | null;
 };
 
@@ -24,6 +29,10 @@ type IntakeForm = {
   store_name: string;
   purchase_date: string;
   total_amount: string;
+  purchase_total_paid: string;
+  fuel_points_amount: string;
+  fuel_points_unit: string;
+  financial_notes: string;
   notes: string;
 };
 
@@ -41,8 +50,23 @@ function createInitialForm(): IntakeForm {
     store_name: "",
     purchase_date: getTodayDateString(),
     total_amount: "",
+    purchase_total_paid: "",
+    fuel_points_amount: "",
+    fuel_points_unit: "1000",
+    financial_notes: "",
     notes: "",
   };
+}
+
+function calculateFuelPointsQuantity(amount: string, unit: string) {
+  const parsedAmount = Number(amount);
+  const parsedUnit = Number(unit);
+
+  if (!amount || Number.isNaN(parsedAmount) || Number.isNaN(parsedUnit)) {
+    return null;
+  }
+
+  return Math.max(0, Math.round(parsedAmount * parsedUnit));
 }
 
 export default function PurchaseIntakePage() {
@@ -54,6 +78,10 @@ export default function PurchaseIntakePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [storesError, setStoresError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const fuelPointsQuantity = calculateFuelPointsQuantity(
+    form.fuel_points_amount,
+    form.fuel_points_unit,
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -141,6 +169,12 @@ export default function PurchaseIntakePage() {
           store_name: form.store_name.trim(),
           purchase_date: new Date(form.purchase_date).toISOString(),
           total_amount: form.total_amount || "0",
+          purchase_total_paid: form.purchase_total_paid || null,
+          fuel_points_quantity: fuelPointsQuantity,
+          fuel_points_unit: fuelPointsQuantity
+            ? Number(form.fuel_points_unit)
+            : null,
+          financial_notes: form.financial_notes.trim() || null,
           notes: form.notes.trim() || null,
         }),
       });
@@ -241,6 +275,66 @@ export default function PurchaseIntakePage() {
             </label>
 
             <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Total Paid</span>
+              <input
+                className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.purchase_total_paid}
+                onChange={(event) =>
+                  updateFormField("purchase_total_paid", event.target.value)
+                }
+                placeholder="Optional"
+              />
+            </label>
+
+            <div className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Fuel Points</span>
+              <div className="grid grid-cols-[1fr_auto] gap-3">
+                <input
+                  className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={form.fuel_points_amount}
+                  onChange={(event) =>
+                    updateFormField("fuel_points_amount", event.target.value)
+                  }
+                  placeholder="Amount"
+                />
+                <select
+                  className="h-12 rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  value={form.fuel_points_unit}
+                  onChange={(event) =>
+                    updateFormField("fuel_points_unit", event.target.value)
+                  }
+                >
+                  <option value="100">100</option>
+                  <option value="1000">1,000</option>
+                </select>
+              </div>
+              <p className="text-sm text-slate-500">
+                Total:{" "}
+                {fuelPointsQuantity
+                  ? `${fuelPointsQuantity.toLocaleString()} points`
+                  : ""}
+              </p>
+            </div>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Financial Notes</span>
+              <textarea
+                className="min-h-24 w-full rounded-md border border-slate-300 px-3 py-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                value={form.financial_notes}
+                onChange={(event) =>
+                  updateFormField("financial_notes", event.target.value)
+                }
+                placeholder="Optional"
+              />
+            </label>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
               <span>Notes</span>
               <textarea
                 className="min-h-28 w-full rounded-md border border-slate-300 px-3 py-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
@@ -255,7 +349,7 @@ export default function PurchaseIntakePage() {
             <label className="block space-y-2 text-sm font-medium text-slate-700">
               <span>Receipt Image</span>
               <input
-                className="block w-full rounded-md border border-slate-300 bg-white text-sm text-slate-700 file:mr-4 file:h-12 file:border-0 file:bg-slate-900 file:px-4 file:text-sm file:font-semibold file:text-white"
+                className="block w-full cursor-pointer rounded-md border border-slate-300 bg-white text-sm text-slate-700 file:mr-4 file:h-12 file:cursor-pointer file:border-0 file:bg-slate-900 file:px-4 file:text-sm file:font-semibold file:text-white file:transition file:hover:bg-slate-700"
                 type="file"
                 accept="image/*"
                 onChange={handleReceiptChange}

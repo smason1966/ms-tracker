@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.gift_card import GiftCard
+from app.services.purchase_allocation import recalculate_purchase_allocation
 
 
 
@@ -19,6 +20,23 @@ class GiftCardCreate(BaseModel):
     face_value: Decimal
     acquisition_cost: Decimal | None = None
     notes: str | None = None
+
+
+class GiftCardUpdate(BaseModel):
+    brand: str | None = None
+    face_value: Decimal | None = None
+    acquisition_cost: Decimal | None = None
+    notes: str | None = None
+
+
+def get_payload_fields(payload: BaseModel) -> set[str]:
+    return set(
+        getattr(
+            payload,
+            "model_fields_set",
+            getattr(payload, "__fields_set__", set()),
+        )
+    )
 
 
 @router.post("/")
@@ -35,6 +53,10 @@ def create_gift_card(payload: GiftCardCreate):
         )
 
         db.add(card)
+        db.commit()
+        db.refresh(card)
+
+        recalculate_purchase_allocation(db, payload.purchase_batch_id)
         db.commit()
         db.refresh(card)
 
@@ -180,6 +202,39 @@ def verify_gift_card(gift_card_id: int, payload: GiftCardVerify):
         card.card_number_encrypted = payload.card_number
         card.pin_encrypted = payload.pin
         card.status = "VERIFIED_AVAILABLE"
+
+        db.commit()
+        db.refresh(card)
+
+        return card
+
+    finally:
+        db.close()
+
+
+@router.patch("/{gift_card_id}")
+def update_gift_card(gift_card_id: int, payload: GiftCardUpdate):
+    db: Session = SessionLocal()
+
+    try:
+        card = (
+            db.query(GiftCard)
+            .filter(GiftCard.id == gift_card_id)
+            .first()
+        )
+
+        if not card:
+            raise HTTPException(status_code=404, detail="Gift card not found")
+
+        payload_fields = get_payload_fields(payload)
+
+        for field in payload_fields:
+            setattr(card, field, getattr(payload, field))
+
+        card.updated_at = datetime.utcnow()
+
+        if "face_value" in payload_fields:
+            recalculate_purchase_allocation(db, card.purchase_batch_id)
 
         db.commit()
         db.refresh(card)

@@ -1,12 +1,13 @@
 from datetime import datetime
 from decimal import Decimal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.purchase_batch import PurchaseBatch
+from app.services.purchase_allocation import recalculate_purchase_allocation
 
 
 router = APIRouter(prefix="/purchase-batches", tags=["purchase-batches"])
@@ -21,8 +22,34 @@ class PurchaseBatchCreate(BaseModel):
     activation_fees: Decimal | None = None
     discounts: Decimal | None = None
     fuel_point_estimated_value: Decimal | None = None
+    fuel_points_quantity: int | None = None
+    fuel_points_unit: int | None = None
+    fuel_points_notes: str | None = None
     financial_notes: str | None = None
     notes: str | None = None
+
+
+class PurchaseBatchUpdate(BaseModel):
+    purchase_total_paid: Decimal | None = None
+    sales_tax: Decimal | None = None
+    activation_fees: Decimal | None = None
+    discounts: Decimal | None = None
+    fuel_point_estimated_value: Decimal | None = None
+    fuel_points_quantity: int | None = None
+    fuel_points_unit: int | None = None
+    fuel_points_notes: str | None = None
+    financial_notes: str | None = None
+    notes: str | None = None
+
+
+def get_payload_fields(payload: BaseModel) -> set[str]:
+    return set(
+        getattr(
+            payload,
+            "model_fields_set",
+            getattr(payload, "__fields_set__", set()),
+        )
+    )
 
 
 @router.post("/")
@@ -39,6 +66,9 @@ def create_purchase_batch(payload: PurchaseBatchCreate):
             activation_fees=payload.activation_fees,
             discounts=payload.discounts,
             fuel_point_estimated_value=payload.fuel_point_estimated_value,
+            fuel_points_quantity=payload.fuel_points_quantity,
+            fuel_points_unit=payload.fuel_points_unit,
+            fuel_points_notes=payload.fuel_points_notes,
             financial_notes=payload.financial_notes,
             notes=payload.notes,
         )
@@ -69,6 +99,57 @@ def get_purchase_batch(purchase_batch_id: int):
             .filter(PurchaseBatch.id == purchase_batch_id)
             .first()
         )
+
+    finally:
+        db.close()
+
+
+@router.patch("/{purchase_batch_id}/recalculate-allocation")
+def recalculate_allocation(purchase_batch_id: int):
+    db: Session = SessionLocal()
+
+    try:
+        allocation = recalculate_purchase_allocation(db, purchase_batch_id)
+
+        if allocation is None:
+            raise HTTPException(status_code=404, detail="Purchase batch not found")
+
+        db.commit()
+
+        return allocation
+
+    finally:
+        db.close()
+
+
+@router.patch("/{purchase_batch_id}")
+def update_purchase_batch(purchase_batch_id: int, payload: PurchaseBatchUpdate):
+    db: Session = SessionLocal()
+
+    try:
+        batch = (
+            db.query(PurchaseBatch)
+            .filter(PurchaseBatch.id == purchase_batch_id)
+            .first()
+        )
+
+        if not batch:
+            raise HTTPException(status_code=404, detail="Purchase batch not found")
+
+        payload_fields = get_payload_fields(payload)
+
+        for field in payload_fields:
+            setattr(batch, field, getattr(payload, field))
+
+        batch.updated_at = datetime.utcnow()
+
+        if "purchase_total_paid" in payload_fields:
+            recalculate_purchase_allocation(db, purchase_batch_id)
+
+        db.commit()
+        db.refresh(batch)
+
+        return batch
 
     finally:
         db.close()

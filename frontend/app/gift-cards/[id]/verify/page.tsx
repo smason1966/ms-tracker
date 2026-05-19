@@ -15,6 +15,10 @@ type GiftCard = {
   card_number_encrypted: string | null;
   pin_encrypted: string | null;
   notes: string | null;
+  sold_to: string | null;
+  sold_date: string | null;
+  sale_price: string | number | null;
+  sale_notes: string | null;
 };
 
 type CardImage = {
@@ -92,6 +96,22 @@ function formatDate(value: string | null | undefined) {
   }
 
   return new Date(value).toLocaleString();
+}
+
+function formatSaleDate(value: string | null | undefined) {
+  if (!value) {
+    return "Unknown";
+  }
+
+  const [year, month, day] = value.split("T")[0].split("-").map(Number);
+  const date =
+    year && month && day ? new Date(year, month - 1, day) : new Date(value);
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
 }
 
 function formatConfidence(value: number | null) {
@@ -368,6 +388,12 @@ export default function GiftCardVerificationPage() {
 
   async function handleVerify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (giftCard?.status === "SOLD") {
+      setSubmitError("Sold cards cannot be re-verified from this page.");
+      return;
+    }
+
     setIsSubmitting(true);
     setSubmitError(null);
     setSuccessMessage(null);
@@ -412,7 +438,10 @@ export default function GiftCardVerificationPage() {
       <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-950">
         <div className="mx-auto max-w-3xl space-y-4 rounded-lg border border-red-200 bg-red-50 p-6 text-red-700">
           <p>{error ?? "Gift card not found."}</p>
-          <Link className="text-sm font-semibold underline" href="/">
+          <Link
+            className="text-sm font-semibold underline underline-offset-4 hover:text-red-900"
+            href="/"
+          >
             Back to purchases
           </Link>
         </div>
@@ -445,7 +474,7 @@ export default function GiftCardVerificationPage() {
           <div className="flex flex-col gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 sm:flex-row sm:items-center sm:justify-between">
             <span>{successMessage}</span>
             <Link
-              className="inline-flex h-11 items-center justify-center rounded-md bg-emerald-700 px-4 font-semibold text-white hover:bg-emerald-800"
+              className="inline-flex h-11 items-center justify-center rounded-md bg-emerald-700 px-4 font-semibold text-white transition hover:bg-emerald-800"
               href={purchaseHref}
             >
               Back to Purchase
@@ -595,6 +624,40 @@ export default function GiftCardVerificationPage() {
               </p>
             </div>
 
+            {giftCard.status === "SOLD" ? (
+              <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Sale Details
+                </h3>
+                <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-1">
+                  <div>
+                    <dt className="font-medium text-slate-500">Sold To</dt>
+                    <dd>{giftCard.sold_to ?? "Unknown"}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-medium text-slate-500">Sold Date</dt>
+                    <dd>{formatSaleDate(giftCard.sold_date)}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-medium text-slate-500">Sale Price</dt>
+                    <dd>
+                      {giftCard.sale_price === null
+                        ? "Unknown"
+                        : formatAmount(giftCard.sale_price)}
+                    </dd>
+                  </div>
+                  {giftCard.sale_notes ? (
+                    <div className="sm:col-span-2 xl:col-span-1">
+                      <dt className="font-medium text-slate-500">Sale Notes</dt>
+                      <dd className="whitespace-pre-wrap text-slate-700">
+                        {giftCard.sale_notes}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+              </section>
+            ) : null}
+
             <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -637,7 +700,7 @@ export default function GiftCardVerificationPage() {
 
               {otherCardNumberCandidates.length > 0 && (
                 <details className="mt-3 text-sm">
-                  <summary className="cursor-pointer font-medium text-slate-600">
+                  <summary className="cursor-pointer font-medium text-slate-600 hover:text-slate-950">
                     Show other card number candidates
                   </summary>
                   <div className="mt-2 space-y-2">
@@ -689,7 +752,7 @@ export default function GiftCardVerificationPage() {
 
                 {otherPinCandidates.length > 0 && (
                   <details className="mt-3 text-sm">
-                    <summary className="cursor-pointer font-medium text-slate-600">
+                    <summary className="cursor-pointer font-medium text-slate-600 hover:text-slate-950">
                       Show other PIN candidates
                     </summary>
                     <div className="mt-2 space-y-2">
@@ -751,10 +814,14 @@ export default function GiftCardVerificationPage() {
 
             <button
               className="h-12 w-full rounded-md bg-slate-950 px-4 font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-              disabled={isSubmitting}
+              disabled={isSubmitting || giftCard.status === "SOLD"}
               type="submit"
             >
-              {isSubmitting ? "Verifying..." : "Verify Card"}
+              {giftCard.status === "SOLD"
+                ? "Sold Card"
+                : isSubmitting
+                  ? "Verifying..."
+                  : "Verify Card"}
             </button>
           </form>
         </section>

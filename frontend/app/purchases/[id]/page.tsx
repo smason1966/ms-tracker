@@ -12,6 +12,14 @@ type PurchaseBatch = {
   store_name: string;
   purchase_date: string;
   total_amount: string | number;
+  purchase_total_paid: string | number | null;
+  sales_tax: string | number | null;
+  activation_fees: string | number | null;
+  discounts: string | number | null;
+  fuel_points_quantity: number | null;
+  fuel_points_unit: number | null;
+  fuel_points_notes: string | null;
+  financial_notes: string | null;
   notes: string | null;
 };
 
@@ -28,6 +36,8 @@ type GiftCard = {
   id: number;
   brand: string;
   face_value: string | number;
+  acquisition_cost: string | number | null;
+  sale_price: string | number | null;
   status: string;
   card_number_encrypted: string | null;
   notes: string | null;
@@ -45,13 +55,54 @@ type GiftCardForm = {
   notes: string;
 };
 
+type PurchaseFinancialForm = {
+  purchase_total_paid: string;
+  sales_tax: string;
+  activation_fees: string;
+  discounts: string;
+  fuel_points_amount: string;
+  fuel_points_unit: string;
+  financial_notes: string;
+};
+
 const emptyGiftCardForm: GiftCardForm = {
   brand: "",
   face_value: "",
   notes: "",
 };
 
+const emptyPurchaseFinancialForm: PurchaseFinancialForm = {
+  purchase_total_paid: "",
+  sales_tax: "",
+  activation_fees: "",
+  discounts: "",
+  fuel_points_amount: "",
+  fuel_points_unit: "1000",
+  financial_notes: "",
+};
+
 const cardImageAccept = "image/jpeg,image/png,image/webp,image/heic,.jpg,.jpeg,.png,.webp,.heic";
+
+function calculateFuelPointsQuantity(amount: string, unit: string) {
+  const parsedAmount = Number(amount);
+  const parsedUnit = Number(unit);
+
+  if (!amount || Number.isNaN(parsedAmount) || Number.isNaN(parsedUnit)) {
+    return null;
+  }
+
+  return Math.max(0, Math.round(parsedAmount * parsedUnit));
+}
+
+function formatFuelPoints(quantity: number | null, unit: number | null) {
+  if (!quantity || !unit) {
+    return "";
+  }
+
+  const amount = quantity / unit;
+
+  return `${amount.toLocaleString()} × ${unit.toLocaleString()} = ${quantity.toLocaleString()} points`;
+}
 
 export default function PurchaseDetailPage() {
   const params = useParams<{ id: string | string[] }>();
@@ -68,24 +119,96 @@ export default function PurchaseDetailPage() {
     Record<number, boolean>
   >({});
   const [form, setForm] = useState<GiftCardForm>(emptyGiftCardForm);
+  const [financialForm, setFinancialForm] = useState<PurchaseFinancialForm>(
+    emptyPurchaseFinancialForm,
+  );
   const [cardImageFile, setCardImageFile] = useState<File | null>(null);
   const [cardImageInputKey, setCardImageInputKey] = useState(0);
+  const [isEditingFinancials, setIsEditingFinancials] = useState(false);
   const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
   const [isLoadingReceipts, setIsLoadingReceipts] = useState(true);
   const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
   const [isLoadingGiftCards, setIsLoadingGiftCards] = useState(true);
   const [isLoadingCardBrands, setIsLoadingCardBrands] = useState(true);
+  const [isRecalculatingAllocation, setIsRecalculatingAllocation] =
+    useState(false);
+  const [isSavingFinancials, setIsSavingFinancials] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [receiptsError, setReceiptsError] = useState<string | null>(null);
   const [receiptUploadError, setReceiptUploadError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [cardBrandsError, setCardBrandsError] = useState<string | null>(null);
+  const [allocationError, setAllocationError] = useState<string | null>(null);
+  const [financialError, setFinancialError] = useState<string | null>(null);
 
   const purchaseUrl = `${API_BASE_URL}/purchase-batches/${purchaseId}`;
   const receiptsUrl = `${API_BASE_URL}/receipts/purchase/${purchaseId}`;
   const giftCardsUrl = `${API_BASE_URL}/gift-cards/purchase/${purchaseId}`;
   const cardBrandsUrl = `${API_BASE_URL}/card-brands/`;
+  const financialFuelPointsQuantity = calculateFuelPointsQuantity(
+    financialForm.fuel_points_amount,
+    financialForm.fuel_points_unit,
+  );
+
+  const purchaseSummary = useMemo(() => {
+    const summary = giftCards.reduce(
+      (summary, giftCard) => {
+        const faceValue = Number(giftCard.face_value) || 0;
+        const acquisitionCost = Number(giftCard.acquisition_cost) || 0;
+        const salePrice = Number(giftCard.sale_price) || 0;
+        const isSold = giftCard.status === "SOLD";
+
+        summary.totalFaceValue += faceValue;
+        summary.totalAcquisitionCost += acquisitionCost;
+        summary.totalAllocatedCost += acquisitionCost;
+        summary.totalCards += 1;
+
+        if (giftCard.status === "VERIFIED_AVAILABLE") {
+          summary.verifiedAvailableCards += 1;
+          summary.unsoldInventoryValue += faceValue;
+        }
+
+        if (isSold) {
+          summary.soldCards += 1;
+          summary.totalSoldValue += salePrice;
+          summary.realizedProfit += salePrice - acquisitionCost;
+        }
+
+        if (giftCard.status === "NEEDS_VERIFICATION") {
+          summary.pendingVerificationCards += 1;
+        }
+
+        return summary;
+      },
+      {
+        totalFaceValue: 0,
+        totalAcquisitionCost: 0,
+        totalAllocatedCost: 0,
+        totalSoldValue: 0,
+        realizedProfit: 0,
+        unsoldInventoryValue: 0,
+        totalCards: 0,
+        verifiedAvailableCards: 0,
+        soldCards: 0,
+        pendingVerificationCards: 0,
+        allocationDifference: 0,
+      },
+    );
+
+    const purchaseTotalPaid =
+      purchase?.purchase_total_paid === null ||
+      purchase?.purchase_total_paid === undefined
+        ? null
+        : Number(purchase.purchase_total_paid);
+
+    summary.allocationDifference =
+      purchaseTotalPaid === null || Number.isNaN(purchaseTotalPaid)
+        ? 0
+        : purchaseTotalPaid - summary.totalAcquisitionCost;
+
+    return summary;
+  }, [giftCards, purchase]);
 
   const loadGiftCards = useCallback(
     async (options: { showLoading?: boolean } = {}) => {
@@ -333,6 +456,7 @@ export default function PurchaseDetailPage() {
         body: JSON.stringify({
           brand: form.brand.trim(),
           face_value: form.face_value,
+          acquisition_cost: form.face_value,
           notes: form.notes.trim() || null,
           purchase_batch_id: Number(purchaseId),
         }),
@@ -413,8 +537,156 @@ export default function PurchaseDetailPage() {
     }
   }
 
+  async function handleRecalculateAllocation() {
+    if (!purchaseId) {
+      return;
+    }
+
+    setIsRecalculatingAllocation(true);
+    setAllocationError(null);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/purchase-batches/${purchaseId}/recalculate-allocation`,
+        {
+          method: "PATCH",
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to recalculate allocation (${response.status})`);
+      }
+
+      await loadGiftCards({ showLoading: false });
+    } catch (err) {
+      setAllocationError(
+        err instanceof Error
+          ? err.message
+          : "Failed to recalculate allocation.",
+      );
+    } finally {
+      setIsRecalculatingAllocation(false);
+    }
+  }
+
+  function getInputValue(value: string | number | null) {
+    return value === null ? "" : String(value);
+  }
+
+  function getOptionalFieldValue(value: string) {
+    const trimmedValue = value.trim();
+
+    return trimmedValue === "" ? null : trimmedValue;
+  }
+
+  function getFuelPointsAmount(
+    quantity: number | null,
+    unit: number | null,
+  ) {
+    if (!quantity || !unit) {
+      return "";
+    }
+
+    return String(quantity / unit);
+  }
+
+  function openFinancialEditor() {
+    if (!purchase) {
+      return;
+    }
+
+    setFinancialForm({
+      purchase_total_paid: getInputValue(purchase.purchase_total_paid),
+      sales_tax: getInputValue(purchase.sales_tax),
+      activation_fees: getInputValue(purchase.activation_fees),
+      discounts: getInputValue(purchase.discounts),
+      fuel_points_amount: getFuelPointsAmount(
+        purchase.fuel_points_quantity,
+        purchase.fuel_points_unit,
+      ),
+      fuel_points_unit: String(purchase.fuel_points_unit ?? 1000),
+      financial_notes: purchase.financial_notes ?? "",
+    });
+    setFinancialError(null);
+    setIsEditingFinancials(true);
+  }
+
+  function closeFinancialEditor() {
+    if (isSavingFinancials) {
+      return;
+    }
+
+    setIsEditingFinancials(false);
+    setFinancialError(null);
+  }
+
+  async function handleFinancialSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!purchaseId) {
+      return;
+    }
+
+    setIsSavingFinancials(true);
+    setFinancialError(null);
+
+    try {
+      const response = await fetch(purchaseUrl, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          purchase_total_paid: getOptionalFieldValue(
+            financialForm.purchase_total_paid,
+          ),
+          sales_tax: getOptionalFieldValue(financialForm.sales_tax),
+          activation_fees: getOptionalFieldValue(
+            financialForm.activation_fees,
+          ),
+          discounts: getOptionalFieldValue(financialForm.discounts),
+          fuel_points_quantity: financialFuelPointsQuantity,
+          fuel_points_unit: financialFuelPointsQuantity
+            ? Number(financialForm.fuel_points_unit)
+            : null,
+          financial_notes:
+            financialForm.financial_notes.trim() === ""
+              ? null
+              : financialForm.financial_notes.trim(),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to save financials (${response.status})`);
+      }
+
+      const updatedPurchase = (await response.json()) as PurchaseBatch;
+      setPurchase(updatedPurchase);
+      setIsEditingFinancials(false);
+      await loadGiftCards({ showLoading: false });
+    } catch (err) {
+      setFinancialError(
+        err instanceof Error
+          ? err.message
+          : "Failed to save financial details.",
+      );
+    } finally {
+      setIsSavingFinancials(false);
+    }
+  }
+
   function updateFormField(field: keyof GiftCardForm, value: string) {
     setForm((currentForm) => ({
+      ...currentForm,
+      [field]: value,
+    }));
+  }
+
+  function updateFinancialFormField(
+    field: keyof PurchaseFinancialForm,
+    value: string,
+  ) {
+    setFinancialForm((currentForm) => ({
       ...currentForm,
       [field]: value,
     }));
@@ -445,6 +717,14 @@ export default function PurchaseDetailPage() {
       style: "currency",
       currency: "USD",
     }).format(amount);
+  }
+
+  function formatOptionalAmount(value: string | number | null) {
+    if (value === null || value === "") {
+      return "";
+    }
+
+    return formatAmount(value);
   }
 
   function getReceiptImageUrl(receipt: Receipt) {
@@ -560,6 +840,160 @@ export default function PurchaseDetailPage() {
           <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
             {error}
           </div>
+        ) : null}
+
+        <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Purchase Summary</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Economics and card status for this purchase batch.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 sm:items-end">
+              {isLoadingGiftCards ? (
+                <p className="text-sm text-slate-500">
+                  Loading card metrics...
+                </p>
+              ) : null}
+              <button
+                className="h-10 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                disabled={isRecalculatingAllocation || isLoadingGiftCards}
+                onClick={handleRecalculateAllocation}
+                type="button"
+              >
+                {isRecalculatingAllocation
+                  ? "Recalculating..."
+                  : "Recalculate Allocation"}
+              </button>
+            </div>
+          </div>
+
+          {allocationError ? (
+            <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+              {allocationError}
+            </div>
+          ) : null}
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <SummaryMetric
+              label="Total Face Value"
+              value={formatAmount(purchaseSummary.totalFaceValue)}
+            />
+            <SummaryMetric
+              label="Total Acquisition Cost"
+              value={formatAmount(purchaseSummary.totalAcquisitionCost)}
+            />
+            <SummaryMetric
+              label="Total Allocated Cost"
+              value={formatAmount(purchaseSummary.totalAllocatedCost)}
+            />
+            <SummaryMetric
+              label="Allocation Difference"
+              value={formatAmount(purchaseSummary.allocationDifference)}
+            />
+            <SummaryMetric
+              label="Total Sold Value"
+              value={formatAmount(purchaseSummary.totalSoldValue)}
+            />
+            <SummaryMetric
+              label="Realized Profit"
+              value={formatAmount(purchaseSummary.realizedProfit)}
+            />
+            <SummaryMetric
+              label="Unsold Inventory Value"
+              value={formatAmount(purchaseSummary.unsoldInventoryValue)}
+            />
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <SummaryMetric
+              label="Total Cards"
+              value={String(purchaseSummary.totalCards)}
+            />
+            <SummaryMetric
+              label="Verified Available"
+              value={String(purchaseSummary.verifiedAvailableCards)}
+            />
+            <SummaryMetric
+              label="Sold"
+              value={String(purchaseSummary.soldCards)}
+            />
+            <SummaryMetric
+              label="Pending Verification"
+              value={String(purchaseSummary.pendingVerificationCards)}
+            />
+          </div>
+        </section>
+
+        {purchase ? (
+          <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <h2 className="text-lg font-semibold">
+                Purchase Financial Details
+              </h2>
+              <button
+                className="h-10 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                onClick={openFinancialEditor}
+                type="button"
+              >
+                Edit Financials
+              </button>
+            </div>
+            <dl className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+              <div>
+                <dt className="text-sm font-medium text-slate-500">
+                  Total Paid
+                </dt>
+                <dd className="mt-1 text-base font-semibold">
+                  {formatOptionalAmount(purchase.purchase_total_paid)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-sm font-medium text-slate-500">
+                  Sales Tax
+                </dt>
+                <dd className="mt-1 text-base font-semibold">
+                  {formatOptionalAmount(purchase.sales_tax)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-sm font-medium text-slate-500">
+                  Activation Fees
+                </dt>
+                <dd className="mt-1 text-base font-semibold">
+                  {formatOptionalAmount(purchase.activation_fees)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-sm font-medium text-slate-500">
+                  Discounts
+                </dt>
+                <dd className="mt-1 text-base font-semibold">
+                  {formatOptionalAmount(purchase.discounts)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-sm font-medium text-slate-500">
+                  Fuel Points
+                </dt>
+                <dd className="mt-1 text-base font-semibold">
+                  {formatFuelPoints(
+                    purchase.fuel_points_quantity,
+                    purchase.fuel_points_unit,
+                  )}
+                </dd>
+              </div>
+              <div className="sm:col-span-2 lg:col-span-3">
+                <dt className="text-sm font-medium text-slate-500">
+                  Financial Notes
+                </dt>
+                <dd className="mt-1 whitespace-pre-wrap text-base text-slate-800">
+                  {purchase.financial_notes || ""}
+                </dd>
+              </div>
+            </dl>
+          </section>
         ) : null}
 
         <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
@@ -783,6 +1217,7 @@ export default function PurchaseDetailPage() {
                   <tr>
                     <th className="px-6 py-3">Brand</th>
                     <th className="px-6 py-3">Face Value</th>
+                    <th className="px-6 py-3">Cost</th>
                     <th className="px-6 py-3">Card Number</th>
                     <th className="px-6 py-3">Action</th>
                     <th className="px-6 py-3">Notes</th>
@@ -802,6 +1237,11 @@ export default function PurchaseDetailPage() {
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 text-slate-700">
                         {formatAmount(giftCard.face_value)}
+                      </td>
+                      <td className="whitespace-nowrap px-6 py-4 text-slate-700">
+                        {giftCard.acquisition_cost === null
+                          ? ""
+                          : formatAmount(giftCard.acquisition_cost)}
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 text-slate-700">
                         <div className="flex items-center gap-2">
@@ -849,6 +1289,174 @@ export default function PurchaseDetailPage() {
           )}
         </section>
       </div>
+
+      {isEditingFinancials ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 px-4 py-6 sm:items-center">
+          <form
+            className="max-h-[calc(100vh-3rem)] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl"
+            onSubmit={handleFinancialSave}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold">
+                  Edit Financial Details
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Updating total paid recalculates card acquisition costs.
+                </p>
+              </div>
+              <button
+                className="h-10 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                disabled={isSavingFinancials}
+                onClick={closeFinancialEditor}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+
+            {financialError ? (
+              <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+                {financialError}
+              </div>
+            ) : null}
+
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Total Paid</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  min="0"
+                  onChange={(event) =>
+                    updateFinancialFormField(
+                      "purchase_total_paid",
+                      event.target.value,
+                    )
+                  }
+                  step="0.01"
+                  type="number"
+                  value={financialForm.purchase_total_paid}
+                />
+              </label>
+
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Sales Tax</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  min="0"
+                  onChange={(event) =>
+                    updateFinancialFormField("sales_tax", event.target.value)
+                  }
+                  step="0.01"
+                  type="number"
+                  value={financialForm.sales_tax}
+                />
+              </label>
+
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Activation Fees</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  min="0"
+                  onChange={(event) =>
+                    updateFinancialFormField(
+                      "activation_fees",
+                      event.target.value,
+                    )
+                  }
+                  step="0.01"
+                  type="number"
+                  value={financialForm.activation_fees}
+                />
+              </label>
+
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Discounts</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  min="0"
+                  onChange={(event) =>
+                    updateFinancialFormField("discounts", event.target.value)
+                  }
+                  step="0.01"
+                  type="number"
+                  value={financialForm.discounts}
+                />
+              </label>
+
+              <div className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Fuel Points</span>
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                  <input
+                    className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    min="0"
+                    onChange={(event) =>
+                      updateFinancialFormField(
+                        "fuel_points_amount",
+                        event.target.value,
+                      )
+                    }
+                    step="1"
+                    type="number"
+                    value={financialForm.fuel_points_amount}
+                  />
+                  <select
+                    className="h-11 rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    onChange={(event) =>
+                      updateFinancialFormField(
+                        "fuel_points_unit",
+                        event.target.value,
+                      )
+                    }
+                    value={financialForm.fuel_points_unit}
+                  >
+                    <option value="100">100</option>
+                    <option value="1000">1,000</option>
+                  </select>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Total:{" "}
+                  {financialFuelPointsQuantity
+                    ? `${financialFuelPointsQuantity.toLocaleString()} points`
+                    : ""}
+                </p>
+              </div>
+
+              <label className="space-y-2 text-sm font-medium text-slate-700 sm:col-span-2">
+                <span>Financial Notes</span>
+                <textarea
+                  className="min-h-28 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  onChange={(event) =>
+                    updateFinancialFormField(
+                      "financial_notes",
+                      event.target.value,
+                    )
+                  }
+                  value={financialForm.financial_notes}
+                />
+              </label>
+            </div>
+
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                className="h-11 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                disabled={isSavingFinancials}
+                onClick={closeFinancialEditor}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="h-11 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                disabled={isSavingFinancials}
+                type="submit"
+              >
+                {isSavingFinancials ? "Saving..." : "Save Financials"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -869,5 +1477,16 @@ function EyeIcon({ hidden }: { hidden?: boolean }) {
       <circle cx="12" cy="12" r="3" />
       {hidden ? <path d="m4 4 16 16" /> : null}
     </svg>
+  );
+}
+
+function SummaryMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <p className="mt-2 text-xl font-semibold text-slate-950">{value}</p>
+    </div>
   );
 }

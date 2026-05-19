@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 
 import { API_BASE_URL } from "@/lib/api";
@@ -10,6 +11,7 @@ type PurchaseBatch = {
   store_name: string;
   purchase_date: string;
   total_amount: string | number;
+  purchase_total_paid: string | number | null;
   notes: string | null;
 };
 
@@ -23,6 +25,7 @@ type GiftCard = {
   id: number;
   brand: string;
   face_value: string | number;
+  acquisition_cost: string | number | null;
   status: string;
   notes: string | null;
 };
@@ -246,6 +249,7 @@ export default function RapidCardIntakePage() {
           purchase_batch_id: Number(purchaseId),
           brand: form.brand.trim(),
           face_value: form.face_value,
+          acquisition_cost: form.face_value,
           notes: form.notes.trim() || null,
         }),
       });
@@ -287,6 +291,15 @@ export default function RapidCardIntakePage() {
     }).format(amount);
   }
 
+  const totalFaceValueAdded = giftCards.reduce(
+    (total, giftCard) => total + (Number(giftCard.face_value) || 0),
+    0,
+  );
+  const totalAcquisitionCost = giftCards.reduce(
+    (total, giftCard) => total + (Number(giftCard.acquisition_cost) || 0),
+    0,
+  );
+
   const isSubmitDisabled =
     isSubmitting ||
     isLoadingBrands ||
@@ -301,6 +314,21 @@ export default function RapidCardIntakePage() {
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">
             Add Gift Cards
           </h1>
+
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <Link
+              className="flex h-11 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100 hover:text-slate-950"
+              href={`/purchases/${purchaseId}`}
+            >
+              Back to Purchase
+            </Link>
+            <Link
+              className="flex h-11 items-center justify-center rounded-md bg-slate-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
+              href={`/purchases/${purchaseId}`}
+            >
+              Finish Intake
+            </Link>
+          </div>
 
           <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             {isLoadingPurchase ? (
@@ -321,6 +349,38 @@ export default function RapidCardIntakePage() {
               <p className="text-sm text-slate-500">Purchase not found.</p>
             )}
           </div>
+
+          <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-semibold">Session Summary</h2>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-md bg-slate-50 p-3">
+                <p className="text-xs font-medium text-slate-500">Cards Added</p>
+                <p className="mt-1 text-xl font-semibold">{giftCards.length}</p>
+              </div>
+              <div className="rounded-md bg-slate-50 p-3">
+                <p className="text-xs font-medium text-slate-500">Face Value</p>
+                <p className="mt-1 text-xl font-semibold">
+                  {formatAmount(totalFaceValueAdded)}
+                </p>
+              </div>
+              <div className="rounded-md bg-slate-50 p-3">
+                <p className="text-xs font-medium text-slate-500">Total Paid</p>
+                <p className="mt-1 text-xl font-semibold">
+                  {purchase?.purchase_total_paid
+                    ? formatAmount(purchase.purchase_total_paid)
+                    : ""}
+                </p>
+              </div>
+              <div className="rounded-md bg-slate-50 p-3">
+                <p className="text-xs font-medium text-slate-500">Card Cost</p>
+                <p className="mt-1 text-xl font-semibold">
+                  {totalAcquisitionCost > 0
+                    ? formatAmount(totalAcquisitionCost)
+                    : ""}
+                </p>
+              </div>
+            </div>
+          </section>
         </header>
 
         <form className="flex flex-1 flex-col" onSubmit={handleSubmit}>
@@ -449,15 +509,25 @@ export default function RapidCardIntakePage() {
                     className="flex items-center justify-between gap-4 py-3"
                     key={giftCard.id}
                   >
-                    <div>
+                    <div className="min-w-0">
                       <p className="font-medium">{giftCard.brand}</p>
-                      <p className="text-sm text-slate-500">
-                        {giftCard.status}
-                      </p>
+                      {giftCard.notes ? (
+                        <p className="truncate text-sm text-slate-500">
+                          {giftCard.notes}
+                        </p>
+                      ) : null}
                     </div>
-                    <p className="text-sm font-semibold">
-                      {formatAmount(giftCard.face_value)}
-                    </p>
+                    <div className="flex shrink-0 items-center gap-3">
+                      <p className="text-sm font-semibold">
+                        {formatAmount(giftCard.face_value)}
+                      </p>
+                      <Link
+                        className="flex h-9 items-center rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 hover:text-slate-950"
+                        href={`/gift-cards/${giftCard.id}/verify`}
+                      >
+                        Verify
+                      </Link>
+                    </div>
                   </li>
                 ))}
               </ul>

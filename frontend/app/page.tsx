@@ -9,6 +9,14 @@ type PurchaseBatch = {
   store_name: string;
   purchase_date: string;
   total_amount: string | number;
+  purchase_total_paid: string | number | null;
+  sales_tax: string | number | null;
+  activation_fees: string | number | null;
+  discounts: string | number | null;
+  fuel_points_quantity: number | null;
+  fuel_points_unit: number | null;
+  fuel_points_notes: string | null;
+  financial_notes: string | null;
   notes: string | null;
   created_at?: string;
   updated_at?: string;
@@ -18,6 +26,13 @@ type PurchaseBatchForm = {
   store_name: string;
   purchase_date: string;
   total_amount: string;
+  purchase_total_paid: string;
+  sales_tax: string;
+  activation_fees: string;
+  discounts: string;
+  fuel_points_amount: string;
+  fuel_points_unit: string;
+  financial_notes: string;
   notes: string;
 };
 
@@ -45,8 +60,26 @@ function createEmptyForm(): PurchaseBatchForm {
     store_name: "",
     purchase_date: getTodayDateString(),
     total_amount: "",
+    purchase_total_paid: "",
+    sales_tax: "",
+    activation_fees: "",
+    discounts: "",
+    fuel_points_amount: "",
+    fuel_points_unit: "1000",
+    financial_notes: "",
     notes: "",
   };
+}
+
+function calculateFuelPointsQuantity(amount: string, unit: string) {
+  const parsedAmount = Number(amount);
+  const parsedUnit = Number(unit);
+
+  if (!amount || Number.isNaN(parsedAmount) || Number.isNaN(parsedUnit)) {
+    return null;
+  }
+
+  return Math.max(0, Math.round(parsedAmount * parsedUnit));
 }
 
 export default function PurchaseBatchDashboard() {
@@ -58,6 +91,10 @@ export default function PurchaseBatchDashboard() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [storesError, setStoresError] = useState<string | null>(null);
+  const fuelPointsQuantity = calculateFuelPointsQuantity(
+    form.fuel_points_amount,
+    form.fuel_points_unit,
+  );
 
   async function loadBatches(options: { showLoading?: boolean } = {}) {
     if (options.showLoading ?? true) {
@@ -169,6 +206,15 @@ export default function PurchaseBatchDashboard() {
           store_name: form.store_name.trim(),
           purchase_date: new Date(form.purchase_date).toISOString(),
           total_amount: form.total_amount,
+          purchase_total_paid: form.purchase_total_paid || null,
+          sales_tax: form.sales_tax || null,
+          activation_fees: form.activation_fees || null,
+          discounts: form.discounts || null,
+          fuel_points_quantity: fuelPointsQuantity,
+          fuel_points_unit: fuelPointsQuantity
+            ? Number(form.fuel_points_unit)
+            : null,
+          financial_notes: form.financial_notes.trim() || null,
           notes: form.notes.trim() || null,
         }),
       });
@@ -222,6 +268,14 @@ export default function PurchaseBatchDashboard() {
       style: "currency",
       currency: "USD",
     }).format(amount);
+  }
+
+  function formatOptionalAmount(value: string | number | null) {
+    if (value === null || value === "") {
+      return "-";
+    }
+
+    return formatAmount(value);
   }
 
   return (
@@ -302,6 +356,99 @@ export default function PurchaseBatchDashboard() {
               />
             </label>
 
+            <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Total Paid</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.purchase_total_paid}
+                onChange={(event) =>
+                  updateFormField("purchase_total_paid", event.target.value)
+                }
+                placeholder="Optional"
+              />
+            </label>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Sales Tax</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.sales_tax}
+                onChange={(event) =>
+                  updateFormField("sales_tax", event.target.value)
+                }
+                placeholder="Optional"
+              />
+            </label>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Activation Fees</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.activation_fees}
+                onChange={(event) =>
+                  updateFormField("activation_fees", event.target.value)
+                }
+                placeholder="Optional"
+              />
+            </label>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Discounts</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.discounts}
+                onChange={(event) =>
+                  updateFormField("discounts", event.target.value)
+                }
+                placeholder="Optional"
+              />
+            </label>
+
+            <div className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Fuel Points</span>
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={form.fuel_points_amount}
+                  onChange={(event) =>
+                    updateFormField("fuel_points_amount", event.target.value)
+                  }
+                  placeholder="Amount"
+                />
+                <select
+                  className="h-11 rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  value={form.fuel_points_unit}
+                  onChange={(event) =>
+                    updateFormField("fuel_points_unit", event.target.value)
+                  }
+                >
+                  <option value="100">100</option>
+                  <option value="1000">1,000</option>
+                </select>
+              </div>
+              <p className="text-xs text-slate-500">
+                Total:{" "}
+                {fuelPointsQuantity
+                  ? `${fuelPointsQuantity.toLocaleString()} points`
+                  : ""}
+              </p>
+            </div>
+
             <label className="space-y-2 text-sm font-medium text-slate-700 md:row-span-2">
               <span>Notes</span>
               <textarea
@@ -311,6 +458,18 @@ export default function PurchaseBatchDashboard() {
                   updateFormField("notes", event.target.value)
                 }
                 placeholder="Optional notes"
+              />
+            </label>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700 md:row-span-2">
+              <span>Financial Notes</span>
+              <textarea
+                className="min-h-28 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                value={form.financial_notes}
+                onChange={(event) =>
+                  updateFormField("financial_notes", event.target.value)
+                }
+                placeholder="Optional financial notes"
               />
             </label>
 
@@ -371,7 +530,8 @@ export default function PurchaseBatchDashboard() {
                   <tr>
                     <th className="px-6 py-3">Store</th>
                     <th className="px-6 py-3">Purchase Date</th>
-                    <th className="px-6 py-3">Total Amount</th>
+                    <th className="px-6 py-3">Face Value</th>
+                    <th className="px-6 py-3">Paid</th>
                     <th className="px-6 py-3">Notes</th>
                   </tr>
                 </thead>
@@ -386,6 +546,9 @@ export default function PurchaseBatchDashboard() {
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 text-slate-700">
                         {formatAmount(batch.total_amount)}
+                      </td>
+                      <td className="whitespace-nowrap px-6 py-4 text-slate-700">
+                        {formatOptionalAmount(batch.purchase_total_paid)}
                       </td>
                       <td className="max-w-md px-6 py-4 text-slate-700">
                         {batch.notes || "-"}
