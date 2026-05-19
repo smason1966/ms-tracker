@@ -42,7 +42,8 @@ const initialForm: GiftCardForm = {
   notes: "",
 };
 
-const cardImageAccept = "image/jpeg,image/png,.jpg,.jpeg,.png";
+const cardImageAccept =
+  "image/jpeg,image/png,image/webp,image/heic,.jpg,.jpeg,.png,.webp,.heic";
 
 function shouldUseEnvironmentCapture() {
   if (typeof window === "undefined") {
@@ -210,7 +211,7 @@ export default function RapidCardIntakePage() {
 
   async function uploadCardImage(giftCardId: number) {
     if (!cardImageFile) {
-      throw new Error("Primary card image is required.");
+      return;
     }
 
     const imageFormData = new FormData();
@@ -236,10 +237,6 @@ export default function RapidCardIntakePage() {
     setIsSubmitting(true);
 
     try {
-      if (!cardImageFile) {
-        throw new Error("Primary card image is required.");
-      }
-
       const response = await fetch(`${API_BASE_URL}/gift-cards/`, {
         method: "POST",
         headers: {
@@ -436,7 +433,7 @@ export default function RapidCardIntakePage() {
             </label>
 
             <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Primary Card Image</span>
+              <span>Primary Card Image Optional</span>
               <div className="flex min-h-24 cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-center transition hover:bg-slate-100">
                 <span className="text-base font-semibold text-slate-900">
                   Take Photo / Upload Card Image
@@ -452,7 +449,6 @@ export default function RapidCardIntakePage() {
                 accept={cardImageAccept}
                 capture={useCameraCapture ? "environment" : undefined}
                 onChange={handleCardImageChange}
-                required
               />
               {cardImageFile ? (
                 <p className="text-sm font-medium text-slate-600">

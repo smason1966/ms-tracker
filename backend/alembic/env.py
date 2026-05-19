@@ -33,6 +33,8 @@ from app.models.store import Store
 from app.models.card_brand import CardBrand
 from app.models.buyer import Buyer
 from app.models.extraction_candidate import ExtractionCandidate
+from app.models.fuel_reward_account import FuelRewardAccount
+from app.models.fuel_point_entry import FuelPointEntry
 
 target_metadata = Base.metadata
 

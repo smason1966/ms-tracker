@@ -12,6 +12,8 @@ from app.api.card_image_queries import router as card_image_queries_router
 from app.api.extraction_attempts import router as extraction_attempts_router
 from app.api.extraction_candidates import router as extraction_candidates_router
 from app.api.receipts import router as receipts_router
+from app.api.fuel_accounts import router as fuel_accounts_router
+from app.api.fuel_point_entries import router as fuel_point_entries_router
 
 app = FastAPI(title="MS Tracker API")
 
@@ -36,6 +38,8 @@ app.include_router(card_image_queries_router)
 app.include_router(extraction_attempts_router)
 app.include_router(receipts_router)
 app.include_router(extraction_candidates_router)
+app.include_router(fuel_accounts_router)
+app.include_router(fuel_point_entries_router)
 
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 

@@ -10,6 +10,21 @@ type Store = {
   name: string;
   store_type: string | null;
   active: boolean;
+  earns_fuel_points: boolean;
+  default_fuel_multiplier: number | null;
+};
+
+type FuelAccount = {
+  id: number;
+  retailer: string;
+  email: string | null;
+  alt_id: string | null;
+  status: string;
+  target_points: number | null;
+  current_points: number;
+  expiration_cycle: string | null;
+  barcode_image_url: string | null;
+  barcode_value: string | null;
 };
 
 type PurchaseBatch = {
@@ -30,8 +45,12 @@ type IntakeForm = {
   purchase_date: string;
   total_amount: string;
   purchase_total_paid: string;
-  fuel_points_amount: string;
-  fuel_points_unit: string;
+  fuel_reward_account_id: string;
+  fuel_multiplier_mode: string;
+  custom_fuel_multiplier: string;
+  should_override_fuel_points: boolean;
+  fuel_points_earned: string;
+  fuel_notes: string;
   financial_notes: string;
   notes: string;
 };
@@ -51,81 +70,247 @@ function createInitialForm(): IntakeForm {
     purchase_date: getTodayDateString(),
     total_amount: "",
     purchase_total_paid: "",
-    fuel_points_amount: "",
-    fuel_points_unit: "1000",
+    fuel_reward_account_id: "",
+    fuel_multiplier_mode: "4",
+    custom_fuel_multiplier: "",
+    should_override_fuel_points: false,
+    fuel_points_earned: "",
+    fuel_notes: "",
     financial_notes: "",
     notes: "",
   };
 }
 
-function calculateFuelPointsQuantity(amount: string, unit: string) {
-  const parsedAmount = Number(amount);
-  const parsedUnit = Number(unit);
+function getFuelMultiplier(form: IntakeForm) {
+  if (form.fuel_multiplier_mode === "custom") {
+    const customMultiplier = Number(form.custom_fuel_multiplier);
 
-  if (!amount || Number.isNaN(parsedAmount) || Number.isNaN(parsedUnit)) {
+    return Number.isNaN(customMultiplier) ? null : customMultiplier;
+  }
+
+  const multiplier = Number(form.fuel_multiplier_mode);
+
+  return Number.isNaN(multiplier) ? null : multiplier;
+}
+
+function calculateFuelPointsEarned(form: IntakeForm) {
+  const amount = Number(form.purchase_total_paid);
+  const multiplier = getFuelMultiplier(form);
+
+  if (
+    !form.purchase_total_paid ||
+    Number.isNaN(amount) ||
+    multiplier === null
+  ) {
     return null;
   }
 
-  return Math.max(0, Math.round(parsedAmount * parsedUnit));
+  return Math.max(0, Math.round(amount * multiplier));
+}
+
+function getFuelPointBasisAmount(form: IntakeForm) {
+  return form.purchase_total_paid || null;
+}
+
+function getFuelEntryExpirationDate(purchaseDate: string) {
+  if (!purchaseDate) {
+    return null;
+  }
+
+  const [yearText, monthText] = purchaseDate.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+
+  if (Number.isNaN(year) || Number.isNaN(month)) {
+    return null;
+  }
+
+  return new Date(year, month + 1, 0);
+}
+
+function formatDate(value: string | Date | null) {
+  if (!value) {
+    return "";
+  }
+
+  const date = value instanceof Date ? value : new Date(`${value}T00:00:00`);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
+function formatShortDate(value: string | Date | null) {
+  if (!value) {
+    return "";
+  }
+
+  const date = value instanceof Date ? value : new Date(`${value}T00:00:00`);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
+function hasDifferentExpirationCycle(
+  accountExpirationCycle: string | null | undefined,
+  entryExpirationDate: Date | null,
+) {
+  if (!accountExpirationCycle || !entryExpirationDate) {
+    return false;
+  }
+
+  const accountCycleDate = new Date(`${accountExpirationCycle}T00:00:00`);
+
+  if (Number.isNaN(accountCycleDate.getTime())) {
+    return false;
+  }
+
+  return (
+    accountCycleDate.getFullYear() !== entryExpirationDate.getFullYear() ||
+    accountCycleDate.getMonth() !== entryExpirationDate.getMonth()
+  );
+}
+
+function getUploadUrl(path: string | null) {
+  if (!path) {
+    return null;
+  }
+
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+
+  return `${API_BASE_URL}/${path.replace(/^\/+/, "")}`;
 }
 
 export default function PurchaseIntakePage() {
   const router = useRouter();
   const [stores, setStores] = useState<Store[]>([]);
+  const [fuelAccounts, setFuelAccounts] = useState<FuelAccount[]>([]);
   const [form, setForm] = useState<IntakeForm>(() => createInitialForm());
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [isLoadingStores, setIsLoadingStores] = useState(true);
+  const [isLoadingFuelAccounts, setIsLoadingFuelAccounts] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [storesError, setStoresError] = useState<string | null>(null);
+  const [fuelAccountsError, setFuelAccountsError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const fuelPointsQuantity = calculateFuelPointsQuantity(
-    form.fuel_points_amount,
-    form.fuel_points_unit,
+  const [fuelTargetNotice, setFuelTargetNotice] = useState<string | null>(null);
+  const [isBarcodeVisible, setIsBarcodeVisible] = useState(false);
+  const selectedStore = stores.find((store) => store.name === form.store_name);
+  const showFuelPoints = Boolean(selectedStore?.earns_fuel_points);
+  const calculatedFuelPoints = calculateFuelPointsEarned(form);
+  const fuelPointsEarned =
+    form.should_override_fuel_points && form.fuel_points_earned.trim() !== ""
+      ? Number(form.fuel_points_earned)
+      : calculatedFuelPoints;
+  const selectedFuelAccount = fuelAccounts.find(
+    (account) => String(account.id) === form.fuel_reward_account_id,
+  );
+  const selectedBarcodeImageUrl = selectedFuelAccount
+    ? getUploadUrl(selectedFuelAccount.barcode_image_url)
+    : null;
+  const fuelEntryExpirationDate = getFuelEntryExpirationDate(form.purchase_date);
+  const hasFuelCycleMismatch = hasDifferentExpirationCycle(
+    selectedFuelAccount?.expiration_cycle,
+    fuelEntryExpirationDate,
   );
 
   useEffect(() => {
     let isMounted = true;
 
-    async function loadStores() {
+    async function loadLookups() {
       setIsLoadingStores(true);
+      setIsLoadingFuelAccounts(true);
       setStoresError(null);
+      setFuelAccountsError(null);
 
-      try {
-        const response = await fetch(`${API_BASE_URL}/stores/`);
+      const [storesResult, accountsResult] = await Promise.allSettled([
+        fetch(`${API_BASE_URL}/stores/`),
+        fetch(`${API_BASE_URL}/fuel-accounts/active`),
+      ]);
 
-        if (!response.ok) {
-          throw new Error(`Failed to load stores (${response.status})`);
-        }
-
-        const data = (await response.json()) as Store[];
-
-        if (isMounted) {
-          setStores(data);
-        }
-      } catch (err) {
-        if (isMounted) {
-          setStoresError(
-            err instanceof Error ? err.message : "Failed to load stores.",
-          );
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoadingStores(false);
-        }
+      if (!isMounted) {
+        return;
       }
+
+      if (storesResult.status === "fulfilled" && storesResult.value.ok) {
+        const data = (await storesResult.value.json()) as Store[];
+        setStores(data);
+      } else {
+        setStoresError("Failed to load stores.");
+      }
+
+      if (accountsResult.status === "fulfilled" && accountsResult.value.ok) {
+        const data = (await accountsResult.value.json()) as FuelAccount[];
+        setFuelAccounts(data);
+      } else {
+        setFuelAccountsError("Failed to load fuel accounts.");
+      }
+
+      setIsLoadingStores(false);
+      setIsLoadingFuelAccounts(false);
     }
 
-    loadStores();
+    loadLookups();
 
     return () => {
       isMounted = false;
     };
   }, []);
 
-  function updateFormField(field: keyof IntakeForm, value: string) {
+  function updateFormField(field: keyof IntakeForm, value: string | boolean) {
     setForm((currentForm) => ({
       ...currentForm,
       [field]: value,
+    }));
+  }
+
+  function handleFuelAccountChange(accountId: string) {
+    updateFormField("fuel_reward_account_id", accountId);
+    setIsBarcodeVisible(false);
+  }
+
+  function handleStoreChange(storeName: string) {
+    const store = stores.find((currentStore) => currentStore.name === storeName);
+    const defaultMultiplier = store?.earns_fuel_points
+      ? String(store.default_fuel_multiplier ?? 4)
+      : "4";
+
+    setIsBarcodeVisible(false);
+
+    setForm((currentForm) => ({
+      ...currentForm,
+      store_name: storeName,
+      fuel_reward_account_id: store?.earns_fuel_points
+        ? currentForm.fuel_reward_account_id
+        : "",
+      fuel_multiplier_mode: ["2", "4", "6"].includes(defaultMultiplier)
+        ? defaultMultiplier
+        : "custom",
+      custom_fuel_multiplier: ["2", "4", "6"].includes(defaultMultiplier)
+        ? ""
+        : defaultMultiplier,
+      should_override_fuel_points: store?.earns_fuel_points
+        ? currentForm.should_override_fuel_points
+        : false,
+      fuel_points_earned: store?.earns_fuel_points
+        ? currentForm.fuel_points_earned
+        : "",
+      fuel_notes: store?.earns_fuel_points ? currentForm.fuel_notes : "",
     }));
   }
 
@@ -154,9 +339,65 @@ export default function PurchaseIntakePage() {
     }
   }
 
+  async function createFuelPointEntry(purchaseId: number) {
+    if (
+      !showFuelPoints ||
+      !form.fuel_reward_account_id ||
+      hasFuelCycleMismatch ||
+      fuelPointsEarned === null ||
+      Number.isNaN(fuelPointsEarned) ||
+      fuelPointsEarned <= 0
+    ) {
+      return false;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/fuel-point-entries/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        fuel_reward_account_id: Number(form.fuel_reward_account_id),
+        purchase_batch_id: purchaseId,
+        earned_date: form.purchase_date,
+        multiplier: getFuelMultiplier(form),
+        qualifying_spend: getFuelPointBasisAmount(form),
+        points_earned: fuelPointsEarned,
+        notes: form.fuel_notes.trim() || null,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = (await response.json().catch(() => null)) as {
+        detail?: string;
+      } | null;
+
+      throw new Error(
+        errorData?.detail ||
+          `Purchase created, but fuel points failed (${response.status})`,
+      );
+    }
+
+    const data = (await response.json()) as {
+      account_current_points: number;
+      target_points: number | null;
+      target_met: boolean;
+    };
+
+    if (data.target_met && selectedFuelAccount) {
+      setFuelTargetNotice(
+        `${selectedFuelAccount.retailer} has ${data.account_current_points.toLocaleString()} points, meeting the ${data.target_points?.toLocaleString()} point target.`,
+      );
+      return true;
+    }
+
+    return false;
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitError(null);
+    setFuelTargetNotice(null);
     setIsSubmitting(true);
 
     try {
@@ -170,10 +411,6 @@ export default function PurchaseIntakePage() {
           purchase_date: new Date(form.purchase_date).toISOString(),
           total_amount: form.total_amount || "0",
           purchase_total_paid: form.purchase_total_paid || null,
-          fuel_points_quantity: fuelPointsQuantity,
-          fuel_points_unit: fuelPointsQuantity
-            ? Number(form.fuel_points_unit)
-            : null,
           financial_notes: form.financial_notes.trim() || null,
           notes: form.notes.trim() || null,
         }),
@@ -184,7 +421,12 @@ export default function PurchaseIntakePage() {
       }
 
       const purchase = (await response.json()) as PurchaseBatch;
+      const shouldPauseForFuelNotice = await createFuelPointEntry(purchase.id);
       await uploadReceipt(purchase.id);
+
+      if (shouldPauseForFuelNotice) {
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+      }
 
       router.push(`/intake/${purchase.id}`);
     } catch (err) {
@@ -200,7 +442,8 @@ export default function PurchaseIntakePage() {
     isSubmitting ||
     isLoadingStores ||
     Boolean(storesError) ||
-    stores.length === 0;
+    stores.length === 0 ||
+    hasFuelCycleMismatch;
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950">
@@ -219,9 +462,7 @@ export default function PurchaseIntakePage() {
               <select
                 className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 value={form.store_name}
-                onChange={(event) =>
-                  updateFormField("store_name", event.target.value)
-                }
+                onChange={(event) => handleStoreChange(event.target.value)}
                 disabled={isLoadingStores || Boolean(storesError)}
                 required
               >
@@ -260,6 +501,24 @@ export default function PurchaseIntakePage() {
             </label>
 
             <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Total Paid</span>
+              <input
+                className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.purchase_total_paid}
+                onChange={(event) =>
+                  updateFormField("purchase_total_paid", event.target.value)
+                }
+                required
+              />
+              <p className="text-sm text-slate-500">
+                Actual amount spent for the purchase.
+              </p>
+            </label>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
               <span>Face Value</span>
               <input
                 className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
@@ -273,60 +532,227 @@ export default function PurchaseIntakePage() {
                 placeholder="Optional"
               />
               <p className="text-sm text-slate-500">
-                Total value of cards expected in the batch.
+                Optional total value of cards expected in the batch.
               </p>
             </label>
 
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Total Paid</span>
-              <input
-                className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.purchase_total_paid}
-                onChange={(event) =>
-                  updateFormField("purchase_total_paid", event.target.value)
-                }
-                placeholder="Optional"
-              />
-              <p className="text-sm text-slate-500">
-                Actual amount spent for the purchase.
-              </p>
-            </label>
+            {showFuelPoints ? (
+              <section className="space-y-4 rounded-md border border-slate-200 bg-slate-50 p-4">
+                <div>
+                  <h2 className="text-base font-semibold">Fuel Points</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Track points earned for this purchase.
+                  </p>
+                </div>
 
-            <div className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Fuel Points</span>
-              <div className="grid grid-cols-[1fr_auto] gap-3">
-                <input
-                  className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={form.fuel_points_amount}
-                  onChange={(event) =>
-                    updateFormField("fuel_points_amount", event.target.value)
-                  }
-                  placeholder="Amount"
-                />
-                <select
-                  className="h-12 rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                  value={form.fuel_points_unit}
-                  onChange={(event) =>
-                    updateFormField("fuel_points_unit", event.target.value)
-                  }
-                >
-                  <option value="100">100</option>
-                  <option value="1000">1,000</option>
-                </select>
-              </div>
-              <p className="text-sm text-slate-500">
-                Total:{" "}
-                {fuelPointsQuantity
-                  ? `${fuelPointsQuantity.toLocaleString()} points`
-                  : ""}
-              </p>
-            </div>
+                <label className="block space-y-2 text-sm font-medium text-slate-700">
+                  <span>Fuel Account</span>
+                  <select
+                    className="h-12 w-full rounded-md border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    disabled={
+                      isLoadingFuelAccounts || Boolean(fuelAccountsError)
+                    }
+                    onChange={(event) =>
+                      handleFuelAccountChange(event.target.value)
+                    }
+                    value={form.fuel_reward_account_id}
+                  >
+                    <option value="">
+                      {isLoadingFuelAccounts
+                        ? "Loading accounts..."
+                        : fuelAccounts.length === 0
+                          ? "No active fuel accounts available."
+                          : "Select account"}
+                    </option>
+                    {fuelAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.retailer}
+                        {account.email ? ` - ${account.email}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {fuelAccountsError ? (
+                    <p className="text-sm font-medium text-red-700">
+                      {fuelAccountsError}
+                    </p>
+                  ) : null}
+                  {!isLoadingFuelAccounts &&
+                  !fuelAccountsError &&
+                  fuelAccounts.length === 0 ? (
+                    <p className="text-sm font-medium text-amber-700">
+                      No active fuel accounts available.
+                    </p>
+                  ) : null}
+                  <p className="text-sm text-slate-500">
+                    Fuel accounts should only contain points with the same
+                    expiration month.
+                  </p>
+                  <p className="text-sm text-slate-500">
+                    Expiration is based on the purchase date.
+                  </p>
+                  {selectedFuelAccount?.expiration_cycle ? (
+                    <p className="text-sm text-slate-500">
+                      Account cycle:{" "}
+                      {formatDate(selectedFuelAccount.expiration_cycle)}
+                    </p>
+                  ) : selectedFuelAccount && fuelEntryExpirationDate ? (
+                    <p className="text-sm font-medium text-slate-700">
+                      First entry will lock this account to{" "}
+                      {formatDate(fuelEntryExpirationDate)}.
+                    </p>
+                  ) : null}
+                  {fuelEntryExpirationDate ? (
+                    <p className="text-sm font-medium text-slate-700">
+                      New entry expiration cycle:{" "}
+                      {formatDate(fuelEntryExpirationDate)}
+                    </p>
+                  ) : null}
+                  {hasFuelCycleMismatch && selectedFuelAccount ? (
+                    <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-800">
+                      This account is locked to points expiring{" "}
+                      {formatShortDate(selectedFuelAccount.expiration_cycle)}.
+                      Use a new account for this expiration cycle.
+                    </p>
+                  ) : null}
+                  {selectedFuelAccount && selectedBarcodeImageUrl ? (
+                    <div className="rounded-md border border-slate-200 bg-white p-3">
+                      <button
+                        className="h-11 w-full cursor-pointer rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
+                        onClick={() =>
+                          setIsBarcodeVisible((currentValue) => !currentValue)
+                        }
+                        type="button"
+                      >
+                        {isBarcodeVisible ? "Hide Barcode" : "Show Barcode"}
+                      </button>
+                      {isBarcodeVisible ? (
+                        <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            alt={`${selectedFuelAccount.retailer} barcode`}
+                            className="mx-auto max-h-72 w-full object-contain"
+                            src={selectedBarcodeImageUrl}
+                          />
+                          {selectedFuelAccount.barcode_value ? (
+                            <p className="mt-3 break-all text-center text-sm font-medium text-slate-700">
+                              {selectedFuelAccount.barcode_value}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : selectedFuelAccount ? (
+                    <p className="text-sm text-slate-500">
+                      No barcode image uploaded for this account.
+                    </p>
+                  ) : null}
+                </label>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block space-y-2 text-sm font-medium text-slate-700">
+                    <span>Multiplier</span>
+                    <select
+                      className="h-12 w-full rounded-md border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                      onChange={(event) =>
+                        updateFormField(
+                          "fuel_multiplier_mode",
+                          event.target.value,
+                        )
+                      }
+                      value={form.fuel_multiplier_mode}
+                    >
+                      <option value="2">2x</option>
+                      <option value="4">4x</option>
+                      <option value="6">6x</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                  </label>
+
+                  {form.fuel_multiplier_mode === "custom" ? (
+                    <label className="block space-y-2 text-sm font-medium text-slate-700">
+                      <span>Custom Multiplier</span>
+                      <input
+                        className="h-12 w-full rounded-md border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                        min="0"
+                        onChange={(event) =>
+                          updateFormField(
+                            "custom_fuel_multiplier",
+                            event.target.value,
+                          )
+                        }
+                        step="1"
+                        type="number"
+                        value={form.custom_fuel_multiplier}
+                      />
+                    </label>
+                  ) : null}
+                </div>
+
+                <div className="rounded-md border border-slate-200 bg-white p-3">
+                  <p className="text-sm font-medium text-slate-700">
+                    Calculated Points Earned
+                  </p>
+                  <p className="mt-1 text-2xl font-semibold text-slate-950">
+                    {calculatedFuelPoints !== null
+                      ? calculatedFuelPoints.toLocaleString()
+                      : ""}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {form.purchase_total_paid
+                      ? "Based on Total Paid × multiplier."
+                      : "Enter Total Paid to calculate fuel points."}
+                  </p>
+                </div>
+
+                <label className="flex min-h-12 cursor-pointer items-center gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 active:bg-slate-100">
+                  <input
+                    checked={form.should_override_fuel_points}
+                    className="h-5 w-5 cursor-pointer rounded border-slate-300"
+                    onChange={(event) =>
+                      updateFormField(
+                        "should_override_fuel_points",
+                        event.target.checked,
+                      )
+                    }
+                    type="checkbox"
+                  />
+                  <span>Override points earned</span>
+                </label>
+
+                <label className="block space-y-2 text-sm font-medium text-slate-700">
+                  <span>Points Earned</span>
+                  <input
+                    className="h-12 w-full rounded-md border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition read-only:bg-slate-100 read-only:text-slate-600 focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    min="0"
+                    onChange={(event) =>
+                      updateFormField("fuel_points_earned", event.target.value)
+                    }
+                    readOnly={!form.should_override_fuel_points}
+                    step="1"
+                    type="number"
+                    value={
+                      form.should_override_fuel_points
+                        ? form.fuel_points_earned
+                        : calculatedFuelPoints !== null
+                          ? String(calculatedFuelPoints)
+                          : ""
+                    }
+                  />
+                </label>
+
+                <label className="block space-y-2 text-sm font-medium text-slate-700">
+                  <span>Fuel Point Notes</span>
+                  <textarea
+                    className="min-h-20 w-full rounded-md border border-slate-300 bg-white px-3 py-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    onChange={(event) =>
+                      updateFormField("fuel_notes", event.target.value)
+                    }
+                    placeholder="Optional"
+                    value={form.fuel_notes}
+                  />
+                </label>
+              </section>
+            ) : null}
 
             <label className="block space-y-2 text-sm font-medium text-slate-700">
               <span>Financial Notes</span>
@@ -369,6 +795,12 @@ export default function PurchaseIntakePage() {
           {submitError ? (
             <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
               {submitError}
+            </div>
+          ) : null}
+
+          {fuelTargetNotice ? (
+            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+              {fuelTargetNotice}
             </div>
           ) : null}
 

@@ -205,8 +205,8 @@ export default function PurchaseBatchDashboard() {
         body: JSON.stringify({
           store_name: form.store_name.trim(),
           purchase_date: new Date(form.purchase_date).toISOString(),
-          total_amount: form.total_amount,
-          purchase_total_paid: form.purchase_total_paid || null,
+          total_amount: form.total_amount || "0",
+          purchase_total_paid: form.purchase_total_paid,
           sales_tax: form.sales_tax || null,
           activation_fees: form.activation_fees || null,
           discounts: form.discounts || null,
@@ -341,25 +341,6 @@ export default function PurchaseBatchDashboard() {
             </label>
 
             <label className="space-y-2 text-sm font-medium text-slate-700">
-              <span>Face Value</span>
-              <input
-                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.total_amount}
-                onChange={(event) =>
-                  updateFormField("total_amount", event.target.value)
-                }
-                placeholder="125.50"
-                required
-              />
-              <p className="text-xs text-slate-500">
-                Total value of cards expected in the batch.
-              </p>
-            </label>
-
-            <label className="space-y-2 text-sm font-medium text-slate-700">
               <span>Total Paid</span>
               <input
                 className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
@@ -370,10 +351,29 @@ export default function PurchaseBatchDashboard() {
                 onChange={(event) =>
                   updateFormField("purchase_total_paid", event.target.value)
                 }
-                placeholder="Optional"
+                placeholder="125.50"
+                required
               />
               <p className="text-xs text-slate-500">
                 Actual amount spent for the purchase.
+              </p>
+            </label>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Face Value</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.total_amount}
+                onChange={(event) =>
+                  updateFormField("total_amount", event.target.value)
+                }
+                placeholder="Optional"
+              />
+              <p className="text-xs text-slate-500">
+                Optional total value of cards expected in the batch.
               </p>
             </label>
 

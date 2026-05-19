@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -129,6 +129,28 @@ class GiftCardSell(BaseModel):
     sale_notes: str | None = None
 
 
+class GiftCardBulkSell(BaseModel):
+    gift_card_ids: list[int]
+    sold_to: str
+    sold_date: date
+    sale_price_total: Decimal
+    sale_notes: str | None = None
+
+
+def quantize_money(value: Decimal) -> Decimal:
+    return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def to_decimal(value) -> Decimal:
+    if value is None:
+        return Decimal("0")
+
+    if isinstance(value, Decimal):
+        return value
+
+    return Decimal(str(value))
+
+
 @router.patch("/{gift_card_id}/sell")
 def sell_gift_card(gift_card_id: int, payload: GiftCardSell):
     db: Session = SessionLocal()
@@ -154,6 +176,88 @@ def sell_gift_card(gift_card_id: int, payload: GiftCardSell):
         db.refresh(card)
 
         return card
+
+    finally:
+        db.close()
+
+
+@router.patch("/bulk-sell")
+def bulk_sell_gift_cards(payload: GiftCardBulkSell):
+    if not payload.gift_card_ids:
+        raise HTTPException(status_code=400, detail="No gift cards selected")
+
+    if not payload.sold_to.strip():
+        raise HTTPException(status_code=400, detail="sold_to is required")
+
+    if len(set(payload.gift_card_ids)) != len(payload.gift_card_ids):
+        raise HTTPException(
+            status_code=400,
+            detail="Gift card IDs must be unique",
+        )
+
+    db: Session = SessionLocal()
+
+    try:
+        cards = (
+            db.query(GiftCard)
+            .filter(GiftCard.id.in_(payload.gift_card_ids))
+            .order_by(GiftCard.id.asc())
+            .all()
+        )
+
+        if len(cards) != len(payload.gift_card_ids):
+            raise HTTPException(
+                status_code=404,
+                detail="One or more gift cards were not found",
+            )
+
+        unavailable_cards = [
+            card.id
+            for card in cards
+            if card.status != "VERIFIED_AVAILABLE"
+        ]
+
+        if unavailable_cards:
+            raise HTTPException(
+                status_code=400,
+                detail="All selected gift cards must be verified available",
+            )
+
+        total_face_value = sum(to_decimal(card.face_value) for card in cards)
+
+        if total_face_value <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Selected gift cards must have positive face value",
+            )
+
+        allocated_sale_total = Decimal("0")
+
+        for index, card in enumerate(cards):
+            if index == len(cards) - 1:
+                allocated_sale_price = quantize_money(
+                    payload.sale_price_total - allocated_sale_total,
+                )
+            else:
+                ratio = to_decimal(card.face_value) / total_face_value
+                allocated_sale_price = quantize_money(
+                    payload.sale_price_total * ratio,
+                )
+                allocated_sale_total += allocated_sale_price
+
+            card.sold_to = payload.sold_to
+            card.sold_date = payload.sold_date
+            card.sale_price = allocated_sale_price
+            card.sale_notes = payload.sale_notes
+            card.status = "SOLD"
+            card.updated_at = datetime.utcnow()
+
+        db.commit()
+
+        for card in cards:
+            db.refresh(card)
+
+        return cards
 
     finally:
         db.close()

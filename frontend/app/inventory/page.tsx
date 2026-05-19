@@ -36,6 +36,13 @@ type SaleForm = {
   sale_notes: string;
 };
 
+type BulkSaleForm = {
+  sold_to: string;
+  sold_date: string;
+  sale_price_total: string;
+  sale_notes: string;
+};
+
 const statusFilters: StatusFilter[] = [
   { label: "All", value: "ALL" },
   { label: "Pending Verification", value: "Pending Verification" },
@@ -131,23 +138,33 @@ function getInventoryState(status: string) {
 export default function InventoryPage() {
   const [giftCards, setGiftCards] = useState<GiftCard[]>([]);
   const [buyers, setBuyers] = useState<Buyer[]>([]);
+  const [selectedGiftCardIds, setSelectedGiftCardIds] = useState<number[]>([]);
   const [activeStatus, setActiveStatus] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingBuyers, setIsLoadingBuyers] = useState(true);
   const [isSelling, setIsSelling] = useState(false);
+  const [isBulkSellOpen, setIsBulkSellOpen] = useState(false);
+  const [isBulkSelling, setIsBulkSelling] = useState(false);
   const [isRedeemingByCardId, setIsRedeemingByCardId] = useState<
     Record<number, boolean>
   >({});
   const [error, setError] = useState<string | null>(null);
   const [buyersError, setBuyersError] = useState<string | null>(null);
   const [saleError, setSaleError] = useState<string | null>(null);
+  const [bulkSaleError, setBulkSaleError] = useState<string | null>(null);
   const [redeemError, setRedeemError] = useState<string | null>(null);
   const [sellingGiftCard, setSellingGiftCard] = useState<GiftCard | null>(null);
   const [saleForm, setSaleForm] = useState<SaleForm>({
     sold_to: "",
     sold_date: getTodayDate(),
     sale_price: "",
+    sale_notes: "",
+  });
+  const [bulkSaleForm, setBulkSaleForm] = useState<BulkSaleForm>({
+    sold_to: "",
+    sold_date: getTodayDate(),
+    sale_price_total: "",
     sale_notes: "",
   });
 
@@ -226,6 +243,27 @@ export default function InventoryPage() {
     saleForm.sold_date.length > 0 &&
     saleForm.sale_price.length > 0;
 
+  const selectedAvailableGiftCards = useMemo(
+    () =>
+      giftCards.filter(
+        (giftCard) =>
+          selectedGiftCardIds.includes(giftCard.id) &&
+          giftCard.status === "VERIFIED_AVAILABLE",
+      ),
+    [giftCards, selectedGiftCardIds],
+  );
+
+  const selectedFaceValue = selectedAvailableGiftCards.reduce(
+    (total, giftCard) => total + (Number(giftCard.face_value) || 0),
+    0,
+  );
+
+  const canSaveBulkSale =
+    selectedAvailableGiftCards.length > 0 &&
+    bulkSaleForm.sold_to.trim().length > 0 &&
+    bulkSaleForm.sold_date.length > 0 &&
+    bulkSaleForm.sale_price_total.length > 0;
+
   function openSellModal(giftCard: GiftCard) {
     setSellingGiftCard(giftCard);
     setSaleError(null);
@@ -244,6 +282,56 @@ export default function InventoryPage() {
 
     setSellingGiftCard(null);
     setSaleError(null);
+  }
+
+  function openBulkSellModal() {
+    if (selectedAvailableGiftCards.length === 0) {
+      return;
+    }
+
+    setBulkSaleError(null);
+    setBulkSaleForm({
+      sold_to: "",
+      sold_date: getTodayDate(),
+      sale_price_total: "",
+      sale_notes: "",
+    });
+    setIsBulkSellOpen(true);
+  }
+
+  function closeBulkSellModal() {
+    if (isBulkSelling) {
+      return;
+    }
+
+    setIsBulkSellOpen(false);
+    setBulkSaleError(null);
+  }
+
+  function toggleGiftCardSelection(giftCard: GiftCard) {
+    if (giftCard.status !== "VERIFIED_AVAILABLE") {
+      return;
+    }
+
+    setSelectedGiftCardIds((currentSelectedIds) =>
+      currentSelectedIds.includes(giftCard.id)
+        ? currentSelectedIds.filter((giftCardId) => giftCardId !== giftCard.id)
+        : [...currentSelectedIds, giftCard.id],
+    );
+  }
+
+  async function refreshGiftCards() {
+    const data = await fetchGiftCards();
+    setGiftCards(data);
+    setSelectedGiftCardIds((currentSelectedIds) =>
+      currentSelectedIds.filter((giftCardId) =>
+        data.some(
+          (giftCard) =>
+            giftCard.id === giftCardId &&
+            giftCard.status === "VERIFIED_AVAILABLE",
+        ),
+      ),
+    );
   }
 
   async function handleSaleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -277,8 +365,7 @@ export default function InventoryPage() {
         throw new Error(`Failed to mark card sold (${response.status})`);
       }
 
-      const data = await fetchGiftCards();
-      setGiftCards(data);
+      await refreshGiftCards();
       setSellingGiftCard(null);
     } catch (err) {
       setSaleError(
@@ -316,8 +403,7 @@ export default function InventoryPage() {
         throw new Error(`Failed to mark card used (${response.status})`);
       }
 
-      const data = await fetchGiftCards();
-      setGiftCards(data);
+      await refreshGiftCards();
     } catch (err) {
       setRedeemError(
         err instanceof Error ? err.message : "Failed to mark card used.",
@@ -327,6 +413,49 @@ export default function InventoryPage() {
         ...currentRedeeming,
         [giftCard.id]: false,
       }));
+    }
+  }
+
+  async function handleBulkSaleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!canSaveBulkSale) {
+      return;
+    }
+
+    setIsBulkSelling(true);
+    setBulkSaleError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/gift-cards/bulk-sell`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          gift_card_ids: selectedAvailableGiftCards.map(
+            (giftCard) => giftCard.id,
+          ),
+          sold_to: bulkSaleForm.sold_to.trim(),
+          sold_date: bulkSaleForm.sold_date,
+          sale_price_total: bulkSaleForm.sale_price_total,
+          sale_notes: bulkSaleForm.sale_notes.trim() || null,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to bulk sell cards (${response.status})`);
+      }
+
+      await refreshGiftCards();
+      setSelectedGiftCardIds([]);
+      setIsBulkSellOpen(false);
+    } catch (err) {
+      setBulkSaleError(
+        err instanceof Error ? err.message : "Failed to bulk sell cards.",
+      );
+    } finally {
+      setIsBulkSelling(false);
     }
   }
 
@@ -375,6 +504,37 @@ export default function InventoryPage() {
           ))}
         </section>
 
+        {selectedAvailableGiftCards.length > 0 ? (
+          <section className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">
+                {selectedAvailableGiftCards.length}{" "}
+                {selectedAvailableGiftCards.length === 1 ? "card" : "cards"}{" "}
+                selected
+              </p>
+              <p className="mt-1 text-sm text-slate-500">
+                Face value {formatAmount(selectedFaceValue)}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                className="h-10 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                onClick={() => setSelectedGiftCardIds([])}
+                type="button"
+              >
+                Clear
+              </button>
+              <button
+                className="h-10 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700"
+                onClick={openBulkSellModal}
+                type="button"
+              >
+                Bulk Sell
+              </button>
+            </div>
+          </section>
+        ) : null}
+
         {error ? (
           <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
             {error}
@@ -405,6 +565,7 @@ export default function InventoryPage() {
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                   <tr>
+                    <th className="px-6 py-3">Select</th>
                     <th className="px-6 py-3">Brand</th>
                     <th className="px-6 py-3">Face Value</th>
                     <th className="px-6 py-3">Cost</th>
@@ -418,6 +579,19 @@ export default function InventoryPage() {
                 <tbody className="divide-y divide-slate-200 bg-white">
                   {filteredGiftCards.map((giftCard) => (
                     <tr key={giftCard.id} className="hover:bg-slate-50">
+                      <td className="whitespace-nowrap px-6 py-4">
+                        {giftCard.status === "VERIFIED_AVAILABLE" ? (
+                          <input
+                            aria-label={`Select ${giftCard.brand} ${formatAmount(
+                              giftCard.face_value,
+                            )}`}
+                            checked={selectedGiftCardIds.includes(giftCard.id)}
+                            className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-500"
+                            onChange={() => toggleGiftCardSelection(giftCard)}
+                            type="checkbox"
+                          />
+                        ) : null}
+                      </td>
                       <td className="whitespace-nowrap px-6 py-4 font-medium">
                         {giftCard.brand}
                       </td>
@@ -616,6 +790,138 @@ export default function InventoryPage() {
                 type="submit"
               >
                 {isSelling ? "Saving..." : "Save Sale"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {isBulkSellOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-6">
+          <form
+            className="w-full max-w-lg space-y-4 rounded-lg bg-white p-5 shadow-xl"
+            onSubmit={handleBulkSaleSubmit}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold">Bulk Sell</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {selectedAvailableGiftCards.length}{" "}
+                  {selectedAvailableGiftCards.length === 1 ? "card" : "cards"}{" "}
+                  selected · Face value {formatAmount(selectedFaceValue)}
+                </p>
+              </div>
+              <button
+                className="h-9 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                disabled={isBulkSelling}
+                onClick={closeBulkSellModal}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Sold To</span>
+              <select
+                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                disabled={isLoadingBuyers || Boolean(buyersError)}
+                onChange={(event) =>
+                  setBulkSaleForm((currentForm) => ({
+                    ...currentForm,
+                    sold_to: event.target.value,
+                  }))
+                }
+                required
+                value={bulkSaleForm.sold_to}
+              >
+                <option value="">
+                  {isLoadingBuyers
+                    ? "Loading buyers..."
+                    : buyers.length === 0
+                      ? "No buyers available"
+                      : "Select buyer"}
+                </option>
+                {buyers.map((buyer) => (
+                  <option key={buyer.id} value={buyer.name}>
+                    {buyer.name}
+                    {buyer.active ? "" : " (Inactive)"}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                <span>Sold Date</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  onChange={(event) =>
+                    setBulkSaleForm((currentForm) => ({
+                      ...currentForm,
+                      sold_date: event.target.value,
+                    }))
+                  }
+                  required
+                  type="date"
+                  value={bulkSaleForm.sold_date}
+                />
+              </label>
+
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                <span>Total Sale Price</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  min="0"
+                  onChange={(event) =>
+                    setBulkSaleForm((currentForm) => ({
+                      ...currentForm,
+                      sale_price_total: event.target.value,
+                    }))
+                  }
+                  required
+                  step="0.01"
+                  type="number"
+                  value={bulkSaleForm.sale_price_total}
+                />
+              </label>
+            </div>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Sale Notes</span>
+              <textarea
+                className="min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                onChange={(event) =>
+                  setBulkSaleForm((currentForm) => ({
+                    ...currentForm,
+                    sale_notes: event.target.value,
+                  }))
+                }
+                value={bulkSaleForm.sale_notes}
+              />
+            </label>
+
+            {bulkSaleError ? (
+              <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {bulkSaleError}
+              </p>
+            ) : null}
+
+            <div className="flex justify-end gap-2">
+              <button
+                className="h-10 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                disabled={isBulkSelling}
+                onClick={closeBulkSellModal}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="h-10 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                disabled={isBulkSelling || !canSaveBulkSale}
+                type="submit"
+              >
+                {isBulkSelling ? "Saving..." : "Save Bulk Sale"}
               </button>
             </div>
           </form>
