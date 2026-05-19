@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { API_BASE_URL } from "@/lib/api";
 
 type GiftCard = {
@@ -54,6 +54,8 @@ type ExtractionCandidate = {
 type VerificationForm = {
   card_number: string;
   pin: string;
+  face_value: string;
+  notes: string;
 };
 
 type VerificationDetails = {
@@ -231,12 +233,15 @@ function getInitialVerificationForm(details: VerificationDetails) {
       bestLoadedCardNumberCandidate?.value ??
       "",
     pin: details.giftCard.pin_encrypted ?? bestLoadedPinCandidate?.value ?? "",
+    face_value: String(details.giftCard.face_value),
+    notes: details.giftCard.notes ?? "",
   };
 }
 
 export default function GiftCardVerificationPage() {
   const params = useParams<{ id: string | string[] }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const giftCardId = Array.isArray(params.id) ? params.id[0] : params.id;
 
   const [giftCard, setGiftCard] = useState<GiftCard | null>(null);
@@ -250,6 +255,8 @@ export default function GiftCardVerificationPage() {
   const [form, setForm] = useState<VerificationForm>({
     card_number: "",
     pin: "",
+    face_value: "",
+    notes: "",
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -297,9 +304,40 @@ export default function GiftCardVerificationPage() {
   );
 
   const latestExtractionAttempt = extractionAttempts[0] ?? null;
+  const explicitReturnTo = searchParams.get("returnTo");
   const purchaseHref = giftCard
     ? `/purchases/${giftCard.purchase_batch_id}`
     : "/";
+  const backHref =
+    explicitReturnTo && explicitReturnTo.startsWith("/")
+      ? explicitReturnTo
+      : purchaseHref;
+
+  function getReturnHref() {
+    if (explicitReturnTo && explicitReturnTo.startsWith("/")) {
+      return explicitReturnTo;
+    }
+
+    if (typeof window !== "undefined" && document.referrer) {
+      try {
+        const referrerUrl = new URL(document.referrer);
+
+        if (referrerUrl.origin === window.location.origin) {
+          if (
+            referrerUrl.pathname.startsWith("/verification") ||
+            referrerUrl.pathname.startsWith("/purchases/") ||
+            referrerUrl.pathname.startsWith("/inventory")
+          ) {
+            return `${referrerUrl.pathname}${referrerUrl.search}`;
+          }
+        }
+      } catch {
+        // Fall back below when the referrer is unavailable or malformed.
+      }
+    }
+
+    return "/inventory";
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -404,7 +442,12 @@ export default function GiftCardVerificationPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          card_number: form.card_number,
+          pin: form.pin,
+          face_value: Number(form.face_value),
+          notes: form.notes || null,
+        }),
       });
 
       if (!response.ok) {
@@ -413,10 +456,12 @@ export default function GiftCardVerificationPage() {
 
       const updatedGiftCard = (await response.json()) as GiftCard;
       setGiftCard(updatedGiftCard);
-      router.push(`/purchases/${updatedGiftCard.purchase_batch_id}`);
+      router.push(getReturnHref());
     } catch (err) {
       setSubmitError(
-        err instanceof Error ? err.message : "Failed to verify gift card.",
+        err instanceof Error
+          ? err.message
+          : "Failed to confirm card number.",
       );
     } finally {
       setIsSubmitting(false);
@@ -455,13 +500,13 @@ export default function GiftCardVerificationPage() {
         <header className="space-y-3">
           <Link
             className="inline-flex min-h-11 items-center text-sm font-medium text-slate-600 underline-offset-4 hover:text-slate-950 hover:underline"
-            href={purchaseHref}
+            href={backHref}
           >
-            Back to purchase
+            Back
           </Link>
           <div className="space-y-1">
             <p className="text-sm font-medium uppercase tracking-wide text-slate-500">
-              Verify Gift Card
+              Confirm Card Details
             </p>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               {giftCard.brand} {formatAmount(giftCard.face_value)}
@@ -618,9 +663,9 @@ export default function GiftCardVerificationPage() {
             onSubmit={handleVerify}
           >
             <div>
-              <h2 className="text-lg font-semibold">Confirm Values</h2>
+              <h2 className="text-lg font-semibold">Confirm Card Details</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Review the suggestions, then save the confirmed card details.
+                Review the suggestions, then save the usable card details.
               </p>
             </div>
 
@@ -791,7 +836,7 @@ export default function GiftCardVerificationPage() {
             </label>
 
             <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Confirmed PIN</span>
+              <span>Confirmed PIN (optional)</span>
               <input
                 className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 onChange={(event) =>
@@ -800,9 +845,40 @@ export default function GiftCardVerificationPage() {
                     pin: event.target.value,
                   }))
                 }
-                required
                 type="text"
                 value={form.pin}
+              />
+            </label>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Face Value</span>
+              <input
+                className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                min="0"
+                onChange={(event) =>
+                  setForm((currentForm) => ({
+                    ...currentForm,
+                    face_value: event.target.value,
+                  }))
+                }
+                required
+                step="0.01"
+                type="number"
+                value={form.face_value}
+              />
+            </label>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Notes</span>
+              <textarea
+                className="min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                onChange={(event) =>
+                  setForm((currentForm) => ({
+                    ...currentForm,
+                    notes: event.target.value,
+                  }))
+                }
+                value={form.notes}
               />
             </label>
 
@@ -820,8 +896,8 @@ export default function GiftCardVerificationPage() {
               {giftCard.status === "SOLD"
                 ? "Sold Card"
                 : isSubmitting
-                  ? "Verifying..."
-                  : "Verify Card"}
+                  ? "Saving..."
+                  : "Confirm Card Details"}
             </button>
           </form>
         </section>

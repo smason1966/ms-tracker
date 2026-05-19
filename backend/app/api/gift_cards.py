@@ -97,6 +97,34 @@ def list_gift_cards(purchase_batch_id: int):
         db.close()
 
 
+@router.get("/verification-queue")
+def list_verification_queue(
+    brand: str | None = None,
+    purchase_batch_id: int | None = None,
+    pending_only: bool = True,
+):
+    db: Session = SessionLocal()
+
+    try:
+        query = db.query(GiftCard)
+
+        query = query.filter(~GiftCard.status.in_(["SOLD", "REDEEMED", "VOID"]))
+
+        if pending_only:
+            query = query.filter(GiftCard.status != "VERIFIED_AVAILABLE")
+
+        if brand:
+            query = query.filter(GiftCard.brand == brand)
+
+        if purchase_batch_id is not None:
+            query = query.filter(GiftCard.purchase_batch_id == purchase_batch_id)
+
+        return query.order_by(GiftCard.created_at.desc()).all()
+
+    finally:
+        db.close()
+
+
 @router.get("/{gift_card_id}")
 def get_gift_card(gift_card_id: int):
     db: Session = SessionLocal()
@@ -118,8 +146,15 @@ def get_gift_card(gift_card_id: int):
 
 
 class GiftCardVerify(BaseModel):
-    card_number: str
-    pin: str
+    card_number: str | None = None
+    confirmed_card_number: str | None = None
+    pin: str | None = None
+    face_value: Decimal | None = None
+    notes: str | None = None
+    verified_balance: Decimal | None = None
+    verification_notes: str | None = None
+    verification_source: str | None = None
+    verification_status: str | None = None
 
 
 class GiftCardSell(BaseModel):
@@ -149,6 +184,22 @@ def to_decimal(value) -> Decimal:
         return value
 
     return Decimal(str(value))
+
+
+def normalize_verification_status(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    normalized_value = value.strip().upper()
+    allowed_statuses = {"PENDING", "VERIFIED", "ISSUE"}
+
+    if normalized_value not in allowed_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail="verification_status must be PENDING, VERIFIED, or ISSUE",
+        )
+
+    return normalized_value
 
 
 @router.patch("/{gift_card_id}/sell")
@@ -303,9 +354,57 @@ def verify_gift_card(gift_card_id: int, payload: GiftCardVerify):
         if not card:
             raise HTTPException(status_code=404, detail="Gift card not found")
 
-        card.card_number_encrypted = payload.card_number
-        card.pin_encrypted = payload.pin
+        if card.status == "SOLD":
+            raise HTTPException(
+                status_code=400,
+                detail="Sold cards cannot be verified",
+            )
+
+        confirmed_card_number = payload.confirmed_card_number
+
+        if confirmed_card_number is None:
+            confirmed_card_number = payload.card_number
+
+        if confirmed_card_number is not None:
+            card.card_number_encrypted = confirmed_card_number
+
+        has_confirmed_card_number = bool(
+            confirmed_card_number
+            and confirmed_card_number.strip()
+            or card.card_number_encrypted
+            and card.card_number_encrypted.strip()
+        )
+
+        if not has_confirmed_card_number:
+            raise HTTPException(
+                status_code=400,
+                detail="Confirmed card number is required before verification",
+            )
+
+        if payload.pin is not None:
+            card.pin_encrypted = payload.pin
+
+        if payload.verified_balance is not None:
+            card.verified_balance = payload.verified_balance
+
+        if payload.face_value is not None:
+            card.face_value = payload.face_value
+            recalculate_purchase_allocation(db, card.purchase_batch_id)
+
+        if payload.notes is not None:
+            card.notes = payload.notes
+
+        if payload.verification_notes is not None:
+            card.verification_notes = payload.verification_notes
+
+        if payload.verification_source is not None:
+            card.verification_source = payload.verification_source
+
+        card.verification_status = "VERIFIED"
+        card.verified_at = datetime.utcnow()
         card.status = "VERIFIED_AVAILABLE"
+
+        card.updated_at = datetime.utcnow()
 
         db.commit()
         db.refresh(card)

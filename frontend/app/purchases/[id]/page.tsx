@@ -1271,7 +1271,7 @@ export default function PurchaseDetailPage() {
                               ? "bg-emerald-700 hover:bg-emerald-800"
                               : "bg-red-700 hover:bg-red-800"
                           }`}
-                          href={`/gift-cards/${giftCard.id}/verify`}
+                          href={`/gift-cards/${giftCard.id}/verify?returnTo=/purchases/${purchaseId}`}
                         >
                           {giftCard.status === "VERIFIED_AVAILABLE"
                             ? "Verified"

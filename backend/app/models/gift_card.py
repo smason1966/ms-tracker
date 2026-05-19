@@ -20,6 +20,22 @@ class GiftCard(Base):
     card_number_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     pin_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    verified_balance: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2),
+        nullable=True,
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    verification_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verification_source: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+    verification_status: Mapped[str] = mapped_column(
+        String(50),
+        default="PENDING",
+        nullable=False,
+    )
+
     detected_card_number: Mapped[str | None] = mapped_column(String(255), nullable=True)
     detected_pin: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

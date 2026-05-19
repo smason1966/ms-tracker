@@ -622,7 +622,7 @@ export default function InventoryPage() {
                                   ? "bg-slate-600 hover:bg-slate-700"
                                 : "bg-red-700 hover:bg-red-800"
                             }`}
-                            href={`/gift-cards/${giftCard.id}/verify`}
+                            href={`/gift-cards/${giftCard.id}/verify?returnTo=/inventory`}
                           >
                             {giftCard.status === "VERIFIED_AVAILABLE"
                               ? "Verified"

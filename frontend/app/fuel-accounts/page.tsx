@@ -261,26 +261,111 @@ export default function FuelAccountsPage() {
             No active fuel accounts found.
           </div>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-            <div className="overflow-x-auto">
+          <>
+            <div className="grid gap-4 lg:hidden">
+              {activeAccounts.map((account) => {
+                const indicator = getIndicator(account);
+                const progressPercent = getProgressPercent(account);
+                const progressBarClass = getProgressBarClass(progressPercent);
+
+                return (
+                  <article
+                    className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+                    key={account.id}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h2 className="text-lg font-semibold">
+                          {account.retailer}
+                        </h2>
+                        <p className="mt-1 truncate text-sm text-slate-500">
+                          {account.email || account.alt_id || "-"}
+                        </p>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-full border px-2 py-1 text-xs font-semibold ${indicator.className}`}
+                      >
+                        {indicator.label}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-md bg-slate-50 p-3">
+                        <p className="text-xs font-semibold text-slate-500">
+                          Current
+                        </p>
+                        <p className="mt-1 text-lg font-bold">
+                          {formatNumber(account.current_points)}
+                        </p>
+                      </div>
+                      <div className="rounded-md bg-slate-50 p-3">
+                        <p className="text-xs font-semibold text-slate-500">
+                          Target
+                        </p>
+                        <p className="mt-1 text-lg font-bold">
+                          {formatNumber(account.target_points)}
+                        </p>
+                      </div>
+                      <div className="rounded-md bg-slate-50 p-3">
+                        <p className="text-xs font-semibold text-slate-500">
+                          Expires
+                        </p>
+                        <p className="mt-1 text-sm font-bold">
+                          {formatDate(account.nearest_expiration_date)}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <div className="flex justify-between text-xs font-medium text-slate-600">
+                        <span>
+                          {progressPercent !== null
+                            ? `${progressPercent}%`
+                            : "No target"}
+                        </span>
+                        <span>{formatCycle(account.expiration_cycle)}</span>
+                      </div>
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                        <div
+                          className={`h-full rounded-full ${progressBarClass}`}
+                          style={{ width: `${progressPercent ?? 0}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      <Link
+                        className="flex h-11 cursor-pointer items-center justify-center rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 active:bg-slate-800"
+                        href={`/fuel-accounts/${account.id}/barcode`}
+                      >
+                        Open Barcode
+                      </Link>
+                      <Link
+                        className="flex h-11 cursor-pointer items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
+                        href={`/fuel-accounts/${account.id}`}
+                      >
+                        Details
+                      </Link>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            <div className="hidden overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm lg:block">
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                   <tr>
                     <th className="px-5 py-3">Retailer</th>
-                    <th className="px-5 py-3">Account</th>
                     <th className="px-5 py-3">Current</th>
                     <th className="px-5 py-3">Progress</th>
                     <th className="px-5 py-3">Target</th>
-                    <th className="px-5 py-3">Remaining</th>
-                    <th className="px-5 py-3">Nearest Expiration</th>
-                    <th className="px-5 py-3">Cycle</th>
-                    <th className="px-5 py-3">Status</th>
+                    <th className="px-5 py-3">Expiration</th>
                     <th className="px-5 py-3">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 bg-white">
                   {activeAccounts.map((account) => {
-                    const indicator = getIndicator(account);
                     const progressPercent = getProgressPercent(account);
                     const progressBarClass = getProgressBarClass(progressPercent);
                     const isReadyToSell =
@@ -290,10 +375,10 @@ export default function FuelAccountsPage() {
                     return (
                       <tr key={account.id} className="hover:bg-slate-50">
                         <td className="whitespace-nowrap px-5 py-4 font-semibold">
-                          {account.retailer}
-                        </td>
-                        <td className="whitespace-nowrap px-5 py-4 text-slate-700">
-                          {account.email || account.alt_id || "-"}
+                          <div>{account.retailer}</div>
+                          <div className="mt-1 text-xs font-normal text-slate-500">
+                            {account.email || account.alt_id || "-"}
+                          </div>
                         </td>
                         <td className="whitespace-nowrap px-5 py-4 font-semibold">
                           {formatNumber(account.current_points)}
@@ -322,28 +407,26 @@ export default function FuelAccountsPage() {
                           {formatNumber(account.target_points)}
                         </td>
                         <td className="whitespace-nowrap px-5 py-4 text-slate-700">
-                          {formatNumber(account.remaining_to_target)}
-                        </td>
-                        <td className="whitespace-nowrap px-5 py-4 text-slate-700">
-                          {formatDate(account.nearest_expiration_date)}
-                        </td>
-                        <td className="whitespace-nowrap px-5 py-4 font-medium text-slate-700">
-                          {formatCycle(account.expiration_cycle)}
+                          <div>{formatDate(account.nearest_expiration_date)}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {formatCycle(account.expiration_cycle)}
+                          </div>
                         </td>
                         <td className="whitespace-nowrap px-5 py-4">
-                          <span
-                            className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${indicator.className}`}
-                          >
-                            {indicator.label}
-                          </span>
-                        </td>
-                        <td className="whitespace-nowrap px-5 py-4">
-                          <Link
-                            className="inline-flex h-10 cursor-pointer items-center rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 active:bg-slate-800"
-                            href={`/fuel-accounts/${account.id}`}
-                          >
-                            Details
-                          </Link>
+                          <div className="flex flex-col gap-2 xl:flex-row">
+                            <Link
+                              className="inline-flex h-10 cursor-pointer items-center justify-center rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 active:bg-slate-800"
+                              href={`/fuel-accounts/${account.id}/barcode`}
+                            >
+                              Open Barcode
+                            </Link>
+                            <Link
+                              className="inline-flex h-10 cursor-pointer items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
+                              href={`/fuel-accounts/${account.id}`}
+                            >
+                              Details
+                            </Link>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -351,7 +434,7 @@ export default function FuelAccountsPage() {
                 </tbody>
               </table>
             </div>
-          </div>
+          </>
         )}
       </div>
     </main>

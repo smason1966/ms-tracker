@@ -363,6 +363,14 @@ export default function FuelAccountDetailPage() {
             >
               Mark INACTIVE
             </button>
+            {account ? (
+              <Link
+                className="flex h-11 cursor-pointer items-center rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 active:bg-slate-800"
+                href={`/fuel-accounts/${account.id}/barcode`}
+              >
+                Open Barcode
+              </Link>
+            ) : null}
           </div>
         </header>
 
@@ -532,6 +540,9 @@ export default function FuelAccountDetailPage() {
               <aside className="space-y-4">
                 <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                   <h2 className="text-lg font-semibold">Barcode</h2>
+                  <p className="mt-2 text-sm text-slate-500">
+                    Barcode generated from stored loyalty ID.
+                  </p>
                   {barcodeImageUrl ? (
                     <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -550,6 +561,14 @@ export default function FuelAccountDetailPage() {
                     <p className="mt-3 break-all rounded-md bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
                       {account.barcode_value}
                     </p>
+                  ) : null}
+                  {account.barcode_image_url ? (
+                    <Link
+                      className="mt-4 flex h-11 cursor-pointer items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
+                      href={`/fuel-accounts/${account.id}/barcode`}
+                    >
+                      Open Barcode
+                    </Link>
                   ) : null}
                   <label className="mt-4 flex h-11 cursor-pointer items-center justify-center rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 active:bg-slate-800">
                     <span>

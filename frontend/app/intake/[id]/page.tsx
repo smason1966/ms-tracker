@@ -521,7 +521,7 @@ export default function RapidCardIntakePage() {
                       </p>
                       <Link
                         className="flex h-9 items-center rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 hover:text-slate-950"
-                        href={`/gift-cards/${giftCard.id}/verify`}
+                        href={`/gift-cards/${giftCard.id}/verify?returnTo=/intake/${purchaseId}`}
                       >
                         Verify
                       </Link>
