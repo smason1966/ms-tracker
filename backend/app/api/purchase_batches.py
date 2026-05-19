@@ -16,6 +16,12 @@ class PurchaseBatchCreate(BaseModel):
     store_name: str
     purchase_date: datetime
     total_amount: Decimal
+    purchase_total_paid: Decimal | None = None
+    sales_tax: Decimal | None = None
+    activation_fees: Decimal | None = None
+    discounts: Decimal | None = None
+    fuel_point_estimated_value: Decimal | None = None
+    financial_notes: str | None = None
     notes: str | None = None
 
 
@@ -28,6 +34,12 @@ def create_purchase_batch(payload: PurchaseBatchCreate):
             store_name=payload.store_name,
             purchase_date=payload.purchase_date,
             total_amount=payload.total_amount,
+            purchase_total_paid=payload.purchase_total_paid,
+            sales_tax=payload.sales_tax,
+            activation_fees=payload.activation_fees,
+            discounts=payload.discounts,
+            fuel_point_estimated_value=payload.fuel_point_estimated_value,
+            financial_notes=payload.financial_notes,
             notes=payload.notes,
         )
         db.add(batch)
