@@ -341,7 +341,7 @@ export default function PurchaseBatchDashboard() {
             </label>
 
             <label className="space-y-2 text-sm font-medium text-slate-700">
-              <span>Total Amount</span>
+              <span>Face Value</span>
               <input
                 className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 type="number"
@@ -354,6 +354,9 @@ export default function PurchaseBatchDashboard() {
                 placeholder="125.50"
                 required
               />
+              <p className="text-xs text-slate-500">
+                Total value of cards expected in the batch.
+              </p>
             </label>
 
             <label className="space-y-2 text-sm font-medium text-slate-700">
@@ -369,6 +372,9 @@ export default function PurchaseBatchDashboard() {
                 }
                 placeholder="Optional"
               />
+              <p className="text-xs text-slate-500">
+                Actual amount spent for the purchase.
+              </p>
             </label>
 
             <label className="space-y-2 text-sm font-medium text-slate-700">

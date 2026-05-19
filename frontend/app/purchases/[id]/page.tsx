@@ -1023,7 +1023,7 @@ export default function PurchaseDetailPage() {
 
               <div>
                 <dt className="text-sm font-medium text-slate-500">
-                  Total Amount
+                  Face Value
                 </dt>
                 <dd className="mt-1 text-base font-semibold">
                   {formatAmount(purchase.total_amount)}

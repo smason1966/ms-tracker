@@ -341,7 +341,7 @@ export default function RapidCardIntakePage() {
               <div className="space-y-1 text-sm">
                 <p className="font-semibold">{purchase.store_name}</p>
                 <p className="text-slate-600">
-                  Purchase #{purchase.id} ·{" "}
+                  Purchase #{purchase.id} · Face value{" "}
                   {formatAmount(purchase.total_amount)}
                 </p>
               </div>
@@ -358,7 +358,9 @@ export default function RapidCardIntakePage() {
                 <p className="mt-1 text-xl font-semibold">{giftCards.length}</p>
               </div>
               <div className="rounded-md bg-slate-50 p-3">
-                <p className="text-xs font-medium text-slate-500">Face Value</p>
+                <p className="text-xs font-medium text-slate-500">
+                  Face Value Added
+                </p>
                 <p className="mt-1 text-xl font-semibold">
                   {formatAmount(totalFaceValueAdded)}
                 </p>
