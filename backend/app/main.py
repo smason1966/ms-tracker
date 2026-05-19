@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.card_brands import router as card_brands_router
+from app.api.buyers import router as buyers_router
 from app.api.gift_cards import router as gift_cards_router
 from app.api.purchase_batches import router as purchase_batches_router
 from app.api.stores import router as stores_router
@@ -29,6 +30,7 @@ app.include_router(purchase_batches_router)
 app.include_router(gift_cards_router)
 app.include_router(stores_router)
 app.include_router(card_brands_router)
+app.include_router(buyers_router)
 app.include_router(card_images_router)
 app.include_router(card_image_queries_router)
 app.include_router(extraction_attempts_router)

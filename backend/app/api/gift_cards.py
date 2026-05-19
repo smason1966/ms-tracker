@@ -1,3 +1,4 @@
+from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException
@@ -16,6 +17,7 @@ class GiftCardCreate(BaseModel):
     purchase_batch_id: int
     brand: str
     face_value: Decimal
+    acquisition_cost: Decimal | None = None
     notes: str | None = None
 
 
@@ -28,6 +30,7 @@ def create_gift_card(payload: GiftCardCreate):
             purchase_batch_id=payload.purchase_batch_id,
             brand=payload.brand,
             face_value=payload.face_value,
+            acquisition_cost=payload.acquisition_cost,
             notes=payload.notes,
         )
 
@@ -95,6 +98,69 @@ def get_gift_card(gift_card_id: int):
 class GiftCardVerify(BaseModel):
     card_number: str
     pin: str
+
+
+class GiftCardSell(BaseModel):
+    sold_to: str
+    sold_date: date
+    sale_price: Decimal
+    sale_notes: str | None = None
+
+
+@router.patch("/{gift_card_id}/sell")
+def sell_gift_card(gift_card_id: int, payload: GiftCardSell):
+    db: Session = SessionLocal()
+
+    try:
+        card = (
+            db.query(GiftCard)
+            .filter(GiftCard.id == gift_card_id)
+            .first()
+        )
+
+        if not card:
+            raise HTTPException(status_code=404, detail="Gift card not found")
+
+        card.sold_to = payload.sold_to
+        card.sold_date = payload.sold_date
+        card.sale_price = payload.sale_price
+        card.sale_notes = payload.sale_notes
+        card.status = "SOLD"
+        card.updated_at = datetime.utcnow()
+
+        db.commit()
+        db.refresh(card)
+
+        return card
+
+    finally:
+        db.close()
+
+
+@router.patch("/{gift_card_id}/redeem")
+def redeem_gift_card(gift_card_id: int):
+    db: Session = SessionLocal()
+
+    try:
+        card = (
+            db.query(GiftCard)
+            .filter(GiftCard.id == gift_card_id)
+            .first()
+        )
+
+        if not card:
+            raise HTTPException(status_code=404, detail="Gift card not found")
+
+        card.status = "REDEEMED"
+        card.updated_at = datetime.utcnow()
+
+        db.commit()
+        db.refresh(card)
+
+        return card
+
+    finally:
+        db.close()
 
 
 @router.patch("/{gift_card_id}/verify")
