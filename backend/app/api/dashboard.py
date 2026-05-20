@@ -59,10 +59,13 @@ def dashboard_summary():
         available_cards = [
             card for card in gift_cards if card.status == "VERIFIED_AVAILABLE"
         ]
+        pending_verification_cards = [
+            card for card in gift_cards if card.status == "NEEDS_VERIFICATION"
+        ]
         awaiting_payment_cards = [
             card
             for card in gift_cards
-            if card.status in {"SOLD_PENDING_PAYMENT", "SOLD"}
+            if card.status == "SOLD_PENDING_PAYMENT"
         ]
         settled_cards = [card for card in gift_cards if card.status == "SETTLED"]
 
@@ -150,18 +153,29 @@ def dashboard_summary():
             "total_available_inventory_face_value": sum(
                 to_decimal(card.face_value) for card in available_cards
             ),
-            "total_acquisition_cost": sum(
+            "total_card_acquisition_cost": sum(
                 to_decimal(card.acquisition_cost)
                 for card in gift_cards
                 if card.status in {
                     "VERIFIED_AVAILABLE",
                     "SOLD_PENDING_PAYMENT",
-                    "SOLD",
                     "SETTLED",
                 }
             ),
+            "available_acquisition_cost": sum(
+                to_decimal(card.acquisition_cost) for card in available_cards
+            ),
+            "pending_verification_face_value": sum(
+                to_decimal(card.face_value) for card in pending_verification_cards
+            ),
+            "pending_verification_count": len(pending_verification_cards),
             "awaiting_payment_total": sum(
                 to_decimal(card.expected_payout) for card in awaiting_payment_cards
+            ),
+            "awaiting_payment_expected_profit": sum(
+                to_decimal(card.expected_payout) - to_decimal(card.acquisition_cost)
+                for card in awaiting_payment_cards
+                if card.expected_payout is not None
             ),
             "settled_revenue": settled_revenue,
             "realized_profit": realized_profit,

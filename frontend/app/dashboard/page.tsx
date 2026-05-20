@@ -7,8 +7,12 @@ import { API_BASE_URL } from "@/lib/api";
 
 type DashboardSummary = {
   total_available_inventory_face_value: string | number;
-  total_acquisition_cost: string | number;
+  total_card_acquisition_cost: string | number;
+  available_acquisition_cost: string | number;
+  pending_verification_face_value: string | number;
+  pending_verification_count: number;
   awaiting_payment_total: string | number;
+  awaiting_payment_expected_profit: string | number;
   settled_revenue: string | number;
   realized_profit: string | number;
   unsold_inventory_count: number;
@@ -223,14 +227,41 @@ export default function DashboardPage() {
               />
               <MetricCard
                 href="/inventory"
-                label="Total Acquisition Cost"
-                value={formatCurrency(summary.total_acquisition_cost)}
+                label="Total Card Acquisition Cost"
+                value={formatCurrency(summary.total_card_acquisition_cost)}
+              />
+              <MetricCard
+                href="/inventory"
+                label="Available Acquisition Cost"
+                value={formatCurrency(summary.available_acquisition_cost)}
+              />
+              <MetricCard
+                href="/verification"
+                label="Pending Verification Face Value"
+                tone={summary.pending_verification_count > 0 ? "yellow" : "default"}
+                value={formatCurrency(summary.pending_verification_face_value)}
+              />
+              <MetricCard
+                href="/verification"
+                label="Pending Verification Count"
+                tone={summary.pending_verification_count > 0 ? "yellow" : "default"}
+                value={formatNumber(summary.pending_verification_count)}
               />
               <MetricCard
                 href="/inventory"
                 label="Awaiting Payment Total"
                 tone={summary.overdue_payment_count > 0 ? "red" : "yellow"}
                 value={formatCurrency(summary.awaiting_payment_total)}
+              />
+              <MetricCard
+                href="/inventory"
+                label="Awaiting Payment Expected Profit"
+                tone={
+                  Number(summary.awaiting_payment_expected_profit) >= 0
+                    ? "green"
+                    : "red"
+                }
+                value={formatCurrency(summary.awaiting_payment_expected_profit)}
               />
               <MetricCard
                 href="/inventory"

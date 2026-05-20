@@ -463,7 +463,7 @@ export default function InventoryPage() {
         </header>
 
         {isBulkMode ? (
-          <section className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <section className="sticky top-2 z-20 flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between md:static">
             <div>
               <p className="text-sm font-semibold">
                 {selectedCards.length} selected · Face value{" "}
@@ -606,135 +606,287 @@ function InventorySection({
       {cards.length === 0 ? (
         <p className="px-4 py-6 text-sm text-slate-500">No cards.</p>
       ) : (
-        <div className="overflow-x-auto">
+        <>
+        <div className="divide-y divide-slate-200 md:hidden">
+          {cards.map((card) => (
+            <InventoryMobileCard
+              card={card}
+              isAvailableSection={isAvailableSection}
+              isAwaitingPaymentSection={isAwaitingPaymentSection}
+              isBulkMode={isBulkMode}
+              isSaving={isSaving}
+              isSelected={selectedIds.includes(card.id)}
+              key={card.id}
+              onSelect={onSelect}
+              onSell={onSell}
+              onSettle={onSettle}
+            />
+          ))}
+        </div>
+
+        <div className="hidden overflow-x-auto md:block">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
               <tr>
                 {isAvailableSection && isBulkMode ? (
-                  <th className="px-4 py-3">Select</th>
+                  <th className="w-10 px-3 py-2">Select</th>
                 ) : null}
-                <th className="px-4 py-3">Brand</th>
-                <th className="px-4 py-3">Face</th>
-                <th className="px-4 py-3">Cost</th>
-                <th className="px-4 py-3">Expected Payout</th>
-                <th className="px-4 py-3">Profit</th>
-                {isAwaitingPaymentSection ? (
-                  <>
-                    <th className="px-4 py-3">Expected Payment</th>
-                    <th className="px-4 py-3">Due</th>
-                  </>
-                ) : (
-                  <th className="px-4 py-3">Age</th>
-                )}
-                <th className="px-4 py-3">Buyer</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Actions</th>
-                <th className="px-4 py-3">Notes</th>
+                <th className="px-3 py-2">Card</th>
+                <th className="px-3 py-2">Workflow</th>
+                <th className="px-3 py-2 text-right">Actions</th>
+                <th className="px-3 py-2">Notes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 bg-white">
-              {cards.map((card) => (
-                <tr key={card.id} className="hover:bg-slate-50">
-                  {isAvailableSection && isBulkMode ? (
-                    <td className="px-4 py-3">
-                      <input
-                        checked={selectedIds.includes(card.id)}
-                        className="h-4 w-4 cursor-pointer"
-                        onChange={() => onSelect(card)}
-                        type="checkbox"
-                      />
-                    </td>
-                  ) : null}
-                  <td className="whitespace-nowrap px-4 py-3 font-medium">
-                    {card.brand}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    {formatAmount(card.face_value)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    {formatAmount(card.acquisition_cost)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    {formatAmount(card.expected_payout)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    {formatAmount(card.realized_profit ?? card.expected_profit)}
-                  </td>
-                  {isAwaitingPaymentSection ? (
-                    <>
-                      <td className="whitespace-nowrap px-4 py-3">
-                        {formatDate(card.expected_payment_date)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3">
-                        {(() => {
-                          const due = dueStatus(
-                            card.expected_payment_date,
-                            card.sold_at,
-                          );
+              {cards.map((card) => {
+                const due = dueStatus(card.expected_payment_date, card.sold_at);
+                const profit = card.realized_profit ?? card.expected_profit;
 
-                          return due.text ? (
-                            <span
-                              className={`rounded-full px-2 py-1 text-xs font-semibold ${due.className}`}
-                            >
-                              {due.text}
-                            </span>
-                          ) : null;
-                        })()}
+                return (
+                  <tr key={card.id} className="hover:bg-slate-50">
+                    {isAvailableSection && isBulkMode ? (
+                      <td className="px-3 py-2 align-middle">
+                        <input
+                          checked={selectedIds.includes(card.id)}
+                          className="h-4 w-4 cursor-pointer"
+                          onChange={() => onSelect(card)}
+                          type="checkbox"
+                        />
                       </td>
-                    </>
-                  ) : (
-                    <td className="whitespace-nowrap px-4 py-3">
-                      {`${card.inventory_aging_days}d`}
+                    ) : null}
+                    <td className="min-w-[28rem] px-3 py-2 align-middle">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 leading-tight">
+                        <span className="font-semibold text-slate-950">
+                          {card.brand}
+                        </span>
+                        <span className="text-slate-300">•</span>
+                        <span>{formatAmount(card.face_value)} face</span>
+                        <span className="text-slate-300">•</span>
+                        <span className="text-slate-600">
+                          cost {formatAmount(card.acquisition_cost)}
+                        </span>
+                        {card.expected_payout !== null ? (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span className="text-slate-600">
+                              payout {formatAmount(card.expected_payout)}
+                            </span>
+                          </>
+                        ) : null}
+                        {profit !== null ? (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span
+                              className={
+                                Number(profit) >= 0
+                                  ? "font-medium text-emerald-700"
+                                  : "font-medium text-red-700"
+                              }
+                            >
+                              profit {formatAmount(profit)}
+                            </span>
+                          </>
+                        ) : null}
+                      </div>
                     </td>
-                  )}
-                  <td className="whitespace-nowrap px-4 py-3">
-                    {card.buyer_name ?? ""}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold">
-                      {statusLabel(card.status)}
-                    </span>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <div className="flex flex-wrap gap-2">
-                      <Link
-                        className="inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-xs font-semibold hover:bg-slate-100 active:bg-slate-200"
-                        href={`/gift-cards/${card.id}/verify?returnTo=/inventory`}
-                      >
-                        Details
-                      </Link>
-                      {card.status === "VERIFIED_AVAILABLE" ? (
-                        <button
-                          className="h-9 cursor-pointer rounded-md bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-700 active:bg-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={isSaving}
-                          onClick={() => onSell(card)}
-                          type="button"
+                    <td className="min-w-64 px-3 py-2 align-middle">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {card.buyer_name ? (
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                            {card.buyer_name}
+                          </span>
+                        ) : null}
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                          {statusLabel(card.status)}
+                        </span>
+                        {isAwaitingPaymentSection && due.text ? (
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-semibold ${due.className}`}
+                          >
+                            {due.text}
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                            {card.inventory_aging_days}d age
+                          </span>
+                        )}
+                        {isAwaitingPaymentSection &&
+                        card.expected_payment_date ? (
+                          <span className="text-xs text-slate-500">
+                            {formatDate(card.expected_payment_date)}
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 align-middle">
+                      <div className="flex justify-end gap-2">
+                        <Link
+                          className="inline-flex h-8 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-xs font-semibold hover:bg-slate-100 active:bg-slate-200"
+                          href={`/gift-cards/${card.id}/verify?returnTo=/inventory`}
                         >
-                          Sell
-                        </button>
-                      ) : null}
-                      {["SOLD_PENDING_PAYMENT", "SOLD"].includes(card.status) ? (
-                        <button
-                          className="h-9 cursor-pointer rounded-md bg-emerald-700 px-3 text-xs font-semibold text-white hover:bg-emerald-800 active:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={isSaving}
-                          onClick={() => onSettle(card)}
-                          type="button"
-                        >
-                          Mark Settled
-                        </button>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td className="min-w-40 px-4 py-3 text-xs text-slate-500">
-                    {card.notes ?? ""}
-                  </td>
-                </tr>
-              ))}
+                          Details
+                        </Link>
+                        {card.status === "VERIFIED_AVAILABLE" ? (
+                          <button
+                            className="h-8 cursor-pointer rounded-md bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-700 active:bg-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={isSaving}
+                            onClick={() => onSell(card)}
+                            type="button"
+                          >
+                            Sell
+                          </button>
+                        ) : null}
+                        {["SOLD_PENDING_PAYMENT", "SOLD"].includes(
+                          card.status,
+                        ) ? (
+                          <button
+                            className="h-8 cursor-pointer rounded-md bg-emerald-700 px-3 text-xs font-semibold text-white hover:bg-emerald-800 active:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={isSaving}
+                            onClick={() => onSettle(card)}
+                            type="button"
+                          >
+                            Mark Settled
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="max-w-56 px-3 py-2 align-middle text-xs text-slate-500">
+                      <span className="line-clamp-1">{card.notes ?? ""}</span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
+        </>
       )}
     </section>
+  );
+}
+
+function InventoryMobileCard({
+  card,
+  isAvailableSection,
+  isAwaitingPaymentSection,
+  isBulkMode,
+  isSaving,
+  isSelected,
+  onSelect,
+  onSell,
+  onSettle,
+}: {
+  card: GiftCard;
+  isAvailableSection: boolean;
+  isAwaitingPaymentSection: boolean;
+  isBulkMode: boolean;
+  isSaving: boolean;
+  isSelected: boolean;
+  onSelect: (card: GiftCard) => void;
+  onSell: (card: GiftCard) => void;
+  onSettle: (card: GiftCard) => void;
+}) {
+  const due = dueStatus(card.expected_payment_date, card.sold_at);
+  const profit = card.realized_profit ?? card.expected_profit;
+
+  return (
+    <article className="space-y-3 px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            {isAvailableSection && isBulkMode ? (
+              <input
+                checked={isSelected}
+                className="mt-0.5 h-5 w-5 cursor-pointer"
+                onChange={() => onSelect(card)}
+                type="checkbox"
+              />
+            ) : null}
+            <h3 className="text-base font-semibold leading-tight text-slate-950">
+              {card.brand}
+            </h3>
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-sm text-slate-600">
+            <span>{formatAmount(card.face_value)} face</span>
+            <span>cost {formatAmount(card.acquisition_cost)}</span>
+            {card.expected_payout !== null ? (
+              <span>payout {formatAmount(card.expected_payout)}</span>
+            ) : null}
+            {profit !== null ? (
+              <span
+                className={
+                  Number(profit) >= 0
+                    ? "font-medium text-emerald-700"
+                    : "font-medium text-red-700"
+                }
+              >
+                profit {formatAmount(profit)}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+          {statusLabel(card.status)}
+        </span>
+        {card.buyer_name ? (
+          <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+            {card.buyer_name}
+          </span>
+        ) : null}
+        {isAwaitingPaymentSection && due.text ? (
+          <span
+            className={`rounded-full px-2 py-1 text-xs font-semibold ${due.className}`}
+          >
+            {due.text}
+          </span>
+        ) : (
+          <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+            {card.inventory_aging_days}d age
+          </span>
+        )}
+        {isAwaitingPaymentSection && card.expected_payment_date ? (
+          <span className="text-xs text-slate-500">
+            {formatDate(card.expected_payment_date)}
+          </span>
+        ) : null}
+      </div>
+
+      {card.notes ? (
+        <p className="text-sm text-slate-500">{card.notes}</p>
+      ) : null}
+
+      <div className="grid grid-cols-2 gap-2">
+        <Link
+          className="inline-flex h-10 cursor-pointer items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200"
+          href={`/gift-cards/${card.id}/verify?returnTo=/inventory`}
+        >
+          Details
+        </Link>
+        {card.status === "VERIFIED_AVAILABLE" ? (
+          <button
+            className="h-10 cursor-pointer rounded-md bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-700 active:bg-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isSaving}
+            onClick={() => onSell(card)}
+            type="button"
+          >
+            Sell
+          </button>
+        ) : null}
+        {["SOLD_PENDING_PAYMENT", "SOLD"].includes(card.status) ? (
+          <button
+            className="h-10 cursor-pointer rounded-md bg-emerald-700 px-3 text-sm font-semibold text-white hover:bg-emerald-800 active:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isSaving}
+            onClick={() => onSettle(card)}
+            type="button"
+          >
+            Mark Settled
+          </button>
+        ) : null}
+      </div>
+    </article>
   );
 }
 
