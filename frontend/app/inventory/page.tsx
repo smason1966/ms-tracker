@@ -11,49 +11,164 @@ type GiftCard = {
   brand: string;
   face_value: string | number;
   acquisition_cost: string | number | null;
+  expected_payout: string | number | null;
+  payout_received: string | number | null;
+  expected_profit: string | number | null;
+  realized_profit: string | number | null;
+  inventory_aging_days: number;
+  buyer_id: number | null;
+  buyer_name: string | null;
+  sold_at: string | null;
+  expected_payment_date: string | null;
+  settlement_received_at: string | null;
   status: string;
-  card_number_encrypted: string | null;
   notes: string | null;
 };
 
 type Buyer = {
   id: number;
   name: string;
-  buyer_type: string | null;
   active: boolean;
-  notes: string | null;
 };
 
-type StatusFilter = {
-  label: string;
-  value: string;
-};
-
-type SaleForm = {
-  sold_to: string;
+type SellForm = {
+  buyer_id: string;
+  payout_total: string;
+  liquidation_rate: string;
   sold_date: string;
-  sale_price: string;
-  sale_notes: string;
+  expected_payment_date: string;
+  notes: string;
 };
 
-type BulkSaleForm = {
-  sold_to: string;
-  sold_date: string;
-  sale_price_total: string;
-  sale_notes: string;
+type SettleForm = {
+  payout_received: string;
+  settlement_received_date: string;
+  notes: string;
 };
 
-const statusFilters: StatusFilter[] = [
-  { label: "All", value: "ALL" },
-  { label: "Pending Verification", value: "Pending Verification" },
-  { label: "Available", value: "Available" },
-  { label: "Sold", value: "Sold" },
-  { label: "Used", value: "Used" },
-  { label: "Void", value: "Void" },
+const sections = [
+  { title: "Available Inventory", statuses: ["VERIFIED_AVAILABLE"] },
+  { title: "Awaiting Payment", statuses: ["SOLD_PENDING_PAYMENT", "SOLD"] },
+  { title: "Settled", statuses: ["SETTLED"] },
 ];
 
-function getTodayDate() {
+function todayString() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function formatAmount(value: string | number | null) {
+  if (value === null || value === "") {
+    return "";
+  }
+
+  const amount = Number(value);
+
+  if (Number.isNaN(amount)) {
+    return String(value);
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(amount);
+}
+
+function formatRate(value: string | number | null) {
+  if (value === null || value === "") {
+    return "";
+  }
+
+  const rate = Number(value);
+
+  if (Number.isNaN(rate)) {
+    return String(value);
+  }
+
+  return `${(rate * 100).toFixed(1)}%`;
+}
+
+function daysSince(dateValue: string | null) {
+  if (!dateValue) {
+    return "";
+  }
+
+  const then = new Date(dateValue);
+  if (Number.isNaN(then.getTime())) {
+    return "";
+  }
+
+  const now = new Date();
+  const diff = now.getTime() - then.getTime();
+  const days = Math.max(0, Math.floor(diff / 86_400_000));
+
+  return `${days}d`;
+}
+
+function formatDate(value: string | null) {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
+function dueStatus(expectedPaymentDate: string | null, soldAt: string | null) {
+  if (!expectedPaymentDate) {
+    return {
+      className: "bg-slate-100 text-slate-700",
+      text: soldAt ? `${daysSince(soldAt)} since sold` : "",
+    };
+  }
+
+  const dueDate = new Date(`${expectedPaymentDate}T00:00:00`);
+  const today = new Date(`${todayString()}T00:00:00`);
+  const diffDays = Math.round(
+    (dueDate.getTime() - today.getTime()) / 86_400_000,
+  );
+
+  if (diffDays < 0) {
+    return {
+      className: "bg-red-100 text-red-800",
+      text: `${Math.abs(diffDays)}d overdue`,
+    };
+  }
+
+  if (diffDays <= 2) {
+    return {
+      className: "bg-yellow-100 text-yellow-800",
+      text: diffDays === 0 ? "Due today" : `Due in ${diffDays}d`,
+    };
+  }
+
+  return {
+    className: "bg-slate-100 text-slate-700",
+    text: `Due in ${diffDays}d`,
+  };
+}
+
+function statusLabel(status: string) {
+  if (status === "VERIFIED_AVAILABLE") {
+    return "Available";
+  }
+
+  if (status === "SOLD_PENDING_PAYMENT" || status === "SOLD") {
+    return "Awaiting Payment";
+  }
+
+  if (status === "SETTLED") {
+    return "Settled";
+  }
+
+  return status.replaceAll("_", " ");
 }
 
 async function fetchGiftCards() {
@@ -76,387 +191,251 @@ async function fetchBuyers() {
   return (await response.json()) as Buyer[];
 }
 
-function formatAmount(value: string | number) {
-  const amount = Number(value);
-
-  if (Number.isNaN(amount)) {
-    return String(value);
-  }
-
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-  }).format(amount);
-}
-
-function getCardEnding(cardNumber: string | null) {
-  if (!cardNumber) {
-    return "";
-  }
-
-  return cardNumber.replace(/\s/g, "").slice(-4);
-}
-
-function getMaskedCardNumber(cardNumber: string | null) {
-  const ending = getCardEnding(cardNumber);
-
-  return ending ? `Card ending ${ending}` : "Not verified";
-}
-
-function matchesStatus(giftCard: GiftCard, statusFilter: string) {
-  if (statusFilter === "ALL") {
-    return true;
-  }
-
-  return getInventoryState(giftCard.status) === statusFilter;
-}
-
-function getInventoryState(status: string) {
-  if (status === "VERIFIED_AVAILABLE") {
-    return "Available";
-  }
-
-  if (status === "NEEDS_VERIFICATION") {
-    return "Pending Verification";
-  }
-
-  if (status === "SOLD") {
-    return "Sold";
-  }
-
-  if (status === "REDEEMED") {
-    return "Used";
-  }
-
-  if (status === "VOID") {
-    return "Void";
-  }
-
-  return status;
-}
-
 export default function InventoryPage() {
   const [giftCards, setGiftCards] = useState<GiftCard[]>([]);
   const [buyers, setBuyers] = useState<Buyer[]>([]);
-  const [selectedGiftCardIds, setSelectedGiftCardIds] = useState<number[]>([]);
-  const [activeStatus, setActiveStatus] = useState("ALL");
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [saleCardIds, setSaleCardIds] = useState<number[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isBulkMode, setIsBulkMode] = useState(false);
+  const [isSellModalOpen, setIsSellModalOpen] = useState(false);
+  const [settlingCard, setSettlingCard] = useState<GiftCard | null>(null);
+  const [sellForm, setSellForm] = useState<SellForm>({
+    buyer_id: "",
+    payout_total: "",
+    liquidation_rate: "",
+    sold_date: todayString(),
+    expected_payment_date: "",
+    notes: "",
+  });
+  const [settleForm, setSettleForm] = useState<SettleForm>({
+    payout_received: "",
+    settlement_received_date: todayString(),
+    notes: "",
+  });
   const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingBuyers, setIsLoadingBuyers] = useState(true);
-  const [isSelling, setIsSelling] = useState(false);
-  const [isBulkSellOpen, setIsBulkSellOpen] = useState(false);
-  const [isBulkSelling, setIsBulkSelling] = useState(false);
-  const [isRedeemingByCardId, setIsRedeemingByCardId] = useState<
-    Record<number, boolean>
-  >({});
+  const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [buyersError, setBuyersError] = useState<string | null>(null);
-  const [saleError, setSaleError] = useState<string | null>(null);
-  const [bulkSaleError, setBulkSaleError] = useState<string | null>(null);
-  const [redeemError, setRedeemError] = useState<string | null>(null);
-  const [sellingGiftCard, setSellingGiftCard] = useState<GiftCard | null>(null);
-  const [saleForm, setSaleForm] = useState<SaleForm>({
-    sold_to: "",
-    sold_date: getTodayDate(),
-    sale_price: "",
-    sale_notes: "",
-  });
-  const [bulkSaleForm, setBulkSaleForm] = useState<BulkSaleForm>({
-    sold_to: "",
-    sold_date: getTodayDate(),
-    sale_price_total: "",
-    sale_notes: "",
-  });
 
-  useEffect(() => {
-    let isMounted = true;
+  const selectedCards = useMemo(
+    () =>
+      giftCards.filter(
+        (card) =>
+          selectedIds.includes(card.id) && card.status === "VERIFIED_AVAILABLE",
+      ),
+    [giftCards, selectedIds],
+  );
 
-    async function loadInventoryData() {
-      setIsLoading(true);
-      setIsLoadingBuyers(true);
-      setError(null);
-      setBuyersError(null);
+  const selectedFaceValue = selectedCards.reduce(
+    (total, card) => total + (Number(card.face_value) || 0),
+    0,
+  );
 
-      const [giftCardsResult, buyersResult] = await Promise.allSettled([
+  const saleCards = useMemo(
+    () =>
+      giftCards.filter(
+        (card) =>
+          saleCardIds.includes(card.id) && card.status === "VERIFIED_AVAILABLE",
+      ),
+    [giftCards, saleCardIds],
+  );
+
+  const saleFaceValue = saleCards.reduce(
+    (total, card) => total + (Number(card.face_value) || 0),
+    0,
+  );
+
+  const estimatedPayoutFromRate =
+    sellForm.liquidation_rate.trim() && saleFaceValue > 0
+      ? saleFaceValue * Number(sellForm.liquidation_rate)
+      : null;
+
+  const sellPayoutTotal =
+    sellForm.payout_total.trim() !== ""
+      ? Number(sellForm.payout_total)
+      : estimatedPayoutFromRate;
+
+  async function loadData() {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const [cards, buyerData] = await Promise.all([
         fetchGiftCards(),
         fetchBuyers(),
       ]);
 
-      if (!isMounted) {
-        return;
-      }
-
-      if (giftCardsResult.status === "fulfilled") {
-        setGiftCards(giftCardsResult.value);
-      } else {
-        setError(
-          giftCardsResult.reason instanceof Error
-            ? giftCardsResult.reason.message
-            : "Failed to load gift cards.",
-        );
-      }
-
-      if (buyersResult.status === "fulfilled") {
-        setBuyers(buyersResult.value);
-      } else {
-        setBuyersError(
-          buyersResult.reason instanceof Error
-            ? buyersResult.reason.message
-            : "Failed to load buyers.",
-        );
-      }
-
+      setGiftCards(cards);
+      setBuyers(buyerData.filter((buyer) => buyer.active));
+      setSelectedIds((currentIds) =>
+        currentIds.filter((id) =>
+          cards.some(
+            (card) => card.id === id && card.status === "VERIFIED_AVAILABLE",
+          ),
+        ),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load inventory.");
+    } finally {
       setIsLoading(false);
-      setIsLoadingBuyers(false);
     }
+  }
 
-    loadInventoryData();
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void loadData();
+    }, 0);
 
-    return () => {
-      isMounted = false;
-    };
+    return () => window.clearTimeout(timeoutId);
   }, []);
 
-  const filteredGiftCards = useMemo(() => {
+  const filteredCards = useMemo(() => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
 
-    return giftCards.filter((giftCard) => {
-      if (!matchesStatus(giftCard, activeStatus)) {
-        return false;
-      }
-
-      if (!normalizedSearch) {
-        return true;
-      }
-
-      const cardEnding = getCardEnding(giftCard.card_number_encrypted);
-
-      return (
-        giftCard.brand.toLowerCase().includes(normalizedSearch) ||
-        cardEnding.includes(normalizedSearch)
-      );
-    });
-  }, [activeStatus, giftCards, searchQuery]);
-
-  const canSaveSale =
-    saleForm.sold_to.trim().length > 0 &&
-    saleForm.sold_date.length > 0 &&
-    saleForm.sale_price.length > 0;
-
-  const selectedAvailableGiftCards = useMemo(
-    () =>
-      giftCards.filter(
-        (giftCard) =>
-          selectedGiftCardIds.includes(giftCard.id) &&
-          giftCard.status === "VERIFIED_AVAILABLE",
-      ),
-    [giftCards, selectedGiftCardIds],
-  );
-
-  const selectedFaceValue = selectedAvailableGiftCards.reduce(
-    (total, giftCard) => total + (Number(giftCard.face_value) || 0),
-    0,
-  );
-
-  const canSaveBulkSale =
-    selectedAvailableGiftCards.length > 0 &&
-    bulkSaleForm.sold_to.trim().length > 0 &&
-    bulkSaleForm.sold_date.length > 0 &&
-    bulkSaleForm.sale_price_total.length > 0;
-
-  function openSellModal(giftCard: GiftCard) {
-    setSellingGiftCard(giftCard);
-    setSaleError(null);
-    setSaleForm({
-      sold_to: "",
-      sold_date: getTodayDate(),
-      sale_price: "",
-      sale_notes: "",
-    });
-  }
-
-  function closeSellModal() {
-    if (isSelling) {
-      return;
+    if (!normalizedSearch) {
+      return giftCards;
     }
 
-    setSellingGiftCard(null);
-    setSaleError(null);
-  }
-
-  function openBulkSellModal() {
-    if (selectedAvailableGiftCards.length === 0) {
-      return;
-    }
-
-    setBulkSaleError(null);
-    setBulkSaleForm({
-      sold_to: "",
-      sold_date: getTodayDate(),
-      sale_price_total: "",
-      sale_notes: "",
-    });
-    setIsBulkSellOpen(true);
-  }
-
-  function closeBulkSellModal() {
-    if (isBulkSelling) {
-      return;
-    }
-
-    setIsBulkSellOpen(false);
-    setBulkSaleError(null);
-  }
-
-  function toggleGiftCardSelection(giftCard: GiftCard) {
-    if (giftCard.status !== "VERIFIED_AVAILABLE") {
-      return;
-    }
-
-    setSelectedGiftCardIds((currentSelectedIds) =>
-      currentSelectedIds.includes(giftCard.id)
-        ? currentSelectedIds.filter((giftCardId) => giftCardId !== giftCard.id)
-        : [...currentSelectedIds, giftCard.id],
+    return giftCards.filter(
+      (card) =>
+        card.brand.toLowerCase().includes(normalizedSearch) ||
+        String(card.purchase_batch_id).includes(normalizedSearch) ||
+        (card.buyer_name ?? "").toLowerCase().includes(normalizedSearch),
     );
+  }, [giftCards, searchQuery]);
+
+  function openSellSelected() {
+    setSaleCardIds(selectedIds);
+    setSellForm({
+      buyer_id: "",
+      payout_total: "",
+      liquidation_rate: "",
+      sold_date: todayString(),
+      expected_payment_date: "",
+      notes: "",
+    });
+    setIsSellModalOpen(true);
   }
 
-  async function refreshGiftCards() {
-    const data = await fetchGiftCards();
-    setGiftCards(data);
-    setSelectedGiftCardIds((currentSelectedIds) =>
-      currentSelectedIds.filter((giftCardId) =>
-        data.some(
-          (giftCard) =>
-            giftCard.id === giftCardId &&
-            giftCard.status === "VERIFIED_AVAILABLE",
-        ),
-      ),
-    );
+  function openSellCard(card: GiftCard) {
+    setSaleCardIds([card.id]);
+    setSellForm({
+      buyer_id: "",
+      payout_total: String(card.face_value),
+      liquidation_rate: "",
+      sold_date: todayString(),
+      expected_payment_date: "",
+      notes: "",
+    });
+    setIsSellModalOpen(true);
   }
 
-  async function handleSaleSubmit(event: FormEvent<HTMLFormElement>) {
+  function openSettle(card: GiftCard) {
+    setSettlingCard(card);
+    setSettleForm({
+      payout_received:
+        card.expected_payout === null ? "" : String(card.expected_payout),
+      settlement_received_date: todayString(),
+      notes: "",
+    });
+  }
+
+  async function submitSellSelected(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!sellingGiftCard || !canSaveSale) {
+    if (saleCards.length === 0 || sellPayoutTotal === null) {
       return;
     }
 
-    setIsSelling(true);
-    setSaleError(null);
+    setIsSaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/gift-cards/bulk-sell`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          gift_card_ids: saleCards.map((card) => card.id),
+          buyer_id: Number(sellForm.buyer_id),
+          payout_total:
+            sellForm.payout_total.trim() === "" ? null : sellForm.payout_total,
+          liquidation_rate:
+            sellForm.payout_total.trim() === "" && sellForm.liquidation_rate
+              ? sellForm.liquidation_rate
+              : null,
+          sold_date: sellForm.sold_date || null,
+          expected_payment_date: sellForm.expected_payment_date || null,
+          sale_notes: sellForm.notes || null,
+          internal_notes: sellForm.notes || null,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to sell selected cards (${response.status})`);
+      }
+
+      setSelectedIds([]);
+      setSaleCardIds([]);
+      setIsBulkMode(false);
+      setIsSellModalOpen(false);
+      await loadData();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to sell selected cards.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function submitSettle(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!settlingCard) {
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
 
     try {
       const response = await fetch(
-        `${API_BASE_URL}/gift-cards/${sellingGiftCard.id}/sell`,
+        `${API_BASE_URL}/gift-cards/${settlingCard.id}/settle`,
         {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            sold_to: saleForm.sold_to.trim(),
-            sold_date: saleForm.sold_date,
-            sale_price: saleForm.sale_price,
-            sale_notes: saleForm.sale_notes.trim() || null,
+            payout_received: settleForm.payout_received,
+            settlement_received_date:
+              settleForm.settlement_received_date || null,
+            internal_notes: settleForm.notes || null,
           }),
         },
       );
 
       if (!response.ok) {
-        throw new Error(`Failed to mark card sold (${response.status})`);
+        throw new Error(`Failed to settle card (${response.status})`);
       }
 
-      await refreshGiftCards();
-      setSellingGiftCard(null);
+      setSettlingCard(null);
+      await loadData();
     } catch (err) {
-      setSaleError(
-        err instanceof Error ? err.message : "Failed to mark card sold.",
-      );
+      setError(err instanceof Error ? err.message : "Failed to settle card.");
     } finally {
-      setIsSelling(false);
+      setIsSaving(false);
     }
   }
 
-  async function handleMarkUsed(giftCard: GiftCard) {
-    const confirmed = window.confirm(
-      `Mark ${giftCard.brand} ${formatAmount(giftCard.face_value)} as used?`,
+  function toggleSelection(card: GiftCard) {
+    if (card.status !== "VERIFIED_AVAILABLE") {
+      return;
+    }
+
+    setSelectedIds((currentIds) =>
+      currentIds.includes(card.id)
+        ? currentIds.filter((id) => id !== card.id)
+        : [...currentIds, card.id],
     );
-
-    if (!confirmed) {
-      return;
-    }
-
-    setRedeemError(null);
-    setIsRedeemingByCardId((currentRedeeming) => ({
-      ...currentRedeeming,
-      [giftCard.id]: true,
-    }));
-
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/gift-cards/${giftCard.id}/redeem`,
-        {
-          method: "PATCH",
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(`Failed to mark card used (${response.status})`);
-      }
-
-      await refreshGiftCards();
-    } catch (err) {
-      setRedeemError(
-        err instanceof Error ? err.message : "Failed to mark card used.",
-      );
-    } finally {
-      setIsRedeemingByCardId((currentRedeeming) => ({
-        ...currentRedeeming,
-        [giftCard.id]: false,
-      }));
-    }
-  }
-
-  async function handleBulkSaleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!canSaveBulkSale) {
-      return;
-    }
-
-    setIsBulkSelling(true);
-    setBulkSaleError(null);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/gift-cards/bulk-sell`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          gift_card_ids: selectedAvailableGiftCards.map(
-            (giftCard) => giftCard.id,
-          ),
-          sold_to: bulkSaleForm.sold_to.trim(),
-          sold_date: bulkSaleForm.sold_date,
-          sale_price_total: bulkSaleForm.sale_price_total,
-          sale_notes: bulkSaleForm.sale_notes.trim() || null,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to bulk sell cards (${response.status})`);
-      }
-
-      await refreshGiftCards();
-      setSelectedGiftCardIds([]);
-      setIsBulkSellOpen(false);
-    } catch (err) {
-      setBulkSaleError(
-        err instanceof Error ? err.message : "Failed to bulk sell cards.",
-      );
-    } finally {
-      setIsBulkSelling(false);
-    }
   }
 
   return (
@@ -470,66 +449,48 @@ export default function InventoryPage() {
             <h1 className="mt-1 text-3xl font-semibold tracking-tight">
               Gift Card Inventory
             </h1>
-            <p className="mt-2 text-sm text-slate-600">
-              {filteredGiftCards.length} of {giftCards.length} cards shown
-            </p>
           </div>
 
           <label className="block w-full max-w-md space-y-2 text-sm font-medium text-slate-700">
-            <span>Search brand or card ending</span>
+            <span>Search brand, purchase, or buyer</span>
             <input
               className="h-11 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Best Buy or 3723"
               type="search"
               value={searchQuery}
             />
           </label>
         </header>
 
-        <section className="flex flex-wrap gap-2">
-          {statusFilters.map((filter) => (
-            <button
-              className={`h-10 rounded-md border px-4 text-sm font-medium transition ${
-                activeStatus === filter.value
-                  ? "border-slate-950 bg-slate-950 text-white hover:bg-slate-800"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              }`}
-              key={filter.value}
-              onClick={() => setActiveStatus(filter.value)}
-              type="button"
-            >
-              {filter.label}
-            </button>
-          ))}
-        </section>
-
-        {selectedAvailableGiftCards.length > 0 ? (
+        {isBulkMode ? (
           <section className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-sm font-semibold text-slate-900">
-                {selectedAvailableGiftCards.length}{" "}
-                {selectedAvailableGiftCards.length === 1 ? "card" : "cards"}{" "}
-                selected
+              <p className="text-sm font-semibold">
+                {selectedCards.length} selected · Face value{" "}
+                {formatAmount(selectedFaceValue)}
               </p>
-              <p className="mt-1 text-sm text-slate-500">
-                Face value {formatAmount(selectedFaceValue)}
+              <p className="text-xs text-slate-500">
+                Sell selected cards together and allocate payout by face value.
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex gap-2">
               <button
-                className="h-10 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                onClick={() => setSelectedGiftCardIds([])}
+                className="h-10 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200"
+                onClick={() => {
+                  setSelectedIds([]);
+                  setIsBulkMode(false);
+                }}
                 type="button"
               >
-                Clear
+                Cancel Bulk
               </button>
               <button
-                className="h-10 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700"
-                onClick={openBulkSellModal}
+                className="h-10 cursor-pointer rounded-md bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-700 active:bg-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={selectedCards.length === 0}
+                onClick={openSellSelected}
                 type="button"
               >
-                Bulk Sell
+                Sell Selected
               </button>
             </div>
           </section>
@@ -540,393 +501,497 @@ export default function InventoryPage() {
             {error}
           </div>
         ) : null}
-        {buyersError ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
-            {buyersError}
-          </div>
-        ) : null}
-        {redeemError ? (
-          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
-            {redeemError}
-          </div>
-        ) : null}
 
-        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          {isLoading ? (
-            <div className="px-6 py-12 text-center text-sm text-slate-500">
-              Loading inventory...
-            </div>
-          ) : filteredGiftCards.length === 0 ? (
-            <div className="px-6 py-12 text-center text-sm text-slate-500">
-              No gift cards match the current filters.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
-                  <tr>
-                    <th className="px-6 py-3">Select</th>
-                    <th className="px-6 py-3">Brand</th>
-                    <th className="px-6 py-3">Face Value</th>
-                    <th className="px-6 py-3">Cost</th>
-                    <th className="px-6 py-3">Card Number</th>
-                    <th className="px-6 py-3">Inventory State</th>
-                    <th className="px-6 py-3">Purchase</th>
-                    <th className="px-6 py-3">Action</th>
-                    <th className="px-6 py-3">Notes</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 bg-white">
-                  {filteredGiftCards.map((giftCard) => (
-                    <tr key={giftCard.id} className="hover:bg-slate-50">
-                      <td className="whitespace-nowrap px-6 py-4">
-                        {giftCard.status === "VERIFIED_AVAILABLE" ? (
-                          <input
-                            aria-label={`Select ${giftCard.brand} ${formatAmount(
-                              giftCard.face_value,
-                            )}`}
-                            checked={selectedGiftCardIds.includes(giftCard.id)}
-                            className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-500"
-                            onChange={() => toggleGiftCardSelection(giftCard)}
-                            type="checkbox"
-                          />
-                        ) : null}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 font-medium">
-                        {giftCard.brand}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-slate-700">
-                        {formatAmount(giftCard.face_value)}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-slate-700">
-                        {giftCard.acquisition_cost === null
-                          ? ""
-                          : formatAmount(giftCard.acquisition_cost)}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 font-mono text-xs text-slate-700">
-                        {getMaskedCardNumber(giftCard.card_number_encrypted)}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-slate-700">
-                        {getInventoryState(giftCard.status)}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-slate-700">
-                        #{giftCard.purchase_batch_id}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4">
-                        <div className="flex flex-wrap gap-2">
-                          <Link
-                            className={`inline-flex h-9 items-center rounded-md px-4 text-xs font-semibold text-white transition ${
-                              giftCard.status === "VERIFIED_AVAILABLE"
-                                ? "bg-emerald-700 hover:bg-emerald-800"
-                                : giftCard.status === "SOLD"
-                                  ? "bg-slate-600 hover:bg-slate-700"
-                                : "bg-red-700 hover:bg-red-800"
-                            }`}
-                            href={`/gift-cards/${giftCard.id}/verify?returnTo=/inventory`}
-                          >
-                            {giftCard.status === "VERIFIED_AVAILABLE"
-                              ? "Verified"
-                              : giftCard.status === "SOLD"
-                                ? "Details"
-                                : "Verify"}
-                          </Link>
-                          {giftCard.status === "VERIFIED_AVAILABLE" ? (
-                            <button
-                              className="inline-flex h-9 items-center rounded-md bg-slate-900 px-4 text-xs font-semibold text-white transition hover:bg-slate-700"
-                              onClick={() => openSellModal(giftCard)}
-                              type="button"
-                            >
-                              Sell
-                            </button>
-                          ) : null}
-                          {giftCard.status === "SOLD" ? (
-                            <button
-                              className="inline-flex h-9 items-center rounded-md bg-slate-900 px-4 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-                              disabled={Boolean(
-                                isRedeemingByCardId[giftCard.id],
-                              )}
-                              onClick={() => handleMarkUsed(giftCard)}
-                              type="button"
-                            >
-                              {isRedeemingByCardId[giftCard.id]
-                                ? "Saving..."
-                                : "Mark Used"}
-                            </button>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td className="max-w-md px-6 py-4 text-xs text-slate-500">
-                        {giftCard.notes || ""}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+        {isLoading ? (
+          <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+            Loading inventory...
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {sections.map((section) => {
+              const cards = filteredCards.filter((card) =>
+                section.statuses.includes(card.status),
+              );
+
+              return (
+                <InventorySection
+                  cards={cards}
+                  isSaving={isSaving}
+                  isBulkMode={isBulkMode}
+                  key={section.title}
+                  onStartBulk={() => setIsBulkMode(true)}
+                  onSelect={toggleSelection}
+                  onSell={openSellCard}
+                  onSettle={openSettle}
+                  selectedIds={selectedIds}
+                  title={section.title}
+                />
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {sellingGiftCard ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-6">
-          <form
-            className="w-full max-w-lg space-y-4 rounded-lg bg-white p-5 shadow-xl"
-            onSubmit={handleSaleSubmit}
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-semibold">Mark Sold</h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  {sellingGiftCard.brand} {formatAmount(sellingGiftCard.face_value)}
-                </p>
-              </div>
-              <button
-                className="h-9 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 hover:bg-slate-100"
-                onClick={closeSellModal}
-                type="button"
-              >
-                Close
-              </button>
-            </div>
-
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Sold To</span>
-              <select
-                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                disabled={isLoadingBuyers || Boolean(buyersError)}
-                onChange={(event) =>
-                  setSaleForm((currentForm) => ({
-                    ...currentForm,
-                    sold_to: event.target.value,
-                  }))
-                }
-                required
-                value={saleForm.sold_to}
-              >
-                <option value="">
-                  {isLoadingBuyers
-                    ? "Loading buyers..."
-                    : buyers.length === 0
-                      ? "No buyers available"
-                      : "Select buyer"}
-                </option>
-                {buyers.map((buyer) => (
-                  <option key={buyer.id} value={buyer.name}>
-                    {buyer.name}
-                    {buyer.active ? "" : " (Inactive)"}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="block space-y-2 text-sm font-medium text-slate-700">
-                <span>Sold Date</span>
-                <input
-                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                  onChange={(event) =>
-                    setSaleForm((currentForm) => ({
-                      ...currentForm,
-                      sold_date: event.target.value,
-                    }))
-                  }
-                  required
-                  type="date"
-                  value={saleForm.sold_date}
-                />
-              </label>
-
-              <label className="block space-y-2 text-sm font-medium text-slate-700">
-                <span>Sale Price</span>
-                <input
-                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                  min="0"
-                  onChange={(event) =>
-                    setSaleForm((currentForm) => ({
-                      ...currentForm,
-                      sale_price: event.target.value,
-                    }))
-                  }
-                  required
-                  step="0.01"
-                  type="number"
-                  value={saleForm.sale_price}
-                />
-              </label>
-            </div>
-
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Sale Notes</span>
-              <textarea
-                className="min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                onChange={(event) =>
-                  setSaleForm((currentForm) => ({
-                    ...currentForm,
-                    sale_notes: event.target.value,
-                  }))
-                }
-                value={saleForm.sale_notes}
-              />
-            </label>
-
-            {saleError ? (
-              <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                {saleError}
-              </p>
-            ) : null}
-
-            <div className="flex justify-end gap-2">
-              <button
-                className="h-10 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
-                disabled={isSelling}
-                onClick={closeSellModal}
-                type="button"
-              >
-                Cancel
-              </button>
-              <button
-                className="h-10 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-                disabled={isSelling || !canSaveSale}
-                type="submit"
-              >
-                {isSelling ? "Saving..." : "Save Sale"}
-              </button>
-            </div>
-          </form>
-        </div>
+      {isSellModalOpen ? (
+        <SaleModal
+          buyers={buyers}
+          estimatedPayout={sellPayoutTotal}
+          faceValue={saleFaceValue}
+          form={sellForm}
+          isSaving={isSaving}
+          onClose={() => {
+            setSaleCardIds([]);
+            setIsSellModalOpen(false);
+          }}
+          onSubmit={submitSellSelected}
+          selectedCount={saleCards.length}
+          setForm={setSellForm}
+        />
       ) : null}
 
-      {isBulkSellOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-6">
-          <form
-            className="w-full max-w-lg space-y-4 rounded-lg bg-white p-5 shadow-xl"
-            onSubmit={handleBulkSaleSubmit}
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-semibold">Bulk Sell</h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  {selectedAvailableGiftCards.length}{" "}
-                  {selectedAvailableGiftCards.length === 1 ? "card" : "cards"}{" "}
-                  selected · Face value {formatAmount(selectedFaceValue)}
-                </p>
-              </div>
-              <button
-                className="h-9 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
-                disabled={isBulkSelling}
-                onClick={closeBulkSellModal}
-                type="button"
-              >
-                Close
-              </button>
-            </div>
-
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Sold To</span>
-              <select
-                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                disabled={isLoadingBuyers || Boolean(buyersError)}
-                onChange={(event) =>
-                  setBulkSaleForm((currentForm) => ({
-                    ...currentForm,
-                    sold_to: event.target.value,
-                  }))
-                }
-                required
-                value={bulkSaleForm.sold_to}
-              >
-                <option value="">
-                  {isLoadingBuyers
-                    ? "Loading buyers..."
-                    : buyers.length === 0
-                      ? "No buyers available"
-                      : "Select buyer"}
-                </option>
-                {buyers.map((buyer) => (
-                  <option key={buyer.id} value={buyer.name}>
-                    {buyer.name}
-                    {buyer.active ? "" : " (Inactive)"}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="block space-y-2 text-sm font-medium text-slate-700">
-                <span>Sold Date</span>
-                <input
-                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                  onChange={(event) =>
-                    setBulkSaleForm((currentForm) => ({
-                      ...currentForm,
-                      sold_date: event.target.value,
-                    }))
-                  }
-                  required
-                  type="date"
-                  value={bulkSaleForm.sold_date}
-                />
-              </label>
-
-              <label className="block space-y-2 text-sm font-medium text-slate-700">
-                <span>Total Sale Price</span>
-                <input
-                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                  min="0"
-                  onChange={(event) =>
-                    setBulkSaleForm((currentForm) => ({
-                      ...currentForm,
-                      sale_price_total: event.target.value,
-                    }))
-                  }
-                  required
-                  step="0.01"
-                  type="number"
-                  value={bulkSaleForm.sale_price_total}
-                />
-              </label>
-            </div>
-
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Sale Notes</span>
-              <textarea
-                className="min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                onChange={(event) =>
-                  setBulkSaleForm((currentForm) => ({
-                    ...currentForm,
-                    sale_notes: event.target.value,
-                  }))
-                }
-                value={bulkSaleForm.sale_notes}
-              />
-            </label>
-
-            {bulkSaleError ? (
-              <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                {bulkSaleError}
-              </p>
-            ) : null}
-
-            <div className="flex justify-end gap-2">
-              <button
-                className="h-10 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
-                disabled={isBulkSelling}
-                onClick={closeBulkSellModal}
-                type="button"
-              >
-                Cancel
-              </button>
-              <button
-                className="h-10 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-                disabled={isBulkSelling || !canSaveBulkSale}
-                type="submit"
-              >
-                {isBulkSelling ? "Saving..." : "Save Bulk Sale"}
-              </button>
-            </div>
-          </form>
-        </div>
+      {settlingCard ? (
+        <SettleModal
+          card={settlingCard}
+          form={settleForm}
+          isSaving={isSaving}
+          onClose={() => setSettlingCard(null)}
+          onSubmit={submitSettle}
+          setForm={setSettleForm}
+        />
       ) : null}
     </main>
+  );
+}
+
+function InventorySection({
+  title,
+  cards,
+  selectedIds,
+  isSaving,
+  isBulkMode,
+  onStartBulk,
+  onSelect,
+  onSell,
+  onSettle,
+}: {
+  title: string;
+  cards: GiftCard[];
+  selectedIds: number[];
+  isSaving: boolean;
+  isBulkMode: boolean;
+  onStartBulk: () => void;
+  onSelect: (card: GiftCard) => void;
+  onSell: (card: GiftCard) => void;
+  onSettle: (card: GiftCard) => void;
+}) {
+  const isAvailableSection = title === "Available Inventory";
+  const isAwaitingPaymentSection = title === "Awaiting Payment";
+
+  return (
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <h2 className="text-lg font-semibold">
+          {title} <span className="text-sm text-slate-500">({cards.length})</span>
+        </h2>
+        {isAvailableSection && !isBulkMode ? (
+          <button
+            className="h-10 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200"
+            onClick={onStartBulk}
+            type="button"
+          >
+            Bulk Sell
+          </button>
+        ) : null}
+      </div>
+      {cards.length === 0 ? (
+        <p className="px-4 py-6 text-sm text-slate-500">No cards.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-slate-200 text-sm">
+            <thead className="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+              <tr>
+                {isAvailableSection && isBulkMode ? (
+                  <th className="px-4 py-3">Select</th>
+                ) : null}
+                <th className="px-4 py-3">Brand</th>
+                <th className="px-4 py-3">Face</th>
+                <th className="px-4 py-3">Cost</th>
+                <th className="px-4 py-3">Expected Payout</th>
+                <th className="px-4 py-3">Profit</th>
+                {isAwaitingPaymentSection ? (
+                  <>
+                    <th className="px-4 py-3">Expected Payment</th>
+                    <th className="px-4 py-3">Due</th>
+                  </>
+                ) : (
+                  <th className="px-4 py-3">Age</th>
+                )}
+                <th className="px-4 py-3">Buyer</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Actions</th>
+                <th className="px-4 py-3">Notes</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 bg-white">
+              {cards.map((card) => (
+                <tr key={card.id} className="hover:bg-slate-50">
+                  {isAvailableSection && isBulkMode ? (
+                    <td className="px-4 py-3">
+                      <input
+                        checked={selectedIds.includes(card.id)}
+                        className="h-4 w-4 cursor-pointer"
+                        onChange={() => onSelect(card)}
+                        type="checkbox"
+                      />
+                    </td>
+                  ) : null}
+                  <td className="whitespace-nowrap px-4 py-3 font-medium">
+                    {card.brand}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {formatAmount(card.face_value)}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {formatAmount(card.acquisition_cost)}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {formatAmount(card.expected_payout)}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {formatAmount(card.realized_profit ?? card.expected_profit)}
+                  </td>
+                  {isAwaitingPaymentSection ? (
+                    <>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        {formatDate(card.expected_payment_date)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        {(() => {
+                          const due = dueStatus(
+                            card.expected_payment_date,
+                            card.sold_at,
+                          );
+
+                          return due.text ? (
+                            <span
+                              className={`rounded-full px-2 py-1 text-xs font-semibold ${due.className}`}
+                            >
+                              {due.text}
+                            </span>
+                          ) : null;
+                        })()}
+                      </td>
+                    </>
+                  ) : (
+                    <td className="whitespace-nowrap px-4 py-3">
+                      {`${card.inventory_aging_days}d`}
+                    </td>
+                  )}
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {card.buyer_name ?? ""}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold">
+                      {statusLabel(card.status)}
+                    </span>
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    <div className="flex flex-wrap gap-2">
+                      <Link
+                        className="inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-xs font-semibold hover:bg-slate-100 active:bg-slate-200"
+                        href={`/gift-cards/${card.id}/verify?returnTo=/inventory`}
+                      >
+                        Details
+                      </Link>
+                      {card.status === "VERIFIED_AVAILABLE" ? (
+                        <button
+                          className="h-9 cursor-pointer rounded-md bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-700 active:bg-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={isSaving}
+                          onClick={() => onSell(card)}
+                          type="button"
+                        >
+                          Sell
+                        </button>
+                      ) : null}
+                      {["SOLD_PENDING_PAYMENT", "SOLD"].includes(card.status) ? (
+                        <button
+                          className="h-9 cursor-pointer rounded-md bg-emerald-700 px-3 text-xs font-semibold text-white hover:bg-emerald-800 active:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={isSaving}
+                          onClick={() => onSettle(card)}
+                          type="button"
+                        >
+                          Mark Settled
+                        </button>
+                      ) : null}
+                    </div>
+                  </td>
+                  <td className="min-w-40 px-4 py-3 text-xs text-slate-500">
+                    {card.notes ?? ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SaleModal({
+  buyers,
+  faceValue,
+  estimatedPayout,
+  form,
+  isSaving,
+  selectedCount,
+  setForm,
+  onClose,
+  onSubmit,
+}: {
+  buyers: Buyer[];
+  faceValue: number;
+  estimatedPayout: number | null;
+  form: SellForm;
+  isSaving: boolean;
+  selectedCount: number;
+  setForm: (form: SellForm) => void;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const canSubmit =
+    selectedCount > 0 &&
+    form.buyer_id !== "" &&
+    (form.payout_total.trim() !== "" || form.liquidation_rate.trim() !== "");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-6">
+      <form
+        className="w-full max-w-lg space-y-4 rounded-lg bg-white p-5 shadow-xl"
+        onSubmit={onSubmit}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold">Sell Selected</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {selectedCount} cards · Face value {formatAmount(faceValue)}
+            </p>
+          </div>
+          <button
+            className="h-9 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-medium hover:bg-slate-100 active:bg-slate-200"
+            onClick={onClose}
+            type="button"
+          >
+            Close
+          </button>
+        </div>
+
+        <label className="block space-y-2 text-sm font-medium text-slate-700">
+          <span>Buyer</span>
+          <select
+            className="h-11 w-full rounded-md border border-slate-300 px-3"
+            onChange={(event) =>
+              setForm({ ...form, buyer_id: event.target.value })
+            }
+            required
+            value={form.buyer_id}
+          >
+            <option value="">Select buyer</option>
+            {buyers.map((buyer) => (
+              <option key={buyer.id} value={buyer.id}>
+                {buyer.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block space-y-2 text-sm font-medium text-slate-700">
+            <span>Liquidation Rate</span>
+            <input
+              className="h-11 w-full rounded-md border border-slate-300 px-3"
+              min="0"
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  liquidation_rate: event.target.value,
+                  payout_total: "",
+                })
+              }
+              placeholder="0.92"
+              step="0.0001"
+              type="number"
+              value={form.liquidation_rate}
+            />
+          </label>
+
+          <label className="block space-y-2 text-sm font-medium text-slate-700">
+            <span>Total Payout</span>
+            <input
+              className="h-11 w-full rounded-md border border-slate-300 px-3"
+              min="0"
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  payout_total: event.target.value,
+                  liquidation_rate: "",
+                })
+              }
+              placeholder="Optional override"
+              step="0.01"
+              type="number"
+              value={form.payout_total}
+            />
+          </label>
+        </div>
+
+        <label className="block space-y-2 text-sm font-medium text-slate-700">
+          <span>Sold Date</span>
+          <input
+            className="h-11 w-full rounded-md border border-slate-300 px-3"
+            onChange={(event) =>
+              setForm({ ...form, sold_date: event.target.value })
+            }
+            type="date"
+            value={form.sold_date}
+          />
+        </label>
+
+        <label className="block space-y-2 text-sm font-medium text-slate-700">
+          <span>Expected Payment Date</span>
+          <input
+            className="h-11 w-full rounded-md border border-slate-300 px-3"
+            onChange={(event) =>
+              setForm({
+                ...form,
+                expected_payment_date: event.target.value,
+              })
+            }
+            type="date"
+            value={form.expected_payment_date}
+          />
+        </label>
+
+        <label className="block space-y-2 text-sm font-medium text-slate-700">
+          <span>Notes</span>
+          <textarea
+            className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2"
+            onChange={(event) => setForm({ ...form, notes: event.target.value })}
+            value={form.notes}
+          />
+        </label>
+
+        <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
+          Expected payout:{" "}
+          <span className="font-semibold text-slate-950">
+            {formatAmount(estimatedPayout)}
+          </span>
+          {form.liquidation_rate ? (
+            <span className="ml-2">at {formatRate(form.liquidation_rate)}</span>
+          ) : null}
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button
+            className="h-10 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-medium hover:bg-slate-100 active:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isSaving}
+            onClick={onClose}
+            type="button"
+          >
+            Cancel
+          </button>
+          <button
+            className="h-10 cursor-pointer rounded-md bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-700 active:bg-slate-950 disabled:cursor-not-allowed disabled:bg-slate-400"
+            disabled={isSaving || !canSubmit}
+            type="submit"
+          >
+            {isSaving ? "Saving..." : "Sell Selected"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function SettleModal({
+  card,
+  form,
+  isSaving,
+  setForm,
+  onClose,
+  onSubmit,
+}: {
+  card: GiftCard;
+  form: SettleForm;
+  isSaving: boolean;
+  setForm: (form: SettleForm) => void;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-6">
+      <form
+        className="w-full max-w-lg space-y-4 rounded-lg bg-white p-5 shadow-xl"
+        onSubmit={onSubmit}
+      >
+        <h2 className="text-lg font-semibold">Mark Settled</h2>
+        <p className="text-sm text-slate-500">
+          {card.brand} expected {formatAmount(card.expected_payout)}
+        </p>
+        <label className="block space-y-2 text-sm font-medium text-slate-700">
+          <span>Payout Received</span>
+          <input
+            className="h-11 w-full rounded-md border border-slate-300 px-3"
+            min="0"
+            onChange={(event) =>
+              setForm({ ...form, payout_received: event.target.value })
+            }
+            required
+            step="0.01"
+            type="number"
+            value={form.payout_received}
+          />
+        </label>
+        <label className="block space-y-2 text-sm font-medium text-slate-700">
+          <span>Settlement Date</span>
+          <input
+            className="h-11 w-full rounded-md border border-slate-300 px-3"
+            onChange={(event) =>
+              setForm({
+                ...form,
+                settlement_received_date: event.target.value,
+              })
+            }
+            type="date"
+            value={form.settlement_received_date}
+          />
+        </label>
+        <label className="block space-y-2 text-sm font-medium text-slate-700">
+          <span>Settlement Notes</span>
+          <textarea
+            className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2"
+            onChange={(event) => setForm({ ...form, notes: event.target.value })}
+            value={form.notes}
+          />
+        </label>
+        <div className="flex justify-end gap-2">
+          <button
+            className="h-10 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-medium hover:bg-slate-100 active:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isSaving}
+            onClick={onClose}
+            type="button"
+          >
+            Cancel
+          </button>
+          <button
+            className="h-10 cursor-pointer rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white hover:bg-emerald-800 active:bg-emerald-900 disabled:cursor-not-allowed disabled:bg-slate-400"
+            disabled={isSaving}
+            type="submit"
+          >
+            {isSaving ? "Saving..." : "Mark Settled"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }

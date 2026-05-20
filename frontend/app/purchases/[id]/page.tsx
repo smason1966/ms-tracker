@@ -32,6 +32,16 @@ type Receipt = {
   created_at: string;
 };
 
+type PurchasePayment = {
+  id: number;
+  purchase_batch_id: number;
+  payment_type: string;
+  credit_card_id: number | null;
+  amount: string | number;
+  notes: string | null;
+  created_at: string;
+};
+
 type GiftCard = {
   id: number;
   brand: string;
@@ -112,6 +122,7 @@ export default function PurchaseDetailPage() {
   }, [params.id]);
 
   const [purchase, setPurchase] = useState<PurchaseBatch | null>(null);
+  const [payments, setPayments] = useState<PurchasePayment[]>([]);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [giftCards, setGiftCards] = useState<GiftCard[]>([]);
   const [cardBrands, setCardBrands] = useState<CardBrand[]>([]);
@@ -126,6 +137,7 @@ export default function PurchaseDetailPage() {
   const [cardImageInputKey, setCardImageInputKey] = useState(0);
   const [isEditingFinancials, setIsEditingFinancials] = useState(false);
   const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
+  const [isLoadingPayments, setIsLoadingPayments] = useState(true);
   const [isLoadingReceipts, setIsLoadingReceipts] = useState(true);
   const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
   const [isLoadingGiftCards, setIsLoadingGiftCards] = useState(true);
@@ -136,6 +148,7 @@ export default function PurchaseDetailPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [receiptsError, setReceiptsError] = useState<string | null>(null);
+  const [paymentsError, setPaymentsError] = useState<string | null>(null);
   const [receiptUploadError, setReceiptUploadError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [cardBrandsError, setCardBrandsError] = useState<string | null>(null);
@@ -143,6 +156,7 @@ export default function PurchaseDetailPage() {
   const [financialError, setFinancialError] = useState<string | null>(null);
 
   const purchaseUrl = `${API_BASE_URL}/purchase-batches/${purchaseId}`;
+  const paymentsUrl = `${API_BASE_URL}/purchase-batches/${purchaseId}/payments`;
   const receiptsUrl = `${API_BASE_URL}/receipts/purchase/${purchaseId}`;
   const giftCardsUrl = `${API_BASE_URL}/gift-cards/purchase/${purchaseId}`;
   const cardBrandsUrl = `${API_BASE_URL}/card-brands/`;
@@ -316,6 +330,49 @@ export default function PurchaseDetailPage() {
       isMounted = false;
     };
   }, [purchaseId, purchaseUrl]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadPayments() {
+      if (!purchaseId) {
+        return;
+      }
+
+      setIsLoadingPayments(true);
+      setPaymentsError(null);
+
+      try {
+        const response = await fetch(paymentsUrl);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load payments (${response.status})`);
+        }
+
+        const data = (await response.json()) as PurchasePayment[];
+
+        if (isMounted) {
+          setPayments(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setPaymentsError(
+            err instanceof Error ? err.message : "Failed to load payments.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingPayments(false);
+        }
+      }
+    }
+
+    loadPayments();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [paymentsUrl, purchaseId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -995,6 +1052,54 @@ export default function PurchaseDetailPage() {
             </dl>
           </section>
         ) : null}
+
+        <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold">Payment Breakdown</h2>
+          {isLoadingPayments ? (
+            <p className="mt-4 text-sm text-slate-500">Loading payments...</p>
+          ) : paymentsError ? (
+            <p className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-700">
+              {paymentsError}
+            </p>
+          ) : payments.length === 0 ? (
+            <p className="mt-4 text-sm text-slate-500">
+              No payment lines recorded.
+            </p>
+          ) : (
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  <tr>
+                    <th className="px-4 py-3">Type</th>
+                    <th className="px-4 py-3">Funding Card</th>
+                    <th className="px-4 py-3">Amount</th>
+                    <th className="px-4 py-3">Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 bg-white">
+                  {payments.map((payment) => (
+                    <tr key={payment.id}>
+                      <td className="whitespace-nowrap px-4 py-3 font-medium">
+                        {payment.payment_type.replace("_", " ")}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                        {payment.credit_card_id
+                          ? `Card #${payment.credit_card_id}`
+                          : ""}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 font-semibold">
+                        {formatAmount(payment.amount)}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">
+                        {payment.notes || ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
 
         <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold">Purchase</h2>

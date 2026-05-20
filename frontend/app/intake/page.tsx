@@ -64,6 +64,13 @@ type IntakeForm = {
   notes: string;
 };
 
+type PaymentRow = {
+  payment_type: string;
+  credit_card_id: string;
+  amount: string;
+  notes: string;
+};
+
 function getTodayDateString() {
   const today = new Date();
   const year = today.getFullYear();
@@ -87,6 +94,15 @@ function createInitialForm(): IntakeForm {
     credit_card_id: "",
     fuel_notes: "",
     financial_notes: "",
+    notes: "",
+  };
+}
+
+function createEmptyPaymentRow(): PaymentRow {
+  return {
+    payment_type: "CREDIT_CARD",
+    credit_card_id: "",
+    amount: "",
     notes: "",
   };
 }
@@ -212,6 +228,8 @@ export default function PurchaseIntakePage() {
   const [fuelAccounts, setFuelAccounts] = useState<FuelAccount[]>([]);
   const [creditCards, setCreditCards] = useState<CreditCard[]>([]);
   const [form, setForm] = useState<IntakeForm>(() => createInitialForm());
+  const [isSplitTenderEnabled, setIsSplitTenderEnabled] = useState(false);
+  const [paymentRows, setPaymentRows] = useState<PaymentRow[]>([]);
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [isLoadingStores, setIsLoadingStores] = useState(true);
   const [isLoadingFuelAccounts, setIsLoadingFuelAccounts] = useState(true);
@@ -241,6 +259,40 @@ export default function PurchaseIntakePage() {
     selectedFuelAccount?.expiration_cycle,
     fuelEntryExpirationDate,
   );
+  const activePaymentRows = paymentRows.filter(
+    (row) =>
+      row.amount.trim() !== "" ||
+      row.credit_card_id.trim() !== "" ||
+      row.notes.trim() !== "" ||
+      row.payment_type !== "CREDIT_CARD",
+  );
+  const paymentRowsTotal = activePaymentRows.reduce((total, row) => {
+    const amount = Number(row.amount);
+
+    return total + (Number.isNaN(amount) ? 0 : amount);
+  }, 0);
+  const totalPaid = Number(form.purchase_total_paid);
+  const paymentDifference = Number.isNaN(totalPaid)
+    ? 0
+    : totalPaid - paymentRowsTotal;
+  const hasPaymentMismatch =
+    isSplitTenderEnabled &&
+    form.purchase_total_paid.trim() !== "" &&
+    Math.round(paymentRowsTotal * 100) !== Math.round(totalPaid * 100);
+  const hasMissingCreditCardPayment =
+    isSplitTenderEnabled &&
+    activePaymentRows.some(
+      (row) => row.payment_type === "CREDIT_CARD" && !row.credit_card_id,
+    );
+  const hasBlankPaymentRows =
+    isSplitTenderEnabled &&
+    activePaymentRows.some(
+      (row) => !row.payment_type || !row.amount || Number(row.amount) <= 0,
+    );
+  const canAddPaymentRow =
+    !isSplitTenderEnabled ||
+    form.purchase_total_paid.trim() === "" ||
+    Math.round(paymentDifference * 100) !== 0;
 
   useEffect(() => {
     let isMounted = true;
@@ -342,6 +394,51 @@ export default function PurchaseIntakePage() {
     setReceiptFile(event.target.files?.[0] ?? null);
   }
 
+  function handleSplitTenderChange(isEnabled: boolean) {
+    setIsSplitTenderEnabled(isEnabled);
+
+    if (isEnabled) {
+      updateFormField("credit_card_id", "");
+    } else {
+      setPaymentRows([]);
+    }
+  }
+
+  function updatePaymentRow(
+    index: number,
+    field: keyof PaymentRow,
+    value: string,
+  ) {
+    setPaymentRows((currentRows) =>
+      currentRows.map((row, rowIndex) => {
+        if (rowIndex !== index) {
+          return row;
+        }
+
+        const nextRow = {
+          ...row,
+          [field]: value,
+        };
+
+        if (field === "payment_type" && value !== "CREDIT_CARD") {
+          nextRow.credit_card_id = "";
+        }
+
+        return nextRow;
+      }),
+    );
+  }
+
+  function addPaymentRow() {
+    setPaymentRows((currentRows) => [...currentRows, createEmptyPaymentRow()]);
+  }
+
+  function removePaymentRow(index: number) {
+    setPaymentRows((currentRows) =>
+      currentRows.filter((_, rowIndex) => rowIndex !== index),
+    );
+  }
+
   async function uploadReceipt(purchaseId: number) {
     if (!receiptFile) {
       return;
@@ -418,6 +515,37 @@ export default function PurchaseIntakePage() {
     return false;
   }
 
+  async function createPurchasePayments(purchaseId: number) {
+    if (!isSplitTenderEnabled) {
+      return;
+    }
+
+    for (const row of activePaymentRows) {
+      const response = await fetch(
+        `${API_BASE_URL}/purchase-batches/${purchaseId}/payments`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            payment_type: row.payment_type,
+            credit_card_id:
+              row.payment_type === "CREDIT_CARD"
+                ? Number(row.credit_card_id)
+                : null,
+            amount: row.amount,
+            notes: row.notes.trim() || null,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Purchase created, but payment failed (${response.status})`);
+      }
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitError(null);
@@ -425,6 +553,18 @@ export default function PurchaseIntakePage() {
     setIsSubmitting(true);
 
     try {
+      if (hasPaymentMismatch) {
+        throw new Error("Split tender payments must equal Total Paid.");
+      }
+
+      if (hasMissingCreditCardPayment) {
+        throw new Error("Credit card payments require a selected card.");
+      }
+
+      if (hasBlankPaymentRows) {
+        throw new Error("Split tender payment rows need type and amount.");
+      }
+
       const response = await fetch(`${API_BASE_URL}/purchase-batches/`, {
         method: "POST",
         headers: {
@@ -435,7 +575,7 @@ export default function PurchaseIntakePage() {
           purchase_date: new Date(form.purchase_date).toISOString(),
           total_amount: form.total_amount || "0",
           purchase_total_paid: form.purchase_total_paid || null,
-          credit_card_id: form.credit_card_id
+          credit_card_id: !isSplitTenderEnabled && form.credit_card_id
             ? Number(form.credit_card_id)
             : null,
           financial_notes: form.financial_notes.trim() || null,
@@ -448,6 +588,7 @@ export default function PurchaseIntakePage() {
       }
 
       const purchase = (await response.json()) as PurchaseBatch;
+      await createPurchasePayments(purchase.id);
       const shouldPauseForFuelNotice = await createFuelPointEntry(purchase.id);
       await uploadReceipt(purchase.id);
 
@@ -470,11 +611,14 @@ export default function PurchaseIntakePage() {
     isLoadingStores ||
     Boolean(storesError) ||
     stores.length === 0 ||
-    hasFuelCycleMismatch;
+    hasFuelCycleMismatch ||
+    hasPaymentMismatch ||
+    hasMissingCreditCardPayment ||
+    hasBlankPaymentRows;
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950">
-      <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col">
+      <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col sm:max-w-2xl">
         <header className="pb-5">
           <p className="text-sm font-medium text-slate-500">Purchase Intake</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">
@@ -563,34 +707,231 @@ export default function PurchaseIntakePage() {
               </p>
             </label>
 
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Funding Card</span>
-              <select
-                className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                disabled={isLoadingCreditCards || Boolean(creditCardsError)}
-                onChange={(event) =>
-                  updateFormField("credit_card_id", event.target.value)
+            <section className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4">
+              <div
+                className={
+                  isSplitTenderEnabled
+                    ? "flex items-center justify-between gap-3"
+                    : "grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
                 }
-                value={form.credit_card_id}
               >
-                <option value="">
-                  {isLoadingCreditCards
-                    ? "Loading cards..."
-                    : "No funding card"}
-                </option>
-                {creditCards.map((card) => (
-                  <option key={card.id} value={card.id}>
-                    {card.nickname}
-                    {card.last_four ? ` - ${card.last_four}` : ""}
-                  </option>
-                ))}
-              </select>
-              {creditCardsError ? (
-                <p className="text-sm font-medium text-red-700">
-                  {creditCardsError}
-                </p>
+                {!isSplitTenderEnabled ? (
+                  <label className="block space-y-2 text-sm font-medium text-slate-700">
+                    <span>Funding Card</span>
+                    <select
+                      className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                      disabled={
+                        isLoadingCreditCards || Boolean(creditCardsError)
+                      }
+                      onChange={(event) =>
+                        updateFormField("credit_card_id", event.target.value)
+                      }
+                      value={form.credit_card_id}
+                    >
+                      <option value="">
+                        {isLoadingCreditCards
+                          ? "Loading cards..."
+                          : "No funding card"}
+                      </option>
+                      {creditCards.map((card) => (
+                        <option key={card.id} value={card.id}>
+                          {card.nickname}
+                          {card.last_four ? ` - ${card.last_four}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {creditCardsError ? (
+                      <p className="text-sm font-medium text-red-700">
+                        {creditCardsError}
+                      </p>
+                    ) : null}
+                  </label>
+                ) : null}
+
+                <label className="flex h-12 items-center justify-between gap-3 text-sm font-medium text-slate-700 sm:justify-end">
+                  <span>Split Tender</span>
+                  <input
+                    checked={isSplitTenderEnabled}
+                    className="h-5 w-5"
+                    onChange={(event) =>
+                      handleSplitTenderChange(event.target.checked)
+                    }
+                    type="checkbox"
+                  />
+                </label>
+              </div>
+
+              {isSplitTenderEnabled ? (
+                <div className="space-y-2">
+                  {paymentRows.map((row, index) => (
+                    <div
+                      className="rounded-md border border-slate-200 bg-white p-2.5"
+                      key={index}
+                    >
+                      <div
+                        className={`grid gap-2 sm:items-end ${
+                          row.payment_type === "CREDIT_CARD"
+                            ? "sm:grid-cols-[7rem_minmax(12rem,1fr)_7rem_auto]"
+                            : "sm:grid-cols-[8rem_7rem_auto]"
+                        }`}
+                      >
+                        <label className="block space-y-1 text-xs font-medium text-slate-600">
+                          <span>Type</span>
+                          <select
+                            className="h-10 w-full rounded-md border border-slate-300 px-2 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                            onChange={(event) =>
+                              updatePaymentRow(
+                                index,
+                                "payment_type",
+                                event.target.value,
+                              )
+                            }
+                            value={row.payment_type}
+                          >
+                            <option value="CREDIT_CARD">Credit Card</option>
+                            <option value="CASH">Cash</option>
+                            <option value="OTHER">Other</option>
+                          </select>
+                        </label>
+
+                        {row.payment_type === "CREDIT_CARD" ? (
+                          <label className="block space-y-1 text-xs font-medium text-slate-600">
+                            <span>Card</span>
+                            <select
+                              className="h-10 w-full rounded-md border border-slate-300 px-2 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                              onChange={(event) =>
+                                updatePaymentRow(
+                                  index,
+                                  "credit_card_id",
+                                  event.target.value,
+                                )
+                              }
+                              required
+                              value={row.credit_card_id}
+                            >
+                              <option value="">Select card</option>
+                              {creditCards.map((card) => (
+                                <option key={card.id} value={card.id}>
+                                  {card.nickname}
+                                  {card.last_four ? ` - ${card.last_four}` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : null}
+
+                        <label className="block space-y-1 text-xs font-medium text-slate-600">
+                          <span>Amount</span>
+                          <input
+                            className="h-10 w-full rounded-md border border-slate-300 px-2 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                            min="0"
+                            onChange={(event) =>
+                              updatePaymentRow(
+                                index,
+                                "amount",
+                                event.target.value,
+                              )
+                            }
+                            required
+                            step="0.01"
+                            type="number"
+                            value={row.amount}
+                          />
+                        </label>
+
+                        <button
+                          className="h-10 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          onClick={() => removePaymentRow(index)}
+                          type="button"
+                        >
+                          Remove
+                        </button>
+                      </div>
+
+                      <details className="mt-2 text-sm">
+                        <summary className="cursor-pointer text-xs font-medium text-slate-500 hover:text-slate-800">
+                          Notes
+                        </summary>
+                        <input
+                          className="mt-2 h-10 w-full rounded-md border border-slate-300 px-2 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                          onChange={(event) =>
+                            updatePaymentRow(index, "notes", event.target.value)
+                          }
+                          placeholder="Optional"
+                          type="text"
+                          value={row.notes}
+                        />
+                      </details>
+                    </div>
+                  ))}
+
+                  <div className="rounded-md border border-slate-200 bg-white p-3 text-sm">
+                    <dl className="grid grid-cols-3 gap-2 text-center">
+                      <div>
+                        <dt className="text-xs font-medium text-slate-500">
+                          Payments
+                        </dt>
+                        <dd className="font-semibold">
+                          ${paymentRowsTotal.toFixed(2)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs font-medium text-slate-500">
+                          Total Paid
+                        </dt>
+                        <dd className="font-semibold">
+                          $
+                          {Number.isNaN(totalPaid)
+                            ? "0.00"
+                            : totalPaid.toFixed(2)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs font-medium text-slate-500">
+                          Remaining
+                        </dt>
+                        <dd
+                          className={
+                            Math.round(paymentDifference * 100) === 0
+                              ? "font-semibold text-emerald-700"
+                              : "font-semibold text-red-700"
+                          }
+                        >
+                          ${paymentDifference.toFixed(2)}
+                        </dd>
+                      </div>
+                    </dl>
+                    {hasPaymentMismatch ? (
+                      <p className="mt-2 text-sm font-medium text-red-700">
+                        Payment rows must equal Total Paid.
+                      </p>
+                    ) : null}
+                    {hasMissingCreditCardPayment ? (
+                      <p className="mt-2 text-sm font-medium text-red-700">
+                        Credit card payment rows require a card.
+                      </p>
+                    ) : null}
+                    {hasBlankPaymentRows ? (
+                      <p className="mt-2 text-sm font-medium text-red-700">
+                        Payment rows must have an amount greater than $0.
+                      </p>
+                    ) : null}
+                  </div>
+
+                  {canAddPaymentRow ? (
+                    <div className="flex justify-end">
+                      <button
+                        className="h-10 cursor-pointer rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                        onClick={addPaymentRow}
+                        type="button"
+                      >
+                        Add Payment
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
-            </label>
+            </section>
 
             {showFuelPoints ? (
               <section className="space-y-4 rounded-md border border-slate-200 bg-slate-50 p-4">

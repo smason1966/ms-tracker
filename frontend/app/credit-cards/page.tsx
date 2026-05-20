@@ -314,7 +314,9 @@ export default function CreditCardsPage() {
                       </dd>
                     </div>
                     <div>
-                      <dt className="font-medium text-slate-500">Balance</dt>
+                      <dt className="font-medium text-slate-500">
+                        Estimated Balance
+                      </dt>
                       <dd className="font-semibold">
                         {formatAmount(card.current_balance)}
                       </dd>
@@ -410,7 +412,7 @@ export default function CreditCardsPage() {
                 ["network", "Network", "text", false],
                 ["last_four", "Last Four", "text", false],
                 ["credit_limit", "Credit Limit", "number", true],
-                ["current_balance", "Current Balance", "number", false],
+                ["current_balance", "Estimated Balance", "number", false],
                 ["statement_close_day", "Statement Close Day", "number", false],
                 ["payment_due_day", "Payment Due Day", "number", false],
                 ["signup_bonus_spend", "Signup Bonus Spend", "number", false],
@@ -429,6 +431,12 @@ export default function CreditCardsPage() {
                     type={type}
                     value={form[field]}
                   />
+                  {field === "current_balance" ? (
+                    <p className="text-xs text-slate-500">
+                      This only tracks MS Tracker purchases unless manually
+                      updated.
+                    </p>
+                  ) : null}
                 </label>
               ))}
 

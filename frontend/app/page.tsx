@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 
 import { API_BASE_URL } from "@/lib/api";
 
@@ -308,11 +309,19 @@ export default function PurchaseBatchDashboard() {
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-950 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-6xl space-y-8">
-        <header>
-          <p className="text-sm font-medium text-slate-500">Dashboard</p>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-            Purchase Batches
-          </h1>
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-slate-500">Purchases</p>
+            <h1 className="mt-1 text-3xl font-semibold tracking-tight">
+              Purchase Batches
+            </h1>
+          </div>
+          <Link
+            className="inline-flex h-10 w-fit items-center rounded-md border border-slate-300 px-4 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200"
+            href="/dashboard"
+          >
+            Dashboard
+          </Link>
         </header>
 
         <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">

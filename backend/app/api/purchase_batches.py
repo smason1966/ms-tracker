@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.credit_card import CreditCard
 from app.models.purchase_batch import PurchaseBatch
+from app.api.purchase_payments import PurchasePaymentCreate, create_purchase_payment
 from app.services.purchase_allocation import recalculate_purchase_allocation
 
 
@@ -95,11 +96,20 @@ def create_purchase_batch(payload: PurchaseBatchCreate):
             credit_card_id=payload.credit_card_id,
         )
         db.add(batch)
-        apply_credit_card_purchase_delta(
-            db,
-            payload.credit_card_id,
-            Decimal(payload.purchase_total_paid or 0),
-        )
+        db.flush()
+
+        if payload.credit_card_id and payload.purchase_total_paid:
+            create_purchase_payment(
+                db,
+                batch.id,
+                PurchasePaymentCreate(
+                    payment_type="CREDIT_CARD",
+                    credit_card_id=payload.credit_card_id,
+                    amount=payload.purchase_total_paid,
+                    notes="Created from funding card",
+                ),
+            )
+
         db.commit()
         db.refresh(batch)
         return batch
@@ -164,9 +174,6 @@ def update_purchase_batch(purchase_batch_id: int, payload: PurchaseBatchUpdate):
             raise HTTPException(status_code=404, detail="Purchase batch not found")
 
         payload_fields = get_payload_fields(payload)
-        previous_credit_card_id = batch.credit_card_id
-        previous_paid = Decimal(batch.purchase_total_paid or 0)
-
         for field in payload_fields:
             setattr(batch, field, getattr(payload, field))
 
@@ -174,20 +181,6 @@ def update_purchase_batch(purchase_batch_id: int, payload: PurchaseBatchUpdate):
 
         if "purchase_total_paid" in payload_fields:
             recalculate_purchase_allocation(db, purchase_batch_id)
-
-        new_credit_card_id = batch.credit_card_id
-        new_paid = Decimal(batch.purchase_total_paid or 0)
-
-        if (
-            "purchase_total_paid" in payload_fields
-            or "credit_card_id" in payload_fields
-        ):
-            apply_credit_card_purchase_delta(
-                db,
-                previous_credit_card_id,
-                -previous_paid,
-            )
-            apply_credit_card_purchase_delta(db, new_credit_card_id, new_paid)
 
         db.commit()
         db.refresh(batch)
