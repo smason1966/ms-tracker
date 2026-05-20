@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Integer, Numeric, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
@@ -23,6 +23,10 @@ class PurchaseBatch(Base):
     fuel_points_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     financial_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    credit_card_id: Mapped[int | None] = mapped_column(
+        ForeignKey("credit_cards.id"),
+        nullable=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

@@ -18,6 +18,7 @@ type PurchaseBatch = {
   fuel_points_notes: string | null;
   financial_notes: string | null;
   notes: string | null;
+  credit_card_id: number | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -32,6 +33,7 @@ type PurchaseBatchForm = {
   discounts: string;
   fuel_points_amount: string;
   fuel_points_unit: string;
+  credit_card_id: string;
   financial_notes: string;
   notes: string;
 };
@@ -41,6 +43,13 @@ type Store = {
   name: string;
   store_type: string | null;
   active: boolean;
+};
+
+type CreditCard = {
+  id: number;
+  nickname: string;
+  last_four: string | null;
+  is_active: boolean;
 };
 
 const API_URL = `${API_BASE_URL}/purchase-batches/`;
@@ -66,6 +75,7 @@ function createEmptyForm(): PurchaseBatchForm {
     discounts: "",
     fuel_points_amount: "",
     fuel_points_unit: "1000",
+    credit_card_id: "",
     financial_notes: "",
     notes: "",
   };
@@ -85,12 +95,15 @@ function calculateFuelPointsQuantity(amount: string, unit: string) {
 export default function PurchaseBatchDashboard() {
   const [batches, setBatches] = useState<PurchaseBatch[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
+  const [creditCards, setCreditCards] = useState<CreditCard[]>([]);
   const [form, setForm] = useState<PurchaseBatchForm>(() => createEmptyForm());
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingStores, setIsLoadingStores] = useState(true);
+  const [isLoadingCreditCards, setIsLoadingCreditCards] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [storesError, setStoresError] = useState<string | null>(null);
+  const [creditCardsError, setCreditCardsError] = useState<string | null>(null);
   const fuelPointsQuantity = calculateFuelPointsQuantity(
     form.fuel_points_amount,
     form.fuel_points_unit,
@@ -126,31 +139,42 @@ export default function PurchaseBatchDashboard() {
   useEffect(() => {
     let isMounted = true;
 
-    async function loadStores() {
+    async function loadLookups() {
       setIsLoadingStores(true);
+      setIsLoadingCreditCards(true);
       setStoresError(null);
+      setCreditCardsError(null);
 
       try {
-        const response = await fetch(STORES_URL);
+        const [storesResponse, cardsResponse] = await Promise.all([
+          fetch(STORES_URL),
+          fetch(`${API_BASE_URL}/credit-cards`),
+        ]);
 
-        if (!response.ok) {
-          throw new Error(`Failed to load stores (${response.status})`);
+        if (!storesResponse.ok) {
+          throw new Error(`Failed to load stores (${storesResponse.status})`);
         }
 
-        const data = (await response.json()) as Store[];
+        if (!cardsResponse.ok) {
+          throw new Error(`Failed to load cards (${cardsResponse.status})`);
+        }
 
         if (isMounted) {
-          setStores(data);
+          setStores((await storesResponse.json()) as Store[]);
+          const cards = (await cardsResponse.json()) as CreditCard[];
+          setCreditCards(cards.filter((card) => card.is_active));
         }
       } catch (err) {
         if (isMounted) {
-          setStoresError(
-            err instanceof Error ? err.message : "Failed to load stores.",
-          );
+          const message =
+            err instanceof Error ? err.message : "Failed to load lookups.";
+          setStoresError(message);
+          setCreditCardsError(message);
         }
       } finally {
         if (isMounted) {
           setIsLoadingStores(false);
+          setIsLoadingCreditCards(false);
         }
       }
     }
@@ -183,7 +207,7 @@ export default function PurchaseBatchDashboard() {
       }
     }
 
-    loadStores();
+    loadLookups();
     loadInitialBatches();
 
     return () => {
@@ -207,6 +231,9 @@ export default function PurchaseBatchDashboard() {
           purchase_date: new Date(form.purchase_date).toISOString(),
           total_amount: form.total_amount || "0",
           purchase_total_paid: form.purchase_total_paid,
+          credit_card_id: form.credit_card_id
+            ? Number(form.credit_card_id)
+            : null,
           sales_tax: form.sales_tax || null,
           activation_fees: form.activation_fees || null,
           discounts: form.discounts || null,
@@ -378,6 +405,35 @@ export default function PurchaseBatchDashboard() {
             </label>
 
             <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Funding Card</span>
+              <select
+                className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                disabled={isLoadingCreditCards || Boolean(creditCardsError)}
+                onChange={(event) =>
+                  updateFormField("credit_card_id", event.target.value)
+                }
+                value={form.credit_card_id}
+              >
+                <option value="">
+                  {isLoadingCreditCards
+                    ? "Loading cards..."
+                    : "No funding card"}
+                </option>
+                {creditCards.map((card) => (
+                  <option key={card.id} value={card.id}>
+                    {card.nickname}
+                    {card.last_four ? ` - ${card.last_four}` : ""}
+                  </option>
+                ))}
+              </select>
+              {creditCardsError ? (
+                <p className="text-xs font-medium text-red-700">
+                  {creditCardsError}
+                </p>
+              ) : null}
+            </label>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700">
               <span>Sales Tax</span>
               <input
                 className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
@@ -487,6 +543,7 @@ export default function PurchaseBatchDashboard() {
                   isSubmitting ||
                   isLoadingStores ||
                   Boolean(storesError) ||
+                  Boolean(creditCardsError) ||
                   stores.length === 0
                 }
               >

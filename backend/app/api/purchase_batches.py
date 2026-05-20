@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
+from app.models.credit_card import CreditCard
 from app.models.purchase_batch import PurchaseBatch
 from app.services.purchase_allocation import recalculate_purchase_allocation
 
@@ -27,6 +28,7 @@ class PurchaseBatchCreate(BaseModel):
     fuel_points_notes: str | None = None
     financial_notes: str | None = None
     notes: str | None = None
+    credit_card_id: int | None = None
 
 
 class PurchaseBatchUpdate(BaseModel):
@@ -40,6 +42,7 @@ class PurchaseBatchUpdate(BaseModel):
     fuel_points_notes: str | None = None
     financial_notes: str | None = None
     notes: str | None = None
+    credit_card_id: int | None = None
 
 
 def get_payload_fields(payload: BaseModel) -> set[str]:
@@ -50,6 +53,24 @@ def get_payload_fields(payload: BaseModel) -> set[str]:
             getattr(payload, "__fields_set__", set()),
         )
     )
+
+
+def apply_credit_card_purchase_delta(
+    db: Session,
+    credit_card_id: int | None,
+    amount: Decimal,
+) -> None:
+    if credit_card_id is None or amount == 0:
+        return
+
+    card = db.query(CreditCard).filter(CreditCard.id == credit_card_id).first()
+
+    if not card:
+        raise HTTPException(status_code=404, detail="Credit card not found")
+
+    card.current_spend_progress = Decimal(card.current_spend_progress or 0) + amount
+    card.current_balance = Decimal(card.current_balance or 0) + amount
+    card.updated_at = datetime.utcnow()
 
 
 @router.post("/")
@@ -71,8 +92,14 @@ def create_purchase_batch(payload: PurchaseBatchCreate):
             fuel_points_notes=payload.fuel_points_notes,
             financial_notes=payload.financial_notes,
             notes=payload.notes,
+            credit_card_id=payload.credit_card_id,
         )
         db.add(batch)
+        apply_credit_card_purchase_delta(
+            db,
+            payload.credit_card_id,
+            Decimal(payload.purchase_total_paid or 0),
+        )
         db.commit()
         db.refresh(batch)
         return batch
@@ -137,6 +164,8 @@ def update_purchase_batch(purchase_batch_id: int, payload: PurchaseBatchUpdate):
             raise HTTPException(status_code=404, detail="Purchase batch not found")
 
         payload_fields = get_payload_fields(payload)
+        previous_credit_card_id = batch.credit_card_id
+        previous_paid = Decimal(batch.purchase_total_paid or 0)
 
         for field in payload_fields:
             setattr(batch, field, getattr(payload, field))
@@ -145,6 +174,20 @@ def update_purchase_batch(purchase_batch_id: int, payload: PurchaseBatchUpdate):
 
         if "purchase_total_paid" in payload_fields:
             recalculate_purchase_allocation(db, purchase_batch_id)
+
+        new_credit_card_id = batch.credit_card_id
+        new_paid = Decimal(batch.purchase_total_paid or 0)
+
+        if (
+            "purchase_total_paid" in payload_fields
+            or "credit_card_id" in payload_fields
+        ):
+            apply_credit_card_purchase_delta(
+                db,
+                previous_credit_card_id,
+                -previous_paid,
+            )
+            apply_credit_card_purchase_delta(db, new_credit_card_id, new_paid)
 
         db.commit()
         db.refresh(batch)

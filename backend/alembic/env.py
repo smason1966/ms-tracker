@@ -35,6 +35,7 @@ from app.models.buyer import Buyer
 from app.models.extraction_candidate import ExtractionCandidate
 from app.models.fuel_reward_account import FuelRewardAccount
 from app.models.fuel_point_entry import FuelPointEntry
+from app.models.credit_card import CreditCard
 
 target_metadata = Base.metadata
 

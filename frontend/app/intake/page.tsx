@@ -27,6 +27,14 @@ type FuelAccount = {
   barcode_value: string | null;
 };
 
+type CreditCard = {
+  id: number;
+  nickname: string;
+  issuer: string;
+  last_four: string | null;
+  is_active: boolean;
+};
+
 type PurchaseBatch = {
   id: number;
   store_name: string;
@@ -50,6 +58,7 @@ type IntakeForm = {
   custom_fuel_multiplier: string;
   should_override_fuel_points: boolean;
   fuel_points_earned: string;
+  credit_card_id: string;
   fuel_notes: string;
   financial_notes: string;
   notes: string;
@@ -75,6 +84,7 @@ function createInitialForm(): IntakeForm {
     custom_fuel_multiplier: "",
     should_override_fuel_points: false,
     fuel_points_earned: "",
+    credit_card_id: "",
     fuel_notes: "",
     financial_notes: "",
     notes: "",
@@ -200,13 +210,16 @@ export default function PurchaseIntakePage() {
   const router = useRouter();
   const [stores, setStores] = useState<Store[]>([]);
   const [fuelAccounts, setFuelAccounts] = useState<FuelAccount[]>([]);
+  const [creditCards, setCreditCards] = useState<CreditCard[]>([]);
   const [form, setForm] = useState<IntakeForm>(() => createInitialForm());
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [isLoadingStores, setIsLoadingStores] = useState(true);
   const [isLoadingFuelAccounts, setIsLoadingFuelAccounts] = useState(true);
+  const [isLoadingCreditCards, setIsLoadingCreditCards] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [storesError, setStoresError] = useState<string | null>(null);
   const [fuelAccountsError, setFuelAccountsError] = useState<string | null>(null);
+  const [creditCardsError, setCreditCardsError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fuelTargetNotice, setFuelTargetNotice] = useState<string | null>(null);
   const [isBarcodeVisible, setIsBarcodeVisible] = useState(false);
@@ -235,12 +248,15 @@ export default function PurchaseIntakePage() {
     async function loadLookups() {
       setIsLoadingStores(true);
       setIsLoadingFuelAccounts(true);
+      setIsLoadingCreditCards(true);
       setStoresError(null);
       setFuelAccountsError(null);
+      setCreditCardsError(null);
 
-      const [storesResult, accountsResult] = await Promise.allSettled([
+      const [storesResult, accountsResult, cardsResult] = await Promise.allSettled([
         fetch(`${API_BASE_URL}/stores/`),
         fetch(`${API_BASE_URL}/fuel-accounts/active`),
+        fetch(`${API_BASE_URL}/credit-cards`),
       ]);
 
       if (!isMounted) {
@@ -261,8 +277,16 @@ export default function PurchaseIntakePage() {
         setFuelAccountsError("Failed to load fuel accounts.");
       }
 
+      if (cardsResult.status === "fulfilled" && cardsResult.value.ok) {
+        const data = (await cardsResult.value.json()) as CreditCard[];
+        setCreditCards(data.filter((card) => card.is_active));
+      } else {
+        setCreditCardsError("Failed to load funding cards.");
+      }
+
       setIsLoadingStores(false);
       setIsLoadingFuelAccounts(false);
+      setIsLoadingCreditCards(false);
     }
 
     loadLookups();
@@ -411,6 +435,9 @@ export default function PurchaseIntakePage() {
           purchase_date: new Date(form.purchase_date).toISOString(),
           total_amount: form.total_amount || "0",
           purchase_total_paid: form.purchase_total_paid || null,
+          credit_card_id: form.credit_card_id
+            ? Number(form.credit_card_id)
+            : null,
           financial_notes: form.financial_notes.trim() || null,
           notes: form.notes.trim() || null,
         }),
@@ -534,6 +561,35 @@ export default function PurchaseIntakePage() {
               <p className="text-sm text-slate-500">
                 Optional total value of cards expected in the batch.
               </p>
+            </label>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Funding Card</span>
+              <select
+                className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                disabled={isLoadingCreditCards || Boolean(creditCardsError)}
+                onChange={(event) =>
+                  updateFormField("credit_card_id", event.target.value)
+                }
+                value={form.credit_card_id}
+              >
+                <option value="">
+                  {isLoadingCreditCards
+                    ? "Loading cards..."
+                    : "No funding card"}
+                </option>
+                {creditCards.map((card) => (
+                  <option key={card.id} value={card.id}>
+                    {card.nickname}
+                    {card.last_four ? ` - ${card.last_four}` : ""}
+                  </option>
+                ))}
+              </select>
+              {creditCardsError ? (
+                <p className="text-sm font-medium text-red-700">
+                  {creditCardsError}
+                </p>
+              ) : null}
             </label>
 
             {showFuelPoints ? (
