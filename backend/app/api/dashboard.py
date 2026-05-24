@@ -1,15 +1,27 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
+from app.models.buyer import Buyer
 from app.models.credit_card import CreditCard
+from app.models.credit_card_reward_transaction import CreditCardRewardTransaction
 from app.models.fuel_point_entry import FuelPointEntry
 from app.models.fuel_reward_account import FuelRewardAccount
 from app.models.gift_card import GiftCard
+from app.models.player import Player
 from app.models.purchase_batch import PurchaseBatch
+from app.models.reward_program import RewardProgram
+from app.models.spending_category import SpendingCategory
+from app.services.operational_queues import (
+    get_awaiting_payment_sales,
+    get_purchases_needing_receipts,
+    sale_expected_payment_date,
+    sale_unpaid_expected_total,
+)
+from app.services.reward_program_defaults import ensure_default_reward_program_values
 
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -45,16 +57,112 @@ def fuel_account_points(db: Session, account_id: int, today: date) -> int:
     return sum(entry.points_earned for entry in entries)
 
 
+def get_range_start(reporting_range: str, today: date) -> date | None:
+    if reporting_range == "this_month":
+        return today.replace(day=1)
+
+    if reporting_range == "last_month":
+        first_this_month = today.replace(day=1)
+        last_month_end = first_this_month.fromordinal(first_this_month.toordinal() - 1)
+        return last_month_end.replace(day=1)
+
+    if reporting_range == "ytd":
+        return today.replace(month=1, day=1)
+
+    return None
+
+
+def get_range_end(reporting_range: str, today: date) -> date | None:
+    if reporting_range == "last_month":
+        return today.replace(day=1)
+
+    return None
+
+
+def in_range(value: datetime | date | None, start: date | None, end: date | None) -> bool:
+    if value is None:
+        return False
+
+    value_date = value.date() if isinstance(value, datetime) else value
+
+    if start is not None and value_date < start:
+        return False
+
+    if end is not None and value_date >= end:
+        return False
+
+    return True
+
+
 @router.get("/summary")
-def dashboard_summary():
+def dashboard_summary(range: str = "this_month", player_id: int | None = None):
     db: Session = SessionLocal()
     today = date.today()
+    range_start = get_range_start(range, today)
+    range_end = get_range_end(range, today)
 
     try:
-        gift_cards = db.query(GiftCard).all()
+        ensure_default_reward_program_values(db)
+        db.commit()
+
+        purchases_query = db.query(PurchaseBatch)
+        credit_cards_query = db.query(CreditCard)
+
+        if player_id is not None:
+            purchases_query = purchases_query.filter(PurchaseBatch.player_id == player_id)
+            credit_cards_query = credit_cards_query.filter(CreditCard.player_id == player_id)
+
+        purchases = purchases_query.all()
+        purchase_ids = {purchase.id for purchase in purchases}
+        gift_cards_query = db.query(GiftCard)
+
+        if player_id is not None:
+            gift_cards_query = gift_cards_query.filter(
+                GiftCard.purchase_batch_id.in_(purchase_ids or {-1})
+            )
+
+        gift_cards = gift_cards_query.all()
         fuel_accounts = db.query(FuelRewardAccount).all()
-        credit_cards = db.query(CreditCard).all()
-        purchase_count = db.query(PurchaseBatch).count()
+        credit_cards = credit_cards_query.all()
+        purchase_count = len(purchases)
+        reward_transactions_query = db.query(CreditCardRewardTransaction)
+
+        if player_id is not None:
+            reward_transactions_query = reward_transactions_query.filter(
+                CreditCardRewardTransaction.player_id == player_id
+            )
+
+        reward_transactions = reward_transactions_query.all()
+        spending_categories = {
+            category.id: category
+            for category in db.query(SpendingCategory).all()
+        }
+        reward_programs = {
+            program.id: program
+            for program in db.query(RewardProgram).all()
+        }
+        players = {
+            player.id: player
+            for player in db.query(Player).all()
+        }
+        purchases_by_id = {purchase.id: purchase for purchase in purchases}
+        buyers = db.query(Buyer).all()
+        ranged_purchases = [
+            purchase
+            for purchase in purchases
+            if in_range(purchase.purchase_date, range_start, range_end)
+        ]
+        ranged_reward_transactions = [
+            transaction
+            for transaction in reward_transactions
+            if in_range(transaction.purchase_date, range_start, range_end)
+        ]
+        ranged_settled_cards = [
+            card
+            for card in gift_cards
+            if card.status == "SETTLED"
+            and in_range(card.settlement_received_at, range_start, range_end)
+        ]
 
         available_cards = [
             card for card in gift_cards if card.status == "VERIFIED_AVAILABLE"
@@ -68,13 +176,16 @@ def dashboard_summary():
             if card.status == "SOLD_PENDING_PAYMENT"
         ]
         settled_cards = [card for card in gift_cards if card.status == "SETTLED"]
+        awaiting_payment_sales = get_awaiting_payment_sales(db)
+        overdue_payment_sales = []
 
-        overdue_payment_cards = [
-            card
-            for card in awaiting_payment_cards
-            if card.expected_payment_date is not None
-            and card.expected_payment_date < today
-        ]
+        for sale in awaiting_payment_sales:
+            expected_payment_date = sale_expected_payment_date(db, sale)
+
+            if expected_payment_date is not None and expected_payment_date < today:
+                overdue_payment_sales.append(sale)
+
+        purchases_needing_receipts = get_purchases_needing_receipts(db)
 
         fuel_points_available = 0
         fuel_accounts_near_target = []
@@ -148,8 +259,600 @@ def dashboard_summary():
             for card in settled_cards
             if card.payout_received is not None
         )
+        buyer_reports = []
+
+        for buyer in buyers:
+            buyer_cards = [card for card in gift_cards if card.buyer_id == buyer.id]
+            buyer_fuel_accounts = [
+                account for account in fuel_accounts if account.buyer_id == buyer.id
+            ]
+            buyer_awaiting_cards = [
+                card for card in buyer_cards if card.status == "SOLD_PENDING_PAYMENT"
+            ]
+            buyer_settled_cards = [
+                card for card in buyer_cards if card.status == "SETTLED"
+            ]
+            buyer_overdue_cards = [
+                card
+                for card in buyer_awaiting_cards
+                if card.expected_payment_date is not None
+                and card.expected_payment_date < today
+            ]
+            buyer_volume = (
+                sum(to_decimal(card.expected_payout) for card in buyer_cards)
+                + sum(to_decimal(account.sale_price) for account in buyer_fuel_accounts)
+            )
+            buyer_profit = sum(
+                to_decimal(card.payout_received) - to_decimal(card.acquisition_cost)
+                for card in buyer_settled_cards
+                if card.payout_received is not None
+            )
+            buyer_outstanding = sum(
+                to_decimal(card.expected_payout) for card in buyer_awaiting_cards
+            )
+
+            buyer_reports.append(
+                {
+                    "id": buyer.id,
+                    "name": buyer.name,
+                    "total_sales_volume": buyer_volume,
+                    "profit": buyer_profit,
+                    "outstanding_payouts": buyer_outstanding,
+                    "overdue_count": len(buyer_overdue_cards),
+                }
+            )
+
+        top_buyer_by_volume = max(
+            buyer_reports,
+            key=lambda report: to_decimal(report["total_sales_volume"]),
+            default=None,
+        )
+        highest_profit_buyer = max(
+            buyer_reports,
+            key=lambda report: to_decimal(report["profit"]),
+            default=None,
+        )
+        rewards_by_type: dict[str, Decimal] = {}
+        rewards_by_program: dict[str, dict] = {}
+        rewards_by_card: dict[int, dict] = {}
+        rewards_by_category: dict[int, dict] = {}
+        rewards_by_player: dict[int | str, dict] = {}
+        rewards_by_issuer: dict[str, dict] = {}
+        rewards_by_store: dict[str, dict] = {}
+        rewards_by_month: dict[str, dict] = {}
+        reward_program_drilldowns: dict[str, dict] = {}
+        fuel_points_earned = Decimal("0")
+
+        for transaction in ranged_reward_transactions:
+            program = reward_programs.get(transaction.reward_program_id)
+            rewards_type = program.short_code if program else "OTHER"
+            rewards_by_type[rewards_type] = (
+                rewards_by_type.get(rewards_type, Decimal("0"))
+                + to_decimal(transaction.rewards_earned)
+            )
+            program_key = (
+                program.short_code if program else rewards_type
+            )
+            program_metric = rewards_by_program.setdefault(
+                program_key,
+                {
+                    "reward_program_id": program.id if program else None,
+                    "name": program.name if program else rewards_type,
+                    "short_code": program.short_code if program else rewards_type,
+                    "category": program.category if program else "Other",
+                    "estimated_value_cents_per_point": (
+                        program.estimated_value_cents_per_point if program else None
+                    ),
+                    "estimated_rewards_earned": Decimal("0"),
+                    "estimated_value": Decimal("0"),
+                },
+            )
+            reward_amount = to_decimal(transaction.rewards_earned)
+            qualifying_spend = to_decimal(transaction.qualifying_spend)
+            estimated_value = Decimal("0")
+            if program and program.estimated_value_cents_per_point is not None:
+                estimated_value = (
+                    reward_amount
+                    * to_decimal(program.estimated_value_cents_per_point)
+                    / Decimal("100")
+                )
+            program_drilldown = reward_program_drilldowns.setdefault(
+                program_key,
+                {
+                    "reward_program_id": program.id if program else None,
+                    "name": program.name if program else rewards_type,
+                    "short_code": program.short_code if program else rewards_type,
+                    "category": program.category if program else "Other",
+                    "cards": {},
+                    "purchases": [],
+                    "categories": {},
+                    "months": {},
+                    "players": {},
+                },
+            )
+            program_metric["estimated_rewards_earned"] += reward_amount
+            program_metric["estimated_value"] += estimated_value
+
+            card = None
+            if transaction.credit_card_id is not None:
+                card = next(
+                    (
+                        credit_card
+                        for credit_card in credit_cards
+                        if credit_card.id == transaction.credit_card_id
+                    ),
+                    None,
+                )
+                card_metric = rewards_by_card.setdefault(
+                    transaction.credit_card_id,
+                    {
+                        "credit_card_id": transaction.credit_card_id,
+                        "nickname": card.nickname if card else "Unknown Card",
+                        "issuer": card.issuer if card else "Unknown Issuer",
+                        "player_id": card.player_id if card else None,
+                        "player_label": (
+                            players.get(card.player_id).label
+                            if card and card.player_id in players
+                            else None
+                        ),
+                        "rewards_type": rewards_type,
+                        "estimated_rewards_earned": Decimal("0"),
+                        "qualifying_spend": Decimal("0"),
+                        "estimated_value": Decimal("0"),
+                    },
+                )
+                card_metric["estimated_rewards_earned"] += reward_amount
+                card_metric["qualifying_spend"] += qualifying_spend
+                card_metric["estimated_value"] += estimated_value
+                program_card_metric = program_drilldown["cards"].setdefault(
+                    transaction.credit_card_id,
+                    {
+                        "credit_card_id": transaction.credit_card_id,
+                        "nickname": card.nickname if card else "Unknown Card",
+                        "issuer": card.issuer if card else "Unknown Issuer",
+                        "player_label": (
+                            players.get(card.player_id).label
+                            if card and card.player_id in players
+                            else None
+                        ),
+                        "qualifying_spend": Decimal("0"),
+                        "estimated_rewards_earned": Decimal("0"),
+                        "estimated_value": Decimal("0"),
+                    },
+                )
+                program_card_metric["qualifying_spend"] += qualifying_spend
+                program_card_metric["estimated_rewards_earned"] += reward_amount
+                program_card_metric["estimated_value"] += estimated_value
+
+                issuer_name = card.issuer if card else "Unknown Issuer"
+                issuer_metric = rewards_by_issuer.setdefault(
+                    issuer_name,
+                    {
+                        "issuer": issuer_name,
+                        "estimated_rewards_earned": Decimal("0"),
+                        "qualifying_spend": Decimal("0"),
+                        "estimated_value": Decimal("0"),
+                    },
+                )
+                issuer_metric["estimated_rewards_earned"] += reward_amount
+                issuer_metric["qualifying_spend"] += qualifying_spend
+                issuer_metric["estimated_value"] += estimated_value
+
+            if transaction.spending_category_id is not None:
+                category = spending_categories.get(transaction.spending_category_id)
+                category_metric = rewards_by_category.setdefault(
+                    transaction.spending_category_id,
+                    {
+                        "spending_category_id": transaction.spending_category_id,
+                        "key": category.key if category else "unknown",
+                        "name": category.name if category else "Unknown",
+                        "estimated_rewards_earned": Decimal("0"),
+                        "qualifying_spend": Decimal("0"),
+                        "estimated_value": Decimal("0"),
+                    },
+                )
+                category_metric["estimated_rewards_earned"] += reward_amount
+                category_metric["qualifying_spend"] += qualifying_spend
+                category_metric["estimated_value"] += estimated_value
+                program_category_metric = program_drilldown["categories"].setdefault(
+                    transaction.spending_category_id,
+                    {
+                        "spending_category_id": transaction.spending_category_id,
+                        "key": category.key if category else "unknown",
+                        "name": category.name if category else "Unknown",
+                        "qualifying_spend": Decimal("0"),
+                        "estimated_rewards_earned": Decimal("0"),
+                        "estimated_value": Decimal("0"),
+                    },
+                )
+                program_category_metric["qualifying_spend"] += qualifying_spend
+                program_category_metric["estimated_rewards_earned"] += reward_amount
+                program_category_metric["estimated_value"] += estimated_value
+
+            player_key: int | str = transaction.player_id or "unassigned"
+            player = players.get(transaction.player_id) if transaction.player_id else None
+            player_metric = rewards_by_player.setdefault(
+                player_key,
+                {
+                    "player_id": transaction.player_id,
+                    "label": player.label if player else "Unassigned",
+                    "name": player.name if player else None,
+                    "estimated_rewards_earned": Decimal("0"),
+                    "qualifying_spend": Decimal("0"),
+                    "estimated_value": Decimal("0"),
+                },
+            )
+            player_metric["estimated_rewards_earned"] += reward_amount
+            player_metric["qualifying_spend"] += qualifying_spend
+            player_metric["estimated_value"] += estimated_value
+            program_player_metric = program_drilldown["players"].setdefault(
+                player_key,
+                {
+                    "player_id": transaction.player_id,
+                    "label": player.label if player else "Unassigned",
+                    "name": player.name if player else None,
+                    "qualifying_spend": Decimal("0"),
+                    "estimated_rewards_earned": Decimal("0"),
+                    "estimated_value": Decimal("0"),
+                },
+            )
+            program_player_metric["qualifying_spend"] += qualifying_spend
+            program_player_metric["estimated_rewards_earned"] += reward_amount
+            program_player_metric["estimated_value"] += estimated_value
+
+            purchase = purchases_by_id.get(transaction.purchase_id)
+            store_name = purchase.store_name if purchase else "Unknown Store"
+            store_metric = rewards_by_store.setdefault(
+                store_name,
+                {
+                    "store_name": store_name,
+                    "estimated_rewards_earned": Decimal("0"),
+                    "qualifying_spend": Decimal("0"),
+                    "estimated_value": Decimal("0"),
+                },
+            )
+            store_metric["estimated_rewards_earned"] += reward_amount
+            store_metric["qualifying_spend"] += qualifying_spend
+            store_metric["estimated_value"] += estimated_value
+
+            month_key = transaction.purchase_date.strftime("%Y-%m")
+            month_metric = rewards_by_month.setdefault(
+                month_key,
+                {
+                    "month": month_key,
+                    "estimated_rewards_earned": Decimal("0"),
+                    "qualifying_spend": Decimal("0"),
+                    "estimated_value": Decimal("0"),
+                },
+            )
+            month_metric["estimated_rewards_earned"] += reward_amount
+            month_metric["qualifying_spend"] += qualifying_spend
+            month_metric["estimated_value"] += estimated_value
+            program_month_metric = program_drilldown["months"].setdefault(
+                month_key,
+                {
+                    "month": month_key,
+                    "qualifying_spend": Decimal("0"),
+                    "estimated_rewards_earned": Decimal("0"),
+                    "estimated_value": Decimal("0"),
+                },
+            )
+            program_month_metric["qualifying_spend"] += qualifying_spend
+            program_month_metric["estimated_rewards_earned"] += reward_amount
+            program_month_metric["estimated_value"] += estimated_value
+            program_drilldown["purchases"].append(
+                {
+                    "purchase_id": transaction.purchase_id,
+                    "store_name": store_name,
+                    "purchase_date": transaction.purchase_date,
+                    "qualifying_spend": qualifying_spend,
+                    "multiplier": transaction.multiplier,
+                    "rewards_earned": reward_amount,
+                    "estimated_value": estimated_value,
+                    "credit_card_id": transaction.credit_card_id,
+                    "credit_card_nickname": (
+                        card.nickname
+                        if transaction.credit_card_id is not None and card
+                        else None
+                    ),
+                    "player_id": transaction.player_id,
+                    "player_label": player.label if player else None,
+                    "player_name": player.name if player else None,
+                    "spending_category_id": transaction.spending_category_id,
+                    "spending_category_name": (
+                        spending_categories.get(transaction.spending_category_id).name
+                        if transaction.spending_category_id in spending_categories
+                        else None
+                    ),
+                    "reward_program_id": program.id if program else None,
+                    "reward_program_name": program.name if program else rewards_type,
+                    "reward_program_short_code": (
+                        program.short_code if program else rewards_type
+                    ),
+                    "calculation_source": transaction.calculation_source,
+                }
+            )
+
+        kroger_fuel_program = next(
+            (
+                program
+                for program in reward_programs.values()
+                if program.short_code == "KROGER_FUEL"
+            ),
+            None,
+        )
+        ranged_fuel_entries = [
+            entry
+            for entry in db.query(FuelPointEntry).all()
+            if in_range(entry.earned_date, range_start, range_end)
+            and (
+                player_id is None
+                or entry.purchase_batch_id in purchase_ids
+            )
+        ]
+
+        if kroger_fuel_program and ranged_fuel_entries:
+            fuel_metric = rewards_by_program.setdefault(
+                kroger_fuel_program.short_code,
+                {
+                    "reward_program_id": kroger_fuel_program.id,
+                    "name": kroger_fuel_program.name,
+                    "short_code": kroger_fuel_program.short_code,
+                    "category": kroger_fuel_program.category,
+                    "estimated_value_cents_per_point": (
+                        kroger_fuel_program.estimated_value_cents_per_point
+                    ),
+                    "estimated_rewards_earned": Decimal("0"),
+                    "estimated_value": Decimal("0"),
+                },
+            )
+            fuel_points = sum(
+                Decimal(entry.points_earned) for entry in ranged_fuel_entries
+            )
+            fuel_points_earned = fuel_points
+            fuel_metric["estimated_rewards_earned"] += fuel_points
+            if kroger_fuel_program.estimated_value_cents_per_point is not None:
+                fuel_metric["estimated_value"] += (
+                    fuel_points
+                    * to_decimal(kroger_fuel_program.estimated_value_cents_per_point)
+                    / Decimal("100")
+                )
+            fuel_drilldown = reward_program_drilldowns.setdefault(
+                kroger_fuel_program.short_code,
+                {
+                    "reward_program_id": kroger_fuel_program.id,
+                    "name": kroger_fuel_program.name,
+                    "short_code": kroger_fuel_program.short_code,
+                    "category": kroger_fuel_program.category,
+                    "cards": {},
+                    "purchases": [],
+                    "categories": {},
+                    "months": {},
+                    "players": {},
+                },
+            )
+
+            for entry in ranged_fuel_entries:
+                purchase = purchases_by_id.get(entry.purchase_batch_id)
+                month_key = entry.earned_date.strftime("%Y-%m")
+                entry_rewards = Decimal(entry.points_earned)
+                entry_estimated_value = Decimal("0")
+                if kroger_fuel_program.estimated_value_cents_per_point is not None:
+                    entry_estimated_value = (
+                        entry_rewards
+                        * to_decimal(kroger_fuel_program.estimated_value_cents_per_point)
+                        / Decimal("100")
+                    )
+                fuel_month_metric = fuel_drilldown["months"].setdefault(
+                    month_key,
+                    {
+                        "month": month_key,
+                        "qualifying_spend": Decimal("0"),
+                        "estimated_rewards_earned": Decimal("0"),
+                        "estimated_value": Decimal("0"),
+                    },
+                )
+                fuel_month_metric["estimated_rewards_earned"] += entry_rewards
+                fuel_month_metric["estimated_value"] += entry_estimated_value
+                fuel_drilldown["purchases"].append(
+                    {
+                        "purchase_id": entry.purchase_batch_id,
+                        "store_name": purchase.store_name if purchase else "Fuel Entry",
+                        "purchase_date": entry.earned_date,
+                        "qualifying_spend": to_decimal(entry.qualifying_spend),
+                        "multiplier": entry.multiplier,
+                        "rewards_earned": entry_rewards,
+                        "estimated_value": entry_estimated_value,
+                        "credit_card_id": None,
+                        "credit_card_nickname": None,
+                        "player_id": None,
+                        "player_label": None,
+                        "player_name": None,
+                        "spending_category_id": None,
+                        "spending_category_name": "Fuel Rewards",
+                        "reward_program_id": kroger_fuel_program.id,
+                        "reward_program_name": kroger_fuel_program.name,
+                        "reward_program_short_code": kroger_fuel_program.short_code,
+                        "calculation_source": entry.entry_type or "fuel_points",
+                    }
+                )
+
+        serialized_program_drilldowns = []
+
+        for program_key, drilldown in reward_program_drilldowns.items():
+            serialized_program_drilldowns.append(
+                {
+                    "reward_program_id": drilldown["reward_program_id"],
+                    "name": drilldown["name"],
+                    "short_code": drilldown["short_code"],
+                    "category": drilldown["category"],
+                    "cards": sorted(
+                        drilldown["cards"].values(),
+                        key=lambda metric: metric["estimated_rewards_earned"],
+                        reverse=True,
+                    ),
+                    "purchases": sorted(
+                        drilldown["purchases"],
+                        key=lambda purchase: purchase["purchase_date"] or date.min,
+                        reverse=True,
+                    )[:50],
+                    "categories": sorted(
+                        drilldown["categories"].values(),
+                        key=lambda metric: metric["estimated_rewards_earned"],
+                        reverse=True,
+                    ),
+                    "months": sorted(
+                        drilldown["months"].values(),
+                        key=lambda metric: metric["month"],
+                        reverse=True,
+                    ),
+                    "players": sorted(
+                        drilldown["players"].values(),
+                        key=lambda metric: metric["estimated_rewards_earned"],
+                        reverse=True,
+                    ),
+                }
+            )
+
+        active_signup_bonuses = []
+        signup_bonuses_earned = Decimal("0")
+
+        for card in active_credit_cards:
+            required_spend = to_decimal(card.signup_bonus_spend)
+
+            if required_spend <= 0:
+                continue
+
+            current_progress = to_decimal(card.current_spend_progress)
+            remaining_spend = max(Decimal("0"), required_spend - current_progress)
+            progress_percent = (
+                (current_progress / required_spend) * Decimal("100")
+                if required_spend > 0
+                else Decimal("0")
+            )
+            is_completed = current_progress >= required_spend
+
+            if is_completed:
+                signup_bonuses_earned += Decimal(card.signup_bonus_points or 0)
+            elif (
+                card.signup_bonus_deadline is None
+                or card.signup_bonus_deadline >= today
+            ):
+                active_signup_bonuses.append(
+                    {
+                        "credit_card_id": card.id,
+                        "nickname": card.nickname,
+                        "issuer": card.issuer,
+                        "player_id": card.player_id,
+                        "player_label": (
+                            players.get(card.player_id).label
+                            if card.player_id in players
+                            else None
+                        ),
+                        "required_spend": required_spend,
+                        "current_progress": current_progress,
+                        "remaining_spend": remaining_spend,
+                        "deadline": card.signup_bonus_deadline,
+                        "progress_percent": min(progress_percent, Decimal("100")),
+                        "signup_bonus_points": card.signup_bonus_points or 0,
+                    }
+                )
+
+        for metric in rewards_by_card.values():
+            spend = to_decimal(metric["qualifying_spend"])
+            metric["effective_multiplier"] = (
+                to_decimal(metric["estimated_rewards_earned"]) / spend
+                if spend > 0
+                else Decimal("0")
+            )
+
+        for metric in rewards_by_issuer.values():
+            spend = to_decimal(metric["qualifying_spend"])
+            metric["effective_multiplier"] = (
+                to_decimal(metric["estimated_rewards_earned"]) / spend
+                if spend > 0
+                else Decimal("0")
+            )
 
         return {
+            "reporting_range": range,
+            "reporting_range_start": range_start,
+            "reporting_range_end": range_end,
+            "range_total_purchases": sum(
+                to_decimal(purchase.purchase_total_paid)
+                for purchase in ranged_purchases
+            ),
+            "range_total_sales": sum(
+                to_decimal(card.payout_received)
+                for card in ranged_settled_cards
+                if card.payout_received is not None
+            ),
+            "range_profit": sum(
+                to_decimal(card.payout_received) - to_decimal(card.acquisition_cost)
+                for card in ranged_settled_cards
+                if card.payout_received is not None
+            ),
+            "rewards_by_type": [
+                {"rewards_type": key, "estimated_rewards_earned": value}
+                for key, value in sorted(rewards_by_type.items())
+            ],
+            "rewards_by_program": sorted(
+                rewards_by_program.values(),
+                key=lambda metric: metric["estimated_rewards_earned"],
+                reverse=True,
+            ),
+            "reward_program_drilldowns": sorted(
+                serialized_program_drilldowns,
+                key=lambda metric: next(
+                    (
+                        program_metric["estimated_rewards_earned"]
+                        for program_metric in rewards_by_program.values()
+                        if program_metric["short_code"] == metric["short_code"]
+                    ),
+                    Decimal("0"),
+                ),
+                reverse=True,
+            ),
+            "rewards_by_card": sorted(
+                rewards_by_card.values(),
+                key=lambda metric: metric["estimated_rewards_earned"],
+                reverse=True,
+            ),
+            "rewards_by_issuer": sorted(
+                rewards_by_issuer.values(),
+                key=lambda metric: metric["estimated_rewards_earned"],
+                reverse=True,
+            ),
+            "rewards_by_category": sorted(
+                rewards_by_category.values(),
+                key=lambda metric: metric["estimated_rewards_earned"],
+                reverse=True,
+            ),
+            "rewards_by_player": sorted(
+                rewards_by_player.values(),
+                key=lambda metric: metric["estimated_rewards_earned"],
+                reverse=True,
+            ),
+            "rewards_by_store": sorted(
+                rewards_by_store.values(),
+                key=lambda metric: metric["estimated_rewards_earned"],
+                reverse=True,
+            ),
+            "rewards_by_month": sorted(
+                rewards_by_month.values(),
+                key=lambda metric: metric["month"],
+                reverse=True,
+            ),
+            "pending_rewards": Decimal("0"),
+            "fuel_points_earned": fuel_points_earned,
+            "signup_bonuses_earned": signup_bonuses_earned,
+            "active_signup_bonuses": sorted(
+                active_signup_bonuses,
+                key=lambda bonus: (
+                    bonus["deadline"] is None,
+                    bonus["deadline"] or date.max,
+                ),
+            ),
             "total_available_inventory_face_value": sum(
                 to_decimal(card.face_value) for card in available_cards
             ),
@@ -170,7 +873,8 @@ def dashboard_summary():
             ),
             "pending_verification_count": len(pending_verification_cards),
             "awaiting_payment_total": sum(
-                to_decimal(card.expected_payout) for card in awaiting_payment_cards
+                sale_unpaid_expected_total(db, sale)
+                for sale in awaiting_payment_sales
             ),
             "awaiting_payment_expected_profit": sum(
                 to_decimal(card.expected_payout) - to_decimal(card.acquisition_cost)
@@ -180,8 +884,9 @@ def dashboard_summary():
             "settled_revenue": settled_revenue,
             "realized_profit": realized_profit,
             "unsold_inventory_count": len(available_cards),
-            "awaiting_payment_count": len(awaiting_payment_cards),
-            "overdue_payment_count": len(overdue_payment_cards),
+            "awaiting_payment_count": len(awaiting_payment_sales),
+            "overdue_payment_count": len(overdue_payment_sales),
+            "purchases_needing_receipts_count": len(purchases_needing_receipts),
             "fuel_points_available": fuel_points_available,
             "fuel_accounts_near_target": len(fuel_accounts_near_target),
             "credit_card_estimated_balances": sum(
@@ -189,16 +894,28 @@ def dashboard_summary():
             ),
             "credit_card_utilization_warnings": len(high_utilization_cards),
             "purchase_batch_count": purchase_count,
+            "top_buyer_by_volume": top_buyer_by_volume,
+            "highest_profit_buyer": highest_profit_buyer,
+            "overdue_buyers": [
+                report for report in buyer_reports if report["overdue_count"] > 0
+            ],
             "warnings": {
                 "overdue_payments": [
                     {
-                        "id": card.id,
-                        "brand": card.brand,
-                        "buyer_name": card.sold_to,
-                        "expected_payout": card.expected_payout,
-                        "expected_payment_date": card.expected_payment_date,
+                        "id": sale.id,
+                        "brand": f"Sale #{sale.id}",
+                        "buyer_name": next(
+                            (
+                                buyer.name
+                                for buyer in buyers
+                                if buyer.id == sale.buyer_id
+                            ),
+                            None,
+                        ),
+                        "expected_payout": sale_unpaid_expected_total(db, sale),
+                        "expected_payment_date": sale_expected_payment_date(db, sale),
                     }
-                    for card in overdue_payment_cards[:10]
+                    for sale in overdue_payment_sales[:10]
                 ],
                 "fuel_accounts_near_target": fuel_accounts_near_target[:10],
                 "fuel_accounts_near_expiration": fuel_accounts_near_expiration[:10],

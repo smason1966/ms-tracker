@@ -1,8 +1,14 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #070b12;
+  --foreground: #e5edf7;
+  --panel: rgba(15, 23, 42, 0.82);
+  --panel-strong: rgba(15, 23, 42, 0.95);
+  --panel-soft: rgba(30, 41, 59, 0.58);
+  --border-soft: rgba(148, 163, 184, 0.18);
+  --text-muted: #94a3b8;
+  --text-soft: #cbd5e1;
 }
 
 @theme inline {
@@ -12,17 +18,15 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+html,
+body {
+  min-height: 100%;
 }
 
 button,
@@ -52,4 +56,239 @@ a[href]:active,
 summary:active,
 label:has(input[type="file"]:not(:disabled)):active {
   transform: translateY(1px);
+}
+
+.modal-backdrop {
+  background: rgba(0, 0, 0, 0.82) !important;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.modal-backdrop > * {
+  animation: modal-enter 150ms ease-out;
+  background-color: #0f172a !important;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.58) !important;
+}
+
+@keyframes modal-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+[data-app-shell] main.bg-slate-50,
+[data-app-shell] main.bg-gray-50,
+[data-app-shell] main.bg-zinc-50,
+[data-app-shell] main.bg-slate-100,
+[data-app-shell] main.bg-gray-100,
+[data-app-shell] .bg-slate-50 {
+  background-color: transparent !important;
+}
+
+[data-app-shell] .bg-white,
+[data-app-shell] .bg-gray-50,
+[data-app-shell] .bg-zinc-50 {
+  background-color: var(--panel) !important;
+}
+
+[data-app-shell] .bg-slate-100,
+[data-app-shell] .bg-gray-100,
+[data-app-shell] .bg-zinc-100 {
+  background-color: rgba(30, 41, 59, 0.9) !important;
+}
+
+[data-app-shell] .bg-slate-900,
+[data-app-shell] .bg-slate-950 {
+  background-color: rgba(2, 6, 23, 0.92) !important;
+  color: #f8fafc !important;
+}
+
+[data-app-shell] .bg-slate-900.text-white,
+[data-app-shell] .bg-slate-950.text-white {
+  color: #f8fafc !important;
+}
+
+[data-app-shell] .bg-slate-800,
+[data-app-shell] .bg-slate-700 {
+  background-color: rgba(51, 65, 85, 0.95) !important;
+}
+
+[data-app-shell] .hover\:bg-slate-50:hover,
+[data-app-shell] .hover\:bg-slate-100:hover,
+[data-app-shell] .hover\:bg-gray-50:hover,
+[data-app-shell] .hover\:bg-gray-100:hover,
+[data-app-shell] .hover\:bg-zinc-50:hover,
+[data-app-shell] .hover\:bg-zinc-100:hover {
+  background-color: rgba(51, 65, 85, 0.74) !important;
+}
+
+[data-app-shell] .border-slate-200,
+[data-app-shell] .border-slate-300,
+[data-app-shell] .border-gray-200,
+[data-app-shell] .border-gray-300,
+[data-app-shell] .border-zinc-200,
+[data-app-shell] .border-zinc-300 {
+  border-color: var(--border-soft) !important;
+}
+
+[data-app-shell] .divide-slate-200 > :not(:last-child),
+[data-app-shell] .divide-gray-200 > :not(:last-child),
+[data-app-shell] .divide-zinc-200 > :not(:last-child) {
+  border-color: var(--border-soft) !important;
+}
+
+[data-app-shell] .text-slate-950,
+[data-app-shell] .text-slate-900,
+[data-app-shell] .text-slate-800,
+[data-app-shell] .text-gray-950,
+[data-app-shell] .text-gray-900,
+[data-app-shell] .text-gray-800,
+[data-app-shell] .text-zinc-950,
+[data-app-shell] .text-zinc-900,
+[data-app-shell] .text-zinc-800 {
+  color: #f8fafc !important;
+}
+
+[data-app-shell] .text-slate-700,
+[data-app-shell] .text-slate-600,
+[data-app-shell] .text-gray-700,
+[data-app-shell] .text-gray-600,
+[data-app-shell] .text-zinc-700,
+[data-app-shell] .text-zinc-600 {
+  color: var(--text-soft) !important;
+}
+
+[data-app-shell] .text-slate-500,
+[data-app-shell] .text-gray-500,
+[data-app-shell] .text-zinc-500 {
+  color: var(--text-muted) !important;
+}
+
+[data-app-shell] .text-slate-400,
+[data-app-shell] .text-gray-400,
+[data-app-shell] .text-zinc-400 {
+  color: #94a3b8 !important;
+}
+
+[data-app-shell] .shadow-sm,
+[data-app-shell] .shadow-md,
+[data-app-shell] .shadow-xl {
+  box-shadow: 0 20px 55px rgba(0, 0, 0, 0.22) !important;
+}
+
+[data-app-shell] section.rounded-lg,
+[data-app-shell] article.rounded-lg,
+[data-app-shell] div.rounded-lg {
+  border-radius: 1rem;
+}
+
+[data-app-shell] table {
+  color: #e5edf7;
+}
+
+[data-app-shell] thead {
+  background-color: rgba(15, 23, 42, 0.95) !important;
+}
+
+[data-app-shell] tbody tr:hover {
+  background-color: rgba(51, 65, 85, 0.32);
+}
+
+[data-app-shell] input,
+[data-app-shell] select,
+[data-app-shell] textarea {
+  background-color: rgba(2, 6, 23, 0.72) !important;
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  color: #f8fafc !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+[data-app-shell] input::placeholder,
+[data-app-shell] textarea::placeholder {
+  color: #64748b !important;
+}
+
+[data-app-shell] input:focus,
+[data-app-shell] select:focus,
+[data-app-shell] textarea:focus {
+  border-color: rgba(34, 211, 238, 0.82) !important;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.14) !important;
+}
+
+[data-app-shell] code {
+  color: #dbeafe;
+}
+
+[data-app-shell] .bg-emerald-50,
+[data-app-shell] .bg-emerald-100 {
+  background-color: rgba(6, 78, 59, 0.28) !important;
+}
+
+[data-app-shell] .text-emerald-800,
+[data-app-shell] .text-emerald-900 {
+  color: #a7f3d0 !important;
+}
+
+[data-app-shell] .border-emerald-200 {
+  border-color: rgba(16, 185, 129, 0.32) !important;
+}
+
+[data-app-shell] .bg-yellow-50,
+[data-app-shell] .bg-yellow-100 {
+  background-color: rgba(113, 63, 18, 0.28) !important;
+}
+
+[data-app-shell] .text-yellow-800,
+[data-app-shell] .text-yellow-900 {
+  color: #fde68a !important;
+}
+
+[data-app-shell] .border-yellow-200 {
+  border-color: rgba(245, 158, 11, 0.34) !important;
+}
+
+[data-app-shell] .bg-red-50,
+[data-app-shell] .bg-red-100 {
+  background-color: rgba(127, 29, 29, 0.32) !important;
+}
+
+[data-app-shell] .text-red-800,
+[data-app-shell] .text-red-900 {
+  color: #fecaca !important;
+}
+
+[data-app-shell] .border-red-200 {
+  border-color: rgba(248, 113, 113, 0.35) !important;
+}
+
+[data-app-shell] .bg-blue-50,
+[data-app-shell] .bg-blue-100 {
+  background-color: rgba(30, 64, 175, 0.22) !important;
+}
+
+[data-app-shell] .text-blue-800,
+[data-app-shell] .text-blue-900 {
+  color: #bfdbfe !important;
+}
+
+[data-app-shell] .modal-backdrop {
+  background: rgba(0, 0, 0, 0.84) !important;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+[data-app-shell] .modal-backdrop > .bg-white,
+[data-app-shell] .modal-backdrop > form.bg-white,
+[data-app-shell] .modal-backdrop > div.bg-white {
+  background-color: #0f172a !important;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.62) !important;
 }

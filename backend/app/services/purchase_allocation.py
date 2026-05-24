@@ -8,6 +8,7 @@ from app.models.purchase_batch import PurchaseBatch
 
 
 CENT = Decimal("0.01")
+FINANCIALLY_INACTIVE_CARD_STATUSES = {"VOID", "VOIDED", "ARCHIVED"}
 
 
 def to_decimal(value) -> Decimal:
@@ -37,6 +38,7 @@ def recalculate_purchase_allocation(db: Session, purchase_batch_id: int):
     cards = (
         db.query(GiftCard)
         .filter(GiftCard.purchase_batch_id == purchase_batch_id)
+        .filter(~GiftCard.status.in_(FINANCIALLY_INACTIVE_CARD_STATUSES))
         .order_by(GiftCard.id.asc())
         .all()
     )

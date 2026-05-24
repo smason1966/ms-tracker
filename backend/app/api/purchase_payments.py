@@ -9,6 +9,11 @@ from app.db.session import SessionLocal
 from app.models.credit_card import CreditCard
 from app.models.purchase_batch import PurchaseBatch
 from app.models.purchase_payment import PurchasePayment
+from app.services.credit_card_rewards import (
+    get_purchase_spending_category_id,
+    resolve_reward_for_purchase_payment,
+    sync_automatic_reward_transactions,
+)
 
 
 router = APIRouter(tags=["purchase-payments"])
@@ -20,7 +25,15 @@ class PurchasePaymentCreate(BaseModel):
     payment_type: str
     credit_card_id: int | None = None
     amount: Decimal
+    spending_category_id: int | None = None
+    reward_multiplier: Decimal | None = None
+    estimated_rewards_earned: Decimal | None = None
+    rewards_type: str | None = None
     notes: str | None = None
+
+
+class PurchasePaymentsReplace(BaseModel):
+    payments: list[PurchasePaymentCreate]
 
 
 def normalize_payment_type(value: str) -> str:
@@ -57,6 +70,50 @@ def apply_credit_card_payment_delta(
     card.updated_at = datetime.utcnow()
 
 
+def calculate_reward_estimate(
+    db: Session,
+    purchase: PurchaseBatch,
+    payload: PurchasePaymentCreate,
+) -> tuple[int | None, Decimal | None, Decimal | None, str | None, int | None, str | None, str | None]:
+    if payload.payment_type.strip().upper() != "CREDIT_CARD" or not payload.credit_card_id:
+        return payload.spending_category_id, None, None, payload.rewards_type, None, None, None
+
+    card = db.query(CreditCard).filter(CreditCard.id == payload.credit_card_id).first()
+
+    if not card:
+        raise HTTPException(status_code=404, detail="Credit card not found")
+
+    spending_category_id = (
+        payload.spending_category_id or get_purchase_spending_category_id(db, purchase)
+    )
+    resolution = resolve_reward_for_purchase_payment(
+        db,
+        purchase=purchase,
+        card=card,
+        spending_category_id=spending_category_id,
+        manual_multiplier=payload.reward_multiplier,
+    )
+    multiplier = Decimal(resolution["final_multiplier"])
+    reward_program_id = resolution["reward_program_id"]
+    calculation_source = resolution["calculation_source"]
+
+    estimated_rewards = (
+        payload.estimated_rewards_earned
+        if payload.estimated_rewards_earned is not None
+        else Decimal(payload.amount) * multiplier
+    )
+
+    return (
+        spending_category_id,
+        multiplier,
+        estimated_rewards,
+        payload.rewards_type or card.rewards_type,
+        reward_program_id,
+        calculation_source,
+        card.nickname,
+    )
+
+
 def create_purchase_payment(
     db: Session,
     purchase_batch_id: int,
@@ -82,11 +139,30 @@ def create_purchase_payment(
     if not purchase:
         raise HTTPException(status_code=404, detail="Purchase batch not found")
 
+    (
+        spending_category_id,
+        reward_multiplier,
+        estimated_rewards_earned,
+        rewards_type,
+        reward_program_id,
+        calculation_source,
+        product_snapshot,
+    ) = calculate_reward_estimate(db, purchase, payload)
+
     payment = PurchasePayment(
         purchase_batch_id=purchase_batch_id,
         payment_type=payment_type,
         credit_card_id=payload.credit_card_id,
+        spending_category_id=spending_category_id,
+        reward_program_id=reward_program_id,
         amount=payload.amount,
+        reward_multiplier=reward_multiplier,
+        estimated_rewards_earned=estimated_rewards_earned,
+        applied_multiplier=reward_multiplier,
+        calculated_rewards=estimated_rewards_earned,
+        calculation_source=calculation_source,
+        credit_card_product_snapshot=product_snapshot,
+        rewards_type=rewards_type,
         notes=payload.notes,
     )
 
@@ -125,6 +201,7 @@ def add_purchase_payment(
 
     try:
         payment = create_purchase_payment(db, purchase_batch_id, payload)
+        sync_automatic_reward_transactions(db, purchase_batch_id)
         db.commit()
         db.refresh(payment)
         return payment
@@ -153,9 +230,88 @@ def delete_purchase_payment(payment_id: int):
             -Decimal(payment.amount),
         )
 
+        purchase_batch_id = payment.purchase_batch_id
         db.delete(payment)
+        db.flush()
+        sync_automatic_reward_transactions(db, purchase_batch_id)
         db.commit()
 
         return {"deleted": True}
+    finally:
+        db.close()
+
+
+@router.put("/purchase-batches/{purchase_batch_id}/payments")
+def replace_purchase_payments(
+    purchase_batch_id: int,
+    payload: PurchasePaymentsReplace,
+):
+    db: Session = SessionLocal()
+
+    try:
+        purchase = (
+            db.query(PurchaseBatch)
+            .filter(PurchaseBatch.id == purchase_batch_id)
+            .first()
+        )
+
+        if not purchase:
+            raise HTTPException(status_code=404, detail="Purchase batch not found")
+
+        if not payload.payments:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one payment line is required",
+            )
+
+        existing_payments = (
+            db.query(PurchasePayment)
+            .filter(PurchasePayment.purchase_batch_id == purchase_batch_id)
+            .all()
+        )
+
+        for payment in existing_payments:
+            apply_credit_card_payment_delta(
+                db,
+                payment.payment_type,
+                payment.credit_card_id,
+                -Decimal(payment.amount),
+            )
+            db.delete(payment)
+
+        db.flush()
+
+        new_payments: list[PurchasePayment] = []
+
+        for payment_payload in payload.payments:
+            new_payment = create_purchase_payment(
+                db,
+                purchase_batch_id,
+                payment_payload,
+            )
+            new_payments.append(new_payment)
+
+        sync_automatic_reward_transactions(db, purchase_batch_id)
+
+        credit_card_payments = [
+            payment
+            for payment in new_payments
+            if payment.payment_type == "CREDIT_CARD"
+        ]
+        purchase.credit_card_id = (
+            credit_card_payments[0].credit_card_id
+            if len(credit_card_payments) == 1
+            else None
+        )
+        purchase.updated_at = datetime.utcnow()
+
+        db.commit()
+
+        return (
+            db.query(PurchasePayment)
+            .filter(PurchasePayment.purchase_batch_id == purchase_batch_id)
+            .order_by(PurchasePayment.created_at.asc())
+            .all()
+        )
     finally:
         db.close()

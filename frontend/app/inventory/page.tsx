@@ -1,7 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
 import { API_BASE_URL } from "@/lib/api";
 
@@ -22,13 +23,81 @@ type GiftCard = {
   expected_payment_date: string | null;
   settlement_received_at: string | null;
   status: string;
+  card_number_encrypted: string | null;
+  pin_encrypted: string | null;
   notes: string | null;
+  sale_history?: Array<{
+    sale_id: number;
+    buyer_name: string;
+    sold_at: string;
+    expected_payout: string | number | null;
+    payout_received: string | number | null;
+    status: string;
+    notes: string | null;
+  }>;
 };
 
 type Buyer = {
   id: number;
   name: string;
   active: boolean;
+  default_payout_days: number | null;
+  default_payout_rate: string | number | null;
+  requires_card_images: boolean;
+  requires_receipt_images: boolean;
+  preferred_export_type: string;
+  card_export_format: string | null;
+  fuel_export_format: string | null;
+};
+
+type FuelAccount = {
+  id: number;
+  retailer: string;
+  email: string | null;
+  alt_id: string | null;
+  login_password: string | null;
+  status: string;
+  current_points: number;
+  target_points: number | null;
+  expiration_cycle: string | null;
+};
+
+type FuelSelection = {
+  fuel_reward_account_id: number;
+  points_sold: string;
+  fuel_overage_override: boolean;
+};
+
+type CardImage = {
+  id: number;
+  gift_card_id: number;
+  original_image_url: string;
+  created_at: string;
+};
+
+type Receipt = {
+  id: number;
+  purchase_batch_id: number;
+  image_url: string;
+  original_filename: string | null;
+  created_at: string;
+};
+
+type SaleFile = {
+  id: string;
+  group: "card" | "receipt";
+  label: string;
+  url: string;
+  filename: string;
+};
+
+type SaleResponse = {
+  id: number;
+  gift_cards: GiftCard[];
+  fuel_accounts: Array<FuelAccount & {
+    points_sold: number | null;
+    expected_value: string | number | null;
+  }>;
 };
 
 type SellForm = {
@@ -47,13 +116,27 @@ type SettleForm = {
 };
 
 const sections = [
-  { title: "Available Inventory", statuses: ["VERIFIED_AVAILABLE"] },
-  { title: "Awaiting Payment", statuses: ["SOLD_PENDING_PAYMENT", "SOLD"] },
-  { title: "Settled", statuses: ["SETTLED"] },
+  { title: "Needs Verification", statuses: ["NEEDS_VERIFICATION"] },
+  { title: "Available", statuses: ["VERIFIED_AVAILABLE"] },
+  {
+    title: "Awaiting Payment",
+    statuses: ["SOLD_PENDING_PAYMENT", "PARTIALLY_SETTLED", "SOLD"],
+  },
+  { title: "Settled/Sold", statuses: ["SETTLED"] },
 ];
 
 function todayString() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function addDaysString(dateValue: string, days: number | null) {
+  if (!dateValue || days === null) {
+    return "";
+  }
+
+  const date = new Date(`${dateValue}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 function formatAmount(value: string | number | null) {
@@ -73,18 +156,60 @@ function formatAmount(value: string | number | null) {
   }).format(amount);
 }
 
-function formatRate(value: string | number | null) {
-  if (value === null || value === "") {
-    return "";
+function formatStoredRateAsPercent(value: string | number | null | undefined) {
+  const rate = Number(value ?? 1);
+
+  if (!Number.isFinite(rate)) {
+    return "100";
   }
 
+  return String(Number((rate * 100).toFixed(4)));
+}
+
+function normalizePayoutRatePercent(value: string) {
   const rate = Number(value);
 
-  if (Number.isNaN(rate)) {
-    return String(value);
+  if (!Number.isFinite(rate)) {
+    return 0;
   }
 
-  return `${(rate * 100).toFixed(1)}%`;
+  return rate / 100;
+}
+
+function isDecimalStylePayoutRate(value: string) {
+  const rate = Number(value);
+  return value.trim() !== "" && rate > 0 && rate < 1;
+}
+
+function fuelTargetLabel(account: FuelAccount) {
+  return `${account.current_points.toLocaleString()} / ${
+    account.target_points?.toLocaleString() ?? "-"
+  } pts`;
+}
+
+function isFuelBelowTarget(account: FuelAccount) {
+  return account.target_points !== null && account.current_points < account.target_points;
+}
+
+function fuelOveragePoints(account: FuelAccount) {
+  return account.target_points === null
+    ? 0
+    : Math.max(account.current_points - account.target_points, 0);
+}
+
+function fuelRequiresOverageOverride(account: FuelAccount) {
+  return fuelOveragePoints(account) > 1000;
+}
+
+async function saleErrorMessage(response: Response) {
+  const body = await response.json().catch(() => null);
+  const detail = body?.detail ?? body;
+
+  if (detail?.message) {
+    return detail.message;
+  }
+
+  return `Failed to sell selected cards (${response.status})`;
 }
 
 function daysSince(dateValue: string | null) {
@@ -156,6 +281,10 @@ function dueStatus(expectedPaymentDate: string | null, soldAt: string | null) {
 }
 
 function statusLabel(status: string) {
+  if (status === "NEEDS_VERIFICATION") {
+    return "Needs Verification";
+  }
+
   if (status === "VERIFIED_AVAILABLE") {
     return "Available";
   }
@@ -171,34 +300,269 @@ function statusLabel(status: string) {
   return status.replaceAll("_", " ");
 }
 
+function statusBadgeClass(status: string) {
+  if (status === "NEEDS_VERIFICATION") {
+    return "bg-red-100 text-red-800";
+  }
+
+  if (status === "VERIFIED_AVAILABLE") {
+    return "bg-emerald-50 text-emerald-800";
+  }
+
+  if (status === "SOLD_PENDING_PAYMENT" || status === "PARTIALLY_SETTLED") {
+    return "bg-amber-50 text-amber-800";
+  }
+
+  return "bg-slate-100 text-slate-700";
+}
+
+function cardEnding(value: string | null) {
+  if (!value) {
+    return "";
+  }
+
+  const normalizedValue = value.replace(/\s/g, "");
+  return normalizedValue.slice(-4);
+}
+
+function cardNumberStatus(value: string | null) {
+  const ending = cardEnding(value);
+  return ending ? `card ending ${ending}` : "card number missing";
+}
+
+function currentSaleId(card: GiftCard) {
+  return card.sale_history?.[0]?.sale_id ?? null;
+}
+
+function escapeCsvValue(value: string | number | null) {
+  const stringValue = value === null ? "" : String(value);
+
+  if (
+    stringValue.includes(",") ||
+    stringValue.includes("\"") ||
+    stringValue.includes("\n")
+  ) {
+    return `"${stringValue.replaceAll("\"", "\"\"")}"`;
+  }
+
+  return stringValue;
+}
+
+const DEFAULT_CARD_EXPORT_FORMAT = "brand,face_value,card_number,pin";
+const DEFAULT_FUEL_EXPORT_FORMAT = "retailer,points_sold,email_login,password,alt_id";
+const EXPORT_HEADERS = ["brand", "face_value", "card_number", "pin"];
+
+function cleanFilenamePart(value: string | number | null) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "file";
+}
+
+function getFileExtension(path: string) {
+  const cleanPath = path.split("?")[0];
+  const extension = cleanPath.slice(cleanPath.lastIndexOf("."));
+
+  return extension && extension.length <= 8 ? extension : ".jpg";
+}
+
+function getUploadUrl(path: string) {
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+
+  return `${API_BASE_URL}/${path.replace(/^\/+/, "")}`;
+}
+
+function applyCardExportFormat(format: string, card: GiftCard) {
+  return format
+    .replaceAll("{brand}", card.brand)
+    .replaceAll("{face_value}", String(card.face_value))
+    .replaceAll("{card_number}", card.card_number_encrypted ?? "")
+    .replaceAll("{pin}", card.pin_encrypted ?? "");
+}
+
+function buildDelimitedExport(cards: GiftCard[], delimiter: "," | "\t") {
+  const rows = [
+    EXPORT_HEADERS,
+    ...cards.map((card) => [
+      card.brand,
+      String(card.face_value),
+      card.card_number_encrypted ?? "",
+      card.pin_encrypted ?? "",
+    ]),
+  ];
+
+  if (delimiter === "\t") {
+    return rows.map((row) => row.join("\t")).join("\n");
+  }
+
+  return rows
+    .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
+    .join("\n");
+}
+
+function buildSellerExport(cards: GiftCard[], buyer: Buyer | null) {
+  const exportType = buyer?.preferred_export_type ?? "TXT";
+
+  if (exportType === "GOOGLE_SHEETS_PASTE") {
+    return {
+      text: buildDelimitedExport(cards, "\t"),
+      fileExtension: "tsv",
+      label: "Google Sheets Paste",
+      canDownloadCsv: false,
+    };
+  }
+
+  if (exportType === "TSV") {
+    return {
+      text: buildDelimitedExport(cards, "\t"),
+      fileExtension: "tsv",
+      label: "TSV",
+      canDownloadCsv: false,
+    };
+  }
+
+  if (exportType === "CUSTOM") {
+    const format =
+      buyer?.card_export_format?.trim() || DEFAULT_CARD_EXPORT_FORMAT;
+
+    return {
+      text: cards.map((card) => applyCardExportFormat(format, card)).join("\n"),
+      fileExtension: "txt",
+      label: "Custom",
+      canDownloadCsv: false,
+    };
+  }
+
+  return {
+    text: buildDelimitedExport(cards, ","),
+    fileExtension: exportType === "CSV" ? "csv" : "txt",
+    label: exportType === "CSV" ? "CSV" : "TXT",
+    canDownloadCsv: true,
+  };
+}
+
+function applyFuelExportFormat(format: string, account: SaleResponse["fuel_accounts"][number]) {
+  return format
+    .replaceAll("{retailer}", account.retailer)
+    .replaceAll("{points_sold}", String(account.points_sold ?? account.current_points))
+    .replaceAll("{email_login}", account.email ?? "")
+    .replaceAll("{password}", account.login_password ?? "")
+    .replaceAll("{alt_id}", account.alt_id ?? "");
+}
+
+function buildFuelSellerExport(
+  fuelAccounts: SaleResponse["fuel_accounts"],
+  buyer: Buyer | null,
+) {
+  if (fuelAccounts.length === 0) {
+    return "";
+  }
+
+  const format = buyer?.fuel_export_format?.trim() || DEFAULT_FUEL_EXPORT_FORMAT;
+
+  if (format !== DEFAULT_FUEL_EXPORT_FORMAT) {
+    return fuelAccounts.map((account) => applyFuelExportFormat(format, account)).join("\n");
+  }
+
+  return [
+    DEFAULT_FUEL_EXPORT_FORMAT,
+    ...fuelAccounts.map((account) =>
+      [
+        account.retailer,
+        String(account.points_sold ?? account.current_points),
+        account.email ?? "",
+        account.login_password ?? "",
+        account.alt_id ?? "",
+      ]
+        .map((value) => escapeCsvValue(value))
+        .join(","),
+    ),
+  ].join("\n");
+}
+
 async function fetchGiftCards() {
-  const response = await fetch(`${API_BASE_URL}/gift-cards/`);
+  const endpoint = `${API_BASE_URL}/gift-cards/`;
+  const response = await fetch(endpoint);
 
   if (!response.ok) {
-    throw new Error(`Failed to load gift cards (${response.status})`);
+    console.error("Inventory fetch failed", {
+      endpoint,
+      status: response.status,
+      statusText: response.statusText,
+    });
+    throw new Error(`Failed to load gift cards from ${endpoint} (${response.status})`);
   }
 
   return (await response.json()) as GiftCard[];
 }
 
 async function fetchBuyers() {
-  const response = await fetch(`${API_BASE_URL}/buyers/`);
+  const endpoint = `${API_BASE_URL}/buyers/`;
+  const response = await fetch(endpoint);
 
   if (!response.ok) {
-    throw new Error(`Failed to load buyers (${response.status})`);
+    console.error("Inventory fetch failed", {
+      endpoint,
+      status: response.status,
+      statusText: response.statusText,
+    });
+    throw new Error(`Failed to load buyers from ${endpoint} (${response.status})`);
   }
 
   return (await response.json()) as Buyer[];
 }
 
+async function fetchFuelAccounts() {
+  const endpoint = `${API_BASE_URL}/fuel-accounts/dashboard`;
+  const response = await fetch(endpoint);
+
+  if (!response.ok) {
+    console.error("Inventory fetch failed", {
+      endpoint,
+      status: response.status,
+      statusText: response.statusText,
+    });
+    throw new Error(`Failed to load fuel accounts from ${endpoint} (${response.status})`);
+  }
+
+  return (await response.json()) as FuelAccount[];
+}
+
 export default function InventoryPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-950 sm:px-6 lg:px-8">
+          <div className="mx-auto max-w-7xl rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500">
+            Loading inventory...
+          </div>
+        </main>
+      }
+    >
+      <InventoryContent />
+    </Suspense>
+  );
+}
+
+function InventoryContent() {
+  const searchParams = useSearchParams();
   const [giftCards, setGiftCards] = useState<GiftCard[]>([]);
   const [buyers, setBuyers] = useState<Buyer[]>([]);
+  const [fuelAccounts, setFuelAccounts] = useState<FuelAccount[]>([]);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [saleCardIds, setSaleCardIds] = useState<number[]>([]);
+  const [saleFuelSelections, setSaleFuelSelections] = useState<FuelSelection[]>([]);
+  const [includeFuelInSale, setIncludeFuelInSale] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [isBulkMode, setIsBulkMode] = useState(false);
   const [isSellModalOpen, setIsSellModalOpen] = useState(false);
+  const [sellerExportCards, setSellerExportCards] = useState<GiftCard[]>([]);
+  const [sellerExportFuelAccounts, setSellerExportFuelAccounts] = useState<SaleResponse["fuel_accounts"]>([]);
+  const [sellerExportBuyer, setSellerExportBuyer] = useState<Buyer | null>(null);
+  const [sellerExportSaleId, setSellerExportSaleId] = useState<number | null>(null);
   const [settlingCard, setSettlingCard] = useState<GiftCard | null>(null);
   const [sellForm, setSellForm] = useState<SellForm>({
     buyer_id: "",
@@ -247,26 +611,39 @@ export default function InventoryPage() {
 
   const estimatedPayoutFromRate =
     sellForm.liquidation_rate.trim() && saleFaceValue > 0
-      ? saleFaceValue * Number(sellForm.liquidation_rate)
+      ? saleFaceValue * normalizePayoutRatePercent(sellForm.liquidation_rate)
       : null;
 
   const sellPayoutTotal =
     sellForm.payout_total.trim() !== ""
       ? Number(sellForm.payout_total)
       : estimatedPayoutFromRate;
+  const selectedFuelPoints = saleFuelSelections.reduce(
+    (total, selection) => total + Number(selection.points_sold || 0),
+    0,
+  );
+  const combinedPayoutTotal = sellPayoutTotal;
+  const saleCardPayoutRatePercent =
+    sellForm.payout_total.trim() !== "" && saleFaceValue > 0
+      ? String((Number(sellForm.payout_total) / saleFaceValue) * 100)
+      : sellForm.liquidation_rate.trim() || null;
 
   async function loadData() {
     setIsLoading(true);
     setError(null);
 
     try {
-      const [cards, buyerData] = await Promise.all([
+      const [cards, buyerData, fuelAccountData] = await Promise.all([
         fetchGiftCards(),
         fetchBuyers(),
+        fetchFuelAccounts(),
       ]);
 
       setGiftCards(cards);
       setBuyers(buyerData.filter((buyer) => buyer.active));
+      setFuelAccounts(
+        fuelAccountData.filter((account) => account.status === "ACTIVE"),
+      );
       setSelectedIds((currentIds) =>
         currentIds.filter((id) =>
           cards.some(
@@ -291,18 +668,48 @@ export default function InventoryPage() {
 
   const filteredCards = useMemo(() => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
-
-    if (!normalizedSearch) {
-      return giftCards;
-    }
+    const statusFilter = searchParams.get("status");
 
     return giftCards.filter(
-      (card) =>
-        card.brand.toLowerCase().includes(normalizedSearch) ||
-        String(card.purchase_batch_id).includes(normalizedSearch) ||
-        (card.buyer_name ?? "").toLowerCase().includes(normalizedSearch),
+      (card) => {
+        if (
+          statusFilter === "awaiting_verification" &&
+          card.status !== "NEEDS_VERIFICATION"
+        ) {
+          return false;
+        }
+
+        if (
+          statusFilter === "duplicate_review" &&
+          ![
+            card.brand,
+            String(card.purchase_batch_id),
+            card.notes ?? "",
+            card.status,
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes("duplicate")
+        ) {
+          return false;
+        }
+
+        return (
+          !normalizedSearch ||
+          [
+            card.brand,
+            String(card.purchase_batch_id),
+            card.buyer_name ?? "",
+            cardEnding(card.card_number_encrypted),
+            String(card.face_value),
+            String(currentSaleId(card) ?? ""),
+            card.notes ?? "",
+          ].some((value) => value.toLowerCase().includes(normalizedSearch))
+        );
+      },
     );
-  }, [giftCards, searchQuery]);
+  }, [giftCards, searchParams, searchQuery]);
+  const statusFilter = searchParams.get("status");
 
   function openSellSelected() {
     setSaleCardIds(selectedIds);
@@ -314,6 +721,8 @@ export default function InventoryPage() {
       expected_payment_date: "",
       notes: "",
     });
+    setIncludeFuelInSale(false);
+    setSaleFuelSelections([]);
     setIsSellModalOpen(true);
   }
 
@@ -327,6 +736,8 @@ export default function InventoryPage() {
       expected_payment_date: "",
       notes: "",
     });
+    setIncludeFuelInSale(false);
+    setSaleFuelSelections([]);
     setIsSellModalOpen(true);
   }
 
@@ -343,7 +754,7 @@ export default function InventoryPage() {
   async function submitSellSelected(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (saleCards.length === 0 || sellPayoutTotal === null) {
+    if (saleCards.length === 0 || combinedPayoutTotal === null) {
       return;
     }
 
@@ -351,33 +762,46 @@ export default function InventoryPage() {
     setError(null);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/gift-cards/bulk-sell`, {
+      const response = await fetch(`${API_BASE_URL}/sales/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          gift_card_ids: saleCards.map((card) => card.id),
           buyer_id: Number(sellForm.buyer_id),
-          payout_total:
-            sellForm.payout_total.trim() === "" ? null : sellForm.payout_total,
-          liquidation_rate:
-            sellForm.payout_total.trim() === "" && sellForm.liquidation_rate
-              ? sellForm.liquidation_rate
-              : null,
           sold_date: sellForm.sold_date || null,
           expected_payment_date: sellForm.expected_payment_date || null,
-          sale_notes: sellForm.notes || null,
-          internal_notes: sellForm.notes || null,
+          expected_payout: String(combinedPayoutTotal),
+          card_payout_rate: saleCardPayoutRatePercent,
+          notes: sellForm.notes || null,
+          gift_card_ids: saleCards.map((card) => card.id),
+          fuel_accounts: includeFuelInSale
+            ? saleFuelSelections.map((selection) => ({
+                fuel_reward_account_id: selection.fuel_reward_account_id,
+                points_sold: Number(selection.points_sold),
+                expected_value: null,
+                is_full_account_sale: true,
+                fuel_overage_override: selection.fuel_overage_override,
+              }))
+            : [],
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to sell selected cards (${response.status})`);
+        throw new Error(await saleErrorMessage(response));
       }
 
+      const sale = (await response.json()) as SaleResponse;
+      const exportBuyer =
+        buyers.find((buyer) => buyer.id === Number(sellForm.buyer_id)) ?? null;
       setSelectedIds([]);
       setSaleCardIds([]);
       setIsBulkMode(false);
       setIsSellModalOpen(false);
+      setSellerExportCards(sale.gift_cards);
+      setSellerExportFuelAccounts(sale.fuel_accounts);
+      setSellerExportBuyer(exportBuyer);
+      setSellerExportSaleId(sale.id);
+      setSaleFuelSelections([]);
+      setIncludeFuelInSale(false);
       await loadData();
     } catch (err) {
       setError(
@@ -385,6 +809,40 @@ export default function InventoryPage() {
       );
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function updateFuelTargetToCurrent(account: FuelAccount) {
+    setError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/fuel-accounts/${account.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_points: account.current_points }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update fuel target (${response.status})`);
+      }
+
+      const updatedAccount = (await response.json()) as FuelAccount;
+      setFuelAccounts((currentAccounts) =>
+        currentAccounts.map((currentAccount) =>
+          currentAccount.id === account.id ? updatedAccount : currentAccount,
+        ),
+      );
+      setSaleFuelSelections((currentSelections) =>
+        currentSelections.map((selection) =>
+          selection.fuel_reward_account_id === account.id
+            ? { ...selection, fuel_overage_override: false }
+            : selection,
+        ),
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to update fuel target.",
+      );
     }
   }
 
@@ -496,6 +954,16 @@ export default function InventoryPage() {
           </section>
         ) : null}
 
+        {statusFilter === "awaiting_verification" ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+            Showing cards awaiting verification.
+          </div>
+        ) : statusFilter === "duplicate_review" ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+            Showing possible duplicate review items.
+          </div>
+        ) : null}
+
         {error ? (
           <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
             {error}
@@ -535,17 +1003,27 @@ export default function InventoryPage() {
       {isSellModalOpen ? (
         <SaleModal
           buyers={buyers}
+          combinedPayoutTotal={combinedPayoutTotal}
           estimatedPayout={sellPayoutTotal}
           faceValue={saleFaceValue}
+          fuelAccounts={fuelAccounts}
+          fuelSelections={saleFuelSelections}
           form={sellForm}
+          includeFuel={includeFuelInSale}
           isSaving={isSaving}
           onClose={() => {
             setSaleCardIds([]);
+            setSaleFuelSelections([]);
+            setIncludeFuelInSale(false);
             setIsSellModalOpen(false);
           }}
           onSubmit={submitSellSelected}
           selectedCount={saleCards.length}
+          selectedFuelPoints={selectedFuelPoints}
+          setFuelSelections={setSaleFuelSelections}
           setForm={setSellForm}
+          setIncludeFuel={setIncludeFuelInSale}
+          updateFuelTargetToCurrent={updateFuelTargetToCurrent}
         />
       ) : null}
 
@@ -559,6 +1037,21 @@ export default function InventoryPage() {
           setForm={setSettleForm}
         />
       ) : null}
+
+      {sellerExportCards.length > 0 ? (
+        <SellerExportModal
+          cards={sellerExportCards}
+          buyer={sellerExportBuyer}
+          fuelAccounts={sellerExportFuelAccounts}
+          saleId={sellerExportSaleId}
+          onClose={() => {
+            setSellerExportCards([]);
+            setSellerExportFuelAccounts([]);
+            setSellerExportSaleId(null);
+          }}
+        />
+      ) : null}
+
     </main>
   );
 }
@@ -584,7 +1077,7 @@ function InventorySection({
   onSell: (card: GiftCard) => void;
   onSettle: (card: GiftCard) => void;
 }) {
-  const isAvailableSection = title === "Available Inventory";
+  const isAvailableSection = title === "Available";
   const isAwaitingPaymentSection = title === "Awaiting Payment";
 
   return (
@@ -646,12 +1139,14 @@ function InventorySection({
                   <tr key={card.id} className="hover:bg-slate-50">
                     {isAvailableSection && isBulkMode ? (
                       <td className="px-3 py-2 align-middle">
-                        <input
-                          checked={selectedIds.includes(card.id)}
-                          className="h-4 w-4 cursor-pointer"
-                          onChange={() => onSelect(card)}
-                          type="checkbox"
-                        />
+                        {card.status === "VERIFIED_AVAILABLE" ? (
+                          <input
+                            checked={selectedIds.includes(card.id)}
+                            className="h-4 w-4 cursor-pointer"
+                            onChange={() => onSelect(card)}
+                            type="checkbox"
+                          />
+                        ) : null}
                       </td>
                     ) : null}
                     <td className="min-w-[28rem] px-3 py-2 align-middle">
@@ -661,10 +1156,41 @@ function InventorySection({
                         </span>
                         <span className="text-slate-300">•</span>
                         <span>{formatAmount(card.face_value)} face</span>
+                        {card.status === "NEEDS_VERIFICATION" ? (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span className="text-slate-600">
+                              purchase #{card.purchase_batch_id}
+                            </span>
+                          </>
+                        ) : null}
                         <span className="text-slate-300">•</span>
                         <span className="text-slate-600">
                           cost {formatAmount(card.acquisition_cost)}
                         </span>
+                        {card.card_number_encrypted ? (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span className="text-slate-600">
+                              {cardNumberStatus(card.card_number_encrypted)}
+                            </span>
+                          </>
+                        ) : card.status === "NEEDS_VERIFICATION" ? (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span className="font-medium text-red-700">
+                              {cardNumberStatus(card.card_number_encrypted)}
+                            </span>
+                          </>
+                        ) : null}
+                        {currentSaleId(card) ? (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span className="text-slate-600">
+                              sale #{currentSaleId(card)}
+                            </span>
+                          </>
+                        ) : null}
                         {card.expected_payout !== null ? (
                           <>
                             <span className="text-slate-300">•</span>
@@ -696,7 +1222,9 @@ function InventorySection({
                             {card.buyer_name}
                           </span>
                         ) : null}
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusBadgeClass(card.status)}`}
+                        >
                           {statusLabel(card.status)}
                         </span>
                         {isAwaitingPaymentSection && due.text ? (
@@ -721,14 +1249,20 @@ function InventorySection({
                     <td className="whitespace-nowrap px-3 py-2 align-middle">
                       <div className="flex justify-end gap-2">
                         <Link
-                          className="inline-flex h-8 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-xs font-semibold hover:bg-slate-100 active:bg-slate-200"
+                          className={
+                            card.status === "NEEDS_VERIFICATION"
+                              ? "inline-flex h-8 cursor-pointer items-center rounded-md bg-red-700 px-3 text-xs font-semibold text-white hover:bg-red-800 active:bg-red-900"
+                              : "inline-flex h-8 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-xs font-semibold hover:bg-slate-100 active:bg-slate-200"
+                          }
                           href={`/gift-cards/${card.id}/verify?returnTo=/inventory`}
                         >
-                          Details
+                          {card.status === "NEEDS_VERIFICATION"
+                            ? "Verify"
+                            : "Details"}
                         </Link>
                         {card.status === "VERIFIED_AVAILABLE" ? (
                           <button
-                            className="h-8 cursor-pointer rounded-md bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-700 active:bg-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="h-8 cursor-pointer rounded-md bg-cyan-600 px-3 text-xs font-semibold text-white hover:bg-cyan-700 active:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60"
                             disabled={isSaving}
                             onClick={() => onSell(card)}
                             type="button"
@@ -765,6 +1299,298 @@ function InventorySection({
   );
 }
 
+function SellerExportModal({
+  cards,
+  buyer,
+  fuelAccounts,
+  saleId,
+  onClose,
+}: {
+  cards: GiftCard[];
+  buyer: Buyer | null;
+  fuelAccounts: SaleResponse["fuel_accounts"];
+  saleId: number | null;
+  onClose: () => void;
+}) {
+  const sellerExport = buildSellerExport(cards, buyer);
+  const fuelExport = buildFuelSellerExport(fuelAccounts, buyer);
+  const [saleFiles, setSaleFiles] = useState<SaleFile[]>([]);
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  const [filesError, setFilesError] = useState<string | null>(null);
+  const [showSaleFiles, setShowSaleFiles] = useState(false);
+  const requiresSaleFiles =
+    Boolean(buyer?.requires_card_images) ||
+    Boolean(buyer?.requires_receipt_images);
+
+  useEffect(() => {
+    if (!requiresSaleFiles) {
+      return;
+    }
+
+    async function loadSaleFiles() {
+      setIsLoadingFiles(true);
+      setFilesError(null);
+
+      try {
+        const buyerName = cleanFilenamePart(buyer?.name ?? "buyer");
+        const saleDate = cleanFilenamePart(
+          cards[0]?.sold_at?.slice(0, 10) ??
+            cards[0]?.expected_payment_date ??
+            todayString(),
+        );
+        const files: SaleFile[] = [];
+
+        if (buyer?.requires_card_images) {
+          const cardImageResults = await Promise.all(
+            cards.map(async (card) => {
+              const response = await fetch(
+                `${API_BASE_URL}/card-images/gift-card/${card.id}`,
+              );
+
+              if (!response.ok) {
+                throw new Error(
+                  `Failed to load card images for card ${card.id}`,
+                );
+              }
+
+              return {
+                card,
+                images: (await response.json()) as CardImage[],
+              };
+            }),
+          );
+
+          cardImageResults.forEach(({ card, images }) => {
+            images.forEach((image) => {
+              files.push({
+                id: `card-${image.id}`,
+                group: "card",
+                label: `${card.brand} card #${card.id}`,
+                url: getUploadUrl(image.original_image_url),
+                filename: `${buyerName}_${saleDate}_card-${card.id}_${cleanFilenamePart(
+                  card.brand,
+                )}_${cleanFilenamePart(card.face_value)}${getFileExtension(
+                  image.original_image_url,
+                )}`,
+              });
+            });
+          });
+        }
+
+        if (buyer?.requires_receipt_images) {
+          const purchaseIds = Array.from(
+            new Set(cards.map((card) => card.purchase_batch_id)),
+          );
+          const receiptResults = await Promise.all(
+            purchaseIds.map(async (purchaseId) => {
+              const response = await fetch(
+                `${API_BASE_URL}/receipts/purchase/${purchaseId}`,
+              );
+
+              if (!response.ok) {
+                throw new Error(
+                  `Failed to load receipts for purchase ${purchaseId}`,
+                );
+              }
+
+              return {
+                purchaseId,
+                receipts: (await response.json()) as Receipt[],
+              };
+            }),
+          );
+
+          receiptResults.forEach(({ purchaseId, receipts }) => {
+            receipts.forEach((receipt) => {
+              files.push({
+                id: `receipt-${receipt.id}`,
+                group: "receipt",
+                label: `Receipt purchase #${purchaseId}`,
+                url: getUploadUrl(receipt.image_url),
+                filename: `${buyerName}_${saleDate}_receipt_purchase-${purchaseId}${getFileExtension(
+                  receipt.image_url,
+                )}`,
+              });
+            });
+          });
+        }
+
+        setSaleFiles(files);
+      } catch (err) {
+        setFilesError(
+          err instanceof Error ? err.message : "Failed to load sale files.",
+        );
+      } finally {
+        setIsLoadingFiles(false);
+      }
+    }
+
+    void loadSaleFiles();
+  }, [buyer, cards, requiresSaleFiles]);
+
+  async function copyExport() {
+    await navigator.clipboard.writeText(sellerExport.text);
+  }
+
+  async function copyFuelExport() {
+    await navigator.clipboard.writeText(fuelExport);
+  }
+
+  function downloadExport() {
+    const blob = new Blob([sellerExport.text], {
+      type:
+        sellerExport.fileExtension === "csv"
+          ? "text/csv;charset=utf-8"
+          : "text/plain;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `seller-export-${todayString()}.${sellerExport.fileExtension}`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4">
+      <div className="w-full max-w-3xl space-y-4 rounded-lg bg-white p-5 shadow-xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold">Seller Export</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {sellerExport.label} output. Full card numbers are intentionally
+              shown only here after sale.
+            </p>
+          </div>
+          <button
+            className="h-10 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+            onClick={onClose}
+            type="button"
+          >
+            Close
+          </button>
+        </div>
+
+        <textarea
+          className="h-40 w-full rounded-md border border-slate-300 bg-slate-50 p-3 font-mono text-xs text-slate-950"
+          readOnly
+          value={sellerExport.text}
+        />
+
+        {fuelExport ? (
+          <section className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold">Fuel Account Export</h3>
+              <button
+                className="h-9 cursor-pointer rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                onClick={copyFuelExport}
+                type="button"
+              >
+                Copy Fuel Export
+              </button>
+            </div>
+            <textarea
+              className="h-28 w-full rounded-md border border-slate-300 bg-slate-50 p-3 font-mono text-xs text-slate-950"
+              readOnly
+              value={fuelExport}
+            />
+          </section>
+        ) : null}
+
+        {requiresSaleFiles ? (
+          <section className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold">Sale Files</h3>
+                <p className="text-xs text-slate-500">
+                  Buyer requires{" "}
+                  {[
+                    buyer?.requires_card_images ? "card images" : null,
+                    buyer?.requires_receipt_images ? "receipt images" : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" and ")}
+                  .
+                </p>
+              </div>
+              <button
+                className="h-10 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                onClick={() => setShowSaleFiles((value) => !value)}
+                type="button"
+              >
+                Download Sale Files
+              </button>
+            </div>
+
+            {showSaleFiles ? (
+              <div className="mt-3 space-y-2">
+                {isLoadingFiles ? (
+                  <p className="text-sm text-slate-500">Loading sale files...</p>
+                ) : null}
+                {filesError ? (
+                  <p className="text-sm font-medium text-red-800">
+                    {filesError}
+                  </p>
+                ) : null}
+                {!isLoadingFiles && saleFiles.length === 0 && !filesError ? (
+                  <p className="text-sm text-slate-500">
+                    No matching uploaded files found for this sale.
+                  </p>
+                ) : null}
+                {saleFiles.map((file) => (
+                  <a
+                    className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+                    download={file.filename}
+                    href={file.url}
+                    key={file.id}
+                  >
+                    <span>
+                      <span className="font-medium">{file.label}</span>
+                      <span className="ml-2 text-xs uppercase text-slate-500">
+                        {file.group}
+                      </span>
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      {file.filename}
+                    </span>
+                  </a>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+          <button
+            className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
+            onClick={copyExport}
+            type="button"
+          >
+            Copy Export
+          </button>
+          {sellerExport.canDownloadCsv ? (
+            <button
+              className="h-11 cursor-pointer rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 active:bg-slate-950"
+              onClick={downloadExport}
+              type="button"
+            >
+              Download {sellerExport.fileExtension.toUpperCase()}
+            </button>
+          ) : null}
+          {saleId ? (
+            <a
+              className="inline-flex h-11 cursor-pointer items-center rounded-md bg-cyan-300 px-4 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200 active:bg-cyan-400"
+              href={`${API_BASE_URL}/sales/${saleId}/package.zip`}
+            >
+              Download ZIP
+            </a>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function InventoryMobileCard({
   card,
   isAvailableSection,
@@ -794,7 +1620,9 @@ function InventoryMobileCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            {isAvailableSection && isBulkMode ? (
+            {isAvailableSection &&
+            isBulkMode &&
+            card.status === "VERIFIED_AVAILABLE" ? (
               <input
                 checked={isSelected}
                 className="mt-0.5 h-5 w-5 cursor-pointer"
@@ -808,10 +1636,24 @@ function InventoryMobileCard({
           </div>
           <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-sm text-slate-600">
             <span>{formatAmount(card.face_value)} face</span>
+            {card.status === "NEEDS_VERIFICATION" ? (
+              <span>purchase #{card.purchase_batch_id}</span>
+            ) : null}
             <span>cost {formatAmount(card.acquisition_cost)}</span>
             {card.expected_payout !== null ? (
               <span>payout {formatAmount(card.expected_payout)}</span>
             ) : null}
+            <span
+              className={
+                !card.card_number_encrypted &&
+                card.status === "NEEDS_VERIFICATION"
+                  ? "font-medium text-red-700"
+                  : ""
+              }
+            >
+              {cardNumberStatus(card.card_number_encrypted)}
+            </span>
+            {currentSaleId(card) ? <span>sale #{currentSaleId(card)}</span> : null}
             {profit !== null ? (
               <span
                 className={
@@ -828,7 +1670,9 @@ function InventoryMobileCard({
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+        <span
+          className={`rounded-full px-2 py-1 text-xs font-semibold ${statusBadgeClass(card.status)}`}
+        >
           {statusLabel(card.status)}
         </span>
         {card.buyer_name ? (
@@ -860,14 +1704,18 @@ function InventoryMobileCard({
 
       <div className="grid grid-cols-2 gap-2">
         <Link
-          className="inline-flex h-10 cursor-pointer items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200"
+          className={
+            card.status === "NEEDS_VERIFICATION"
+              ? "inline-flex h-10 cursor-pointer items-center justify-center rounded-md bg-red-700 px-3 text-sm font-semibold text-white hover:bg-red-800 active:bg-red-900"
+              : "inline-flex h-10 cursor-pointer items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200"
+          }
           href={`/gift-cards/${card.id}/verify?returnTo=/inventory`}
         >
-          Details
+          {card.status === "NEEDS_VERIFICATION" ? "Verify" : "Details"}
         </Link>
         {card.status === "VERIFIED_AVAILABLE" ? (
           <button
-            className="h-10 cursor-pointer rounded-md bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-700 active:bg-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+            className="h-10 cursor-pointer rounded-md bg-cyan-600 px-3 text-sm font-semibold text-white hover:bg-cyan-700 active:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60"
             disabled={isSaving}
             onClick={() => onSell(card)}
             type="button"
@@ -892,34 +1740,140 @@ function InventoryMobileCard({
 
 function SaleModal({
   buyers,
+  combinedPayoutTotal,
   faceValue,
   estimatedPayout,
+  fuelAccounts,
+  fuelSelections,
   form,
+  includeFuel,
   isSaving,
   selectedCount,
+  selectedFuelPoints,
+  setFuelSelections,
   setForm,
+  setIncludeFuel,
+  updateFuelTargetToCurrent,
   onClose,
   onSubmit,
 }: {
   buyers: Buyer[];
+  combinedPayoutTotal: number | null;
   faceValue: number;
   estimatedPayout: number | null;
+  fuelAccounts: FuelAccount[];
+  fuelSelections: FuelSelection[];
   form: SellForm;
+  includeFuel: boolean;
   isSaving: boolean;
   selectedCount: number;
+  selectedFuelPoints: number;
+  setFuelSelections: (selections: FuelSelection[]) => void;
   setForm: (form: SellForm) => void;
+  setIncludeFuel: (includeFuel: boolean) => void;
+  updateFuelTargetToCurrent: (account: FuelAccount) => void;
   onClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const selectedFuelAccounts = fuelSelections.map((selection) => ({
+    selection,
+    account: fuelAccounts.find(
+      (fuelAccount) => fuelAccount.id === selection.fuel_reward_account_id,
+    ),
+  }));
+  const hasInvalidPayoutRate = isDecimalStylePayoutRate(form.liquidation_rate);
   const canSubmit =
     selectedCount > 0 &&
     form.buyer_id !== "" &&
-    (form.payout_total.trim() !== "" || form.liquidation_rate.trim() !== "");
+    (form.payout_total.trim() !== "" || form.liquidation_rate.trim() !== "") &&
+    !hasInvalidPayoutRate &&
+    (!includeFuel ||
+      selectedFuelAccounts.every(({ account, selection }) =>
+        account !== undefined &&
+        Number(selection.points_sold) > 0 &&
+        !isFuelBelowTarget(account) &&
+        (!fuelRequiresOverageOverride(account) ||
+          selection.fuel_overage_override),
+      ));
+  const selectedBuyer =
+    buyers.find((buyer) => buyer.id === Number(form.buyer_id)) ?? null;
+
+  function updateBuyer(value: string) {
+    const buyer = buyers.find((item) => item.id === Number(value)) ?? null;
+
+    setForm({
+      ...form,
+      buyer_id: value,
+      expected_payment_date: buyer
+        ? addDaysString(form.sold_date, buyer.default_payout_days)
+        : "",
+      liquidation_rate:
+        buyer?.default_payout_rate === null || buyer?.default_payout_rate === undefined
+          ? form.liquidation_rate
+          : formatStoredRateAsPercent(buyer.default_payout_rate),
+      payout_total:
+        buyer?.default_payout_rate === null || buyer?.default_payout_rate === undefined
+          ? form.payout_total
+          : "",
+    });
+  }
+
+  function updateSoldDate(value: string) {
+    setForm({
+      ...form,
+      sold_date: value,
+      expected_payment_date: selectedBuyer
+        ? addDaysString(value, selectedBuyer.default_payout_days)
+        : form.expected_payment_date,
+    });
+  }
+
+  function toggleFuelAccount(account: FuelAccount) {
+    const existingSelection = fuelSelections.find(
+      (selection) => selection.fuel_reward_account_id === account.id,
+    );
+
+    if (existingSelection) {
+      setFuelSelections(
+        fuelSelections.filter(
+          (selection) => selection.fuel_reward_account_id !== account.id,
+        ),
+      );
+      return;
+    }
+
+    setFuelSelections([
+      ...fuelSelections,
+      {
+        fuel_reward_account_id: account.id,
+        points_sold: String(account.current_points),
+        fuel_overage_override: false,
+      },
+    ]);
+  }
+
+  function setFuelOverageOverride(accountId: number, value: boolean) {
+    setFuelSelections(
+      fuelSelections.map((selection) =>
+        selection.fuel_reward_account_id === accountId
+          ? { ...selection, fuel_overage_override: value }
+          : selection,
+      ),
+    );
+  }
+
+  function toggleIncludeFuel(value: boolean) {
+    setIncludeFuel(value);
+
+    if (!value) {
+      setFuelSelections([]);
+    }
+  }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop px-4 py-6">
       <form
-        className="w-full max-w-lg space-y-4 rounded-lg bg-white p-5 shadow-xl"
+        className="max-h-[90vh] w-full max-w-2xl space-y-4 overflow-y-auto rounded-lg bg-white p-5 shadow-xl"
         onSubmit={onSubmit}
       >
         <div className="flex items-start justify-between gap-4">
@@ -942,9 +1896,7 @@ function SaleModal({
           <span>Buyer</span>
           <select
             className="h-11 w-full rounded-md border border-slate-300 px-3"
-            onChange={(event) =>
-              setForm({ ...form, buyer_id: event.target.value })
-            }
+            onChange={(event) => updateBuyer(event.target.value)}
             required
             value={form.buyer_id}
           >
@@ -959,7 +1911,7 @@ function SaleModal({
 
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block space-y-2 text-sm font-medium text-slate-700">
-            <span>Liquidation Rate</span>
+            <span>Card Payout Rate (%)</span>
             <input
               className="h-11 w-full rounded-md border border-slate-300 px-3"
               min="0"
@@ -970,11 +1922,22 @@ function SaleModal({
                   payout_total: "",
                 })
               }
-              placeholder="0.92"
-              step="0.0001"
+              placeholder="92"
+              step="0.01"
               type="number"
               value={form.liquidation_rate}
             />
+            <p
+              className={`text-xs ${
+                hasInvalidPayoutRate
+                  ? "font-medium text-red-700"
+                  : "text-slate-500"
+              }`}
+            >
+              {hasInvalidPayoutRate
+                ? "Enter payout rate as a percentage."
+                : "Enter percent, e.g. 92 for 92%."}
+            </p>
           </label>
 
           <label className="block space-y-2 text-sm font-medium text-slate-700">
@@ -997,32 +1960,168 @@ function SaleModal({
           </label>
         </div>
 
-        <label className="block space-y-2 text-sm font-medium text-slate-700">
-          <span>Sold Date</span>
-          <input
-            className="h-11 w-full rounded-md border border-slate-300 px-3"
-            onChange={(event) =>
-              setForm({ ...form, sold_date: event.target.value })
-            }
-            type="date"
-            value={form.sold_date}
-          />
-        </label>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block space-y-2 text-sm font-medium text-slate-700">
+            <span>Sold Date</span>
+            <input
+              className="h-11 w-full rounded-md border border-slate-300 px-3"
+              onChange={(event) => updateSoldDate(event.target.value)}
+              type="date"
+              value={form.sold_date}
+            />
+          </label>
 
-        <label className="block space-y-2 text-sm font-medium text-slate-700">
-          <span>Expected Payment Date</span>
-          <input
-            className="h-11 w-full rounded-md border border-slate-300 px-3"
-            onChange={(event) =>
-              setForm({
-                ...form,
-                expected_payment_date: event.target.value,
-              })
-            }
-            type="date"
-            value={form.expected_payment_date}
-          />
-        </label>
+          <label className="block space-y-2 text-sm font-medium text-slate-700">
+            <span>Expected Payment Date</span>
+            <input
+              className="h-11 w-full rounded-md border border-slate-300 px-3"
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  expected_payment_date: event.target.value,
+                })
+              }
+              type="date"
+              value={form.expected_payment_date}
+            />
+          </label>
+        </div>
+
+        <section className="rounded-md border border-slate-200 bg-slate-50 p-3">
+          <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+            <input
+              checked={includeFuel}
+              onChange={(event) => toggleIncludeFuel(event.target.checked)}
+              type="checkbox"
+            />
+            Include Fuel Points
+          </label>
+
+          {includeFuel ? (
+            <div className="mt-3 max-h-56 space-y-2 overflow-auto">
+              {fuelAccounts.map((account) => {
+                const selection = fuelSelections.find(
+                  (item) => item.fuel_reward_account_id === account.id,
+                );
+                const isBelowTarget = isFuelBelowTarget(account);
+                const overagePoints = fuelOveragePoints(account);
+                const requiresOverageOverride =
+                  fuelRequiresOverageOverride(account);
+
+                return (
+                  <div
+                    className={`rounded-md border px-3 py-2 ${
+                      isBelowTarget
+                        ? "border-red-200 bg-red-50"
+                        : requiresOverageOverride
+                          ? "border-amber-200 bg-amber-50"
+                          : "border-slate-200 bg-white"
+                    }`}
+                    key={account.id}
+                  >
+                    <label className="flex items-start justify-between gap-3 text-sm">
+                      <span>
+                        <span className="font-semibold">{account.retailer}</span>
+                        <span className="ml-2 text-slate-500">
+                          {fuelTargetLabel(account)}
+                        </span>
+                        {isBelowTarget ? (
+                          <span className="ml-2 rounded-md bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
+                            Below target
+                          </span>
+                        ) : null}
+                        <span className="mt-1 block text-xs text-slate-500">
+                          Cycle {formatDate(account.expiration_cycle)} · Target{" "}
+                          {account.target_points?.toLocaleString() ?? "-"} · Alt{" "}
+                          {account.alt_id ?? "-"}
+                        </span>
+                        {requiresOverageOverride ? (
+                          <span className="mt-1 block text-xs font-medium text-amber-700">
+                            This account is more than 1,000 points over target.
+                          </span>
+                        ) : null}
+                      </span>
+                      <input
+                        checked={Boolean(selection)}
+                        disabled={isBelowTarget}
+                        onChange={() => toggleFuelAccount(account)}
+                        type="checkbox"
+                      />
+                    </label>
+
+                    {selection ? (
+                      <div className="mt-2 space-y-2 text-xs font-medium text-slate-500">
+                        <p>
+                          Full balance selected:{" "}
+                          {Number(selection.points_sold).toLocaleString()} points
+                        </p>
+                        {requiresOverageOverride ? (
+                          <div className="space-y-2 rounded-md border border-amber-200 bg-white px-3 py-2 text-amber-800">
+                            <p>
+                              Overage: {overagePoints.toLocaleString()} points.
+                            </p>
+                            <label className="flex items-center gap-2 font-semibold">
+                              <input
+                                checked={selection.fuel_overage_override}
+                                onChange={(event) =>
+                                  setFuelOverageOverride(
+                                    account.id,
+                                    event.target.checked,
+                                  )
+                                }
+                                type="checkbox"
+                              />
+                              Sell with overage
+                            </label>
+                            <button
+                              className="text-left font-semibold underline"
+                              onClick={() => updateFuelTargetToCurrent(account)}
+                              type="button"
+                            >
+                              Update target to current points
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {fuelAccounts.length === 0 ? (
+                <p className="text-sm text-slate-500">
+                  No active fuel accounts available.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+
+        <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
+          <div className="flex justify-between gap-3">
+            <span>Selected card face value</span>
+            <span className="font-semibold text-slate-950">
+              {formatAmount(faceValue)}
+            </span>
+          </div>
+          <div className="mt-1 flex justify-between gap-3">
+            <span>Selected fuel points</span>
+            <span className="font-semibold text-slate-950">
+              {selectedFuelPoints.toLocaleString()}
+            </span>
+          </div>
+          <div className="mt-2 flex justify-between gap-3 border-t border-slate-200 pt-2">
+            <span>Total payout for bundle</span>
+            <span className="font-semibold text-slate-950">
+              {formatAmount(combinedPayoutTotal)}
+            </span>
+          </div>
+          {form.liquidation_rate ? (
+            <span className="mt-1 block text-xs">
+              Card payout {formatAmount(estimatedPayout)} at{" "}
+              {form.liquidation_rate}%
+            </span>
+          ) : null}
+        </div>
 
         <label className="block space-y-2 text-sm font-medium text-slate-700">
           <span>Notes</span>
@@ -1032,16 +2131,6 @@ function SaleModal({
             value={form.notes}
           />
         </label>
-
-        <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
-          Expected payout:{" "}
-          <span className="font-semibold text-slate-950">
-            {formatAmount(estimatedPayout)}
-          </span>
-          {form.liquidation_rate ? (
-            <span className="ml-2">at {formatRate(form.liquidation_rate)}</span>
-          ) : null}
-        </div>
 
         <div className="flex justify-end gap-2">
           <button
@@ -1081,7 +2170,7 @@ function SettleModal({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop px-4 py-6">
       <form
         className="w-full max-w-lg space-y-4 rounded-lg bg-white p-5 shadow-xl"
         onSubmit={onSubmit}

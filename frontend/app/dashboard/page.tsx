@@ -6,6 +6,18 @@ import { useEffect, useMemo, useState } from "react";
 import { API_BASE_URL } from "@/lib/api";
 
 type DashboardSummary = {
+  reporting_range: string;
+  reporting_range_start: string | null;
+  reporting_range_end: string | null;
+  range_total_purchases: string | number;
+  range_total_sales: string | number;
+  range_profit: string | number;
+  rewards_by_program: RewardProgramMetric[];
+  rewards_by_type: RewardMetric[];
+  rewards_by_card: Array<RewardMetric & { credit_card_id: number; nickname: string }>;
+  rewards_by_category: Array<
+    RewardMetric & { spending_category_id: number; key: string; name: string }
+  >;
   total_available_inventory_face_value: string | number;
   total_card_acquisition_cost: string | number;
   available_acquisition_cost: string | number;
@@ -23,6 +35,9 @@ type DashboardSummary = {
   credit_card_estimated_balances: string | number;
   credit_card_utilization_warnings: number;
   purchase_batch_count: number;
+  top_buyer_by_volume: BuyerMetric | null;
+  highest_profit_buyer: BuyerMetric | null;
+  overdue_buyers: BuyerMetric[];
   warnings: {
     overdue_payments: Array<{
       id: number;
@@ -54,6 +69,40 @@ type DashboardSummary = {
   };
 };
 
+type RewardMetric = {
+  rewards_type?: string;
+  estimated_rewards_earned: string | number;
+};
+
+type RewardProgramMetric = RewardMetric & {
+  reward_program_id: number | null;
+  name: string;
+  short_code: string;
+  category: string;
+  estimated_value_cents_per_point: string | number | null;
+  estimated_value: string | number;
+};
+
+type BuyerMetric = {
+  id: number;
+  name: string;
+  total_sales_volume?: string | number;
+  profit?: string | number;
+  outstanding_payouts?: string | number;
+  overdue_count?: number;
+};
+
+type AppSettings = {
+  multi_player_mode_enabled: boolean;
+};
+
+type Player = {
+  id: number;
+  label: string;
+  name: string | null;
+  active: boolean;
+};
+
 type MetricCardProps = {
   href: string;
   label: string;
@@ -76,6 +125,16 @@ function formatCurrency(value: string | number | null) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
+}
+
+function formatRewardAmount(reward: RewardProgramMetric) {
+  const amount = Number(reward.estimated_rewards_earned);
+
+  if (reward.category === "Cashback") {
+    return formatCurrency(amount);
+  }
+
+  return `${formatNumber(amount)} pts`;
 }
 
 function formatDate(value: string | null) {
@@ -130,6 +189,10 @@ function MetricCard({ href, label, value, tone = "default" }: MetricCardProps) {
 
 export default function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [reportingRange, setReportingRange] = useState("this_month");
+  const [selectedPlayerId, setSelectedPlayerId] = useState("ALL");
+  const [players, setPlayers] = useState<Player[]>([]);
+  const [isMultiPlayerModeEnabled, setIsMultiPlayerModeEnabled] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -140,7 +203,15 @@ export default function DashboardPage() {
         setError(null);
 
         try {
-          const response = await fetch(`${API_BASE_URL}/dashboard/summary`);
+          const params = new URLSearchParams({ range: reportingRange });
+
+          if (selectedPlayerId !== "ALL") {
+            params.set("player_id", selectedPlayerId);
+          }
+
+          const response = await fetch(
+            `${API_BASE_URL}/dashboard/summary?${params.toString()}`,
+          );
 
           if (!response.ok) {
             throw new Error(`Failed to load dashboard (${response.status})`);
@@ -158,6 +229,34 @@ export default function DashboardPage() {
       }
 
       void loadSummary();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [reportingRange, selectedPlayerId]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      async function loadPlayerSettings() {
+        try {
+          const [settingsResponse, playersResponse] = await Promise.all([
+            fetch(`${API_BASE_URL}/app-settings`),
+            fetch(`${API_BASE_URL}/players/`),
+          ]);
+
+          if (!settingsResponse.ok || !playersResponse.ok) {
+            return;
+          }
+
+          const settings = (await settingsResponse.json()) as AppSettings;
+          setIsMultiPlayerModeEnabled(settings.multi_player_mode_enabled);
+          setPlayers((await playersResponse.json()) as Player[]);
+        } catch {
+          setIsMultiPlayerModeEnabled(false);
+          setPlayers([]);
+        }
+      }
+
+      void loadPlayerSettings();
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
@@ -188,18 +287,33 @@ export default function DashboardPage() {
             </h1>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Link
-              className="inline-flex h-10 items-center rounded-md border border-slate-300 px-4 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200"
-              href="/"
+            <select
+              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold"
+              onChange={(event) => setReportingRange(event.target.value)}
+              value={reportingRange}
             >
-              Purchases
-            </Link>
-            <Link
-              className="inline-flex h-10 items-center rounded-md border border-slate-300 px-4 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200"
-              href="/inventory"
-            >
-              Inventory
-            </Link>
+              <option value="this_month">This month</option>
+              <option value="last_month">Last month</option>
+              <option value="ytd">YTD</option>
+              <option value="all_time">All time</option>
+            </select>
+            {isMultiPlayerModeEnabled ? (
+              <select
+                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold"
+                onChange={(event) => setSelectedPlayerId(event.target.value)}
+                value={selectedPlayerId}
+              >
+                <option value="ALL">All players</option>
+                {players
+                  .filter((player) => player.active)
+                  .map((player) => (
+                    <option key={player.id} value={String(player.id)}>
+                      {player.label}
+                      {player.name ? ` · ${player.name}` : ""}
+                    </option>
+                  ))}
+              </select>
+            ) : null}
           </div>
         </header>
 
@@ -219,6 +333,31 @@ export default function DashboardPage() {
           <>
             <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <MetricCard
+                href="/purchases"
+                label="Purchases in Range"
+                value={formatCurrency(summary.range_total_purchases)}
+              />
+              <MetricCard
+                href="/sales"
+                label="Sales in Range"
+                value={formatCurrency(summary.range_total_sales)}
+              />
+              <MetricCard
+                href="/sales"
+                label="Profit in Range"
+                tone={Number(summary.range_profit) >= 0 ? "green" : "red"}
+                value={formatCurrency(summary.range_profit)}
+              />
+              <MetricCard
+                href="/rewards"
+                label="Rewards Programs"
+                value={formatNumber(
+                  summary.rewards_by_program.filter(
+                    (reward) => Number(reward.estimated_rewards_earned) > 0,
+                  ).length,
+                )}
+              />
+              <MetricCard
                 href="/inventory"
                 label="Available Inventory Face Value"
                 value={formatCurrency(
@@ -236,13 +375,13 @@ export default function DashboardPage() {
                 value={formatCurrency(summary.available_acquisition_cost)}
               />
               <MetricCard
-                href="/verification"
+                href="/inventory"
                 label="Pending Verification Face Value"
                 tone={summary.pending_verification_count > 0 ? "yellow" : "default"}
                 value={formatCurrency(summary.pending_verification_face_value)}
               />
               <MetricCard
-                href="/verification"
+                href="/inventory"
                 label="Pending Verification Count"
                 tone={summary.pending_verification_count > 0 ? "yellow" : "default"}
                 value={formatNumber(summary.pending_verification_count)}
@@ -317,6 +456,110 @@ export default function DashboardPage() {
                 }
                 value={formatNumber(summary.credit_card_utilization_warnings)}
               />
+              <MetricCard
+                href={
+                  summary.top_buyer_by_volume
+                    ? `/buyers/${summary.top_buyer_by_volume.id}`
+                    : "/buyers"
+                }
+                label="Top Buyer by Volume"
+                value={
+                  summary.top_buyer_by_volume
+                    ? `${summary.top_buyer_by_volume.name} · ${formatCurrency(
+                        summary.top_buyer_by_volume.total_sales_volume ?? 0,
+                      )}`
+                    : "-"
+                }
+              />
+              <MetricCard
+                href={
+                  summary.highest_profit_buyer
+                    ? `/buyers/${summary.highest_profit_buyer.id}`
+                    : "/buyers"
+                }
+                label="Highest Profit Buyer"
+                tone="green"
+                value={
+                  summary.highest_profit_buyer
+                    ? `${summary.highest_profit_buyer.name} · ${formatCurrency(
+                        summary.highest_profit_buyer.profit ?? 0,
+                      )}`
+                    : "-"
+                }
+              />
+              <MetricCard
+                href="/buyers"
+                label="Overdue Buyers"
+                tone={summary.overdue_buyers.length > 0 ? "red" : "default"}
+                value={formatNumber(summary.overdue_buyers.length)}
+              />
+            </section>
+
+            <section className="grid gap-4 lg:grid-cols-3">
+              <RewardPanel
+                emptyText="No estimated rewards in this range."
+                href="/rewards"
+                title="Rewards Snapshot"
+              >
+                {summary.rewards_by_program.map((reward) => (
+                  <Link
+                    className="flex justify-between rounded-md bg-white px-3 py-2"
+                    href={`/rewards?program=${reward.short_code}`}
+                    key={reward.reward_program_id ?? reward.short_code}
+                  >
+                    <span>
+                      <span className="font-semibold">{reward.short_code}</span>
+                      <span className="ml-2 text-xs text-slate-500">
+                        {reward.name}
+                      </span>
+                    </span>
+                    <span className="text-right font-semibold">
+                      {formatRewardAmount(reward)}
+                      {Number(reward.estimated_value) > 0 ? (
+                        <span className="block text-xs font-medium text-slate-500">
+                          ~{formatCurrency(reward.estimated_value)} value
+                        </span>
+                      ) : null}
+                    </span>
+                  </Link>
+                ))}
+              </RewardPanel>
+              <RewardPanel
+                emptyText="No card rewards in this range."
+                href="/rewards?view=cards"
+                title="Rewards by Card"
+              >
+                {summary.rewards_by_card.slice(0, 8).map((reward) => (
+                  <Link
+                    className="flex justify-between rounded-md bg-white px-3 py-2"
+                    href={`/rewards?card=${reward.credit_card_id}`}
+                    key={reward.credit_card_id}
+                  >
+                    <span>{reward.nickname}</span>
+                    <span className="font-semibold">
+                      {formatNumber(Number(reward.estimated_rewards_earned))}
+                    </span>
+                  </Link>
+                ))}
+              </RewardPanel>
+              <RewardPanel
+                emptyText="No category rewards in this range."
+                href="/rewards?view=categories"
+                title="Rewards by Category"
+              >
+                {summary.rewards_by_category.slice(0, 8).map((reward) => (
+                  <Link
+                    className="flex justify-between rounded-md bg-white px-3 py-2"
+                    href={`/rewards?category=${reward.key}`}
+                    key={reward.spending_category_id}
+                  >
+                    <span>{reward.name}</span>
+                    <span className="font-semibold">
+                      {formatNumber(Number(reward.estimated_rewards_earned))}
+                    </span>
+                  </Link>
+                ))}
+              </RewardPanel>
             </section>
 
             <section className="grid gap-4 lg:grid-cols-3">
@@ -442,6 +685,37 @@ function WarningPanel({
           View
         </Link>
       </div>
+      {hasItems ? (
+        <ul className="mt-3 space-y-2 text-sm">{children}</ul>
+      ) : (
+        <p className="mt-3 text-sm text-slate-500">{emptyText}</p>
+      )}
+    </section>
+  );
+}
+
+function RewardPanel({
+  title,
+  emptyText,
+  children,
+  href,
+}: {
+  title: string;
+  emptyText: string;
+  children: React.ReactNode;
+  href?: string;
+}) {
+  const hasItems = Array.isArray(children) ? children.length > 0 : Boolean(children);
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
+      {href ? (
+        <Link className="font-semibold hover:underline" href={href}>
+          {title}
+        </Link>
+      ) : (
+        <h2 className="font-semibold">{title}</h2>
+      )}
       {hasItems ? (
         <ul className="mt-3 space-y-2 text-sm">{children}</ul>
       ) : (

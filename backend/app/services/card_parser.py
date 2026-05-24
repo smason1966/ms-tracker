@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass
 
@@ -14,8 +16,96 @@ def normalize_text(raw_text: str) -> str:
     return raw_text.replace("\n", " ").replace("\t", " ").strip()
 
 
+def plain_ocr_text(raw_text: str) -> str:
+    for marker in (
+        "\n\nOCR_SPATIAL_TOKENS:",
+        "\n\nBARCODE_CANDIDATES:",
+        "\n\nOCR_ZONE_CROPS:",
+        "\n\nEXTRACTION_CANDIDATES:",
+    ):
+        if marker in raw_text:
+            raw_text = raw_text.split(marker, 1)[0]
+
+    return raw_text
+
+
 def digits_only(value: str) -> str:
     return re.sub(r"\D", "", value)
+
+
+def normalize_gift_code(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", value).upper()
+
+
+def format_gift_code(value: str) -> str:
+    normalized = normalize_gift_code(value)
+    if len(normalized) == 16:
+        return " ".join(
+            normalized[index : index + 4] for index in range(0, 16, 4)
+        )
+    return normalized
+
+
+def gift_code_prefix_pattern(prefix: str) -> str:
+    separator = r"[\s.\-_]*"
+    character_patterns = {
+        "A": "[A4]",
+        "D": "[D0O]",
+        "W": "[WVU H]",
+        "N": "[N]",
+    }
+
+    return separator.join(
+        character_patterns.get(character, re.escape(character))
+        for character in prefix
+    )
+
+
+def correct_gift_code_prefix(value: str, prefix: str) -> str:
+    detected_prefix = (
+        value[: len(prefix)]
+        .replace("4", "A")
+        .replace("0", "D" if prefix.endswith("D") else "O")
+        .replace("O", "D" if prefix.endswith("D") else "O")
+        .replace("V", "W")
+        .replace("U", "W")
+        .replace("H", "W")
+    )
+
+    return detected_prefix + value[len(prefix):]
+
+
+def parse_prefixed_gift_code(
+    text: str,
+    *,
+    brand_name: str,
+    prefix: str,
+) -> ParsedCardData | None:
+    ocr_text = plain_ocr_text(text)
+    separator = r"[\s.\-_]*"
+    pattern = (
+        rf"\b({gift_code_prefix_pattern(prefix)}{separator}[A-Z0-9]{{4}}"
+        rf"{separator}[A-Z0-9]{{4}}{separator}[A-Z0-9]{{4}})\b"
+    )
+    match = re.search(pattern, ocr_text, flags=re.IGNORECASE)
+
+    if not match:
+        return None
+
+    raw_gift_code = normalize_gift_code(match.group(1))
+    gift_code = correct_gift_code_prefix(raw_gift_code, prefix)
+    confidence = 0.97 if gift_code.startswith(prefix) and len(gift_code) == 16 else 0.76
+
+    return ParsedCardData(
+        card_number=format_gift_code(gift_code),
+        pin=None,
+        confidence_score=confidence,
+        notes=(
+            f"{brand_name} parser. Expected {prefix} gift code prefix and "
+            "grouped gift-code format matched; pattern recognition preferred "
+            "over raw OCR confidence."
+        ),
+    )
 
 
 def extract_barcode_candidates(raw_text: str) -> list[str]:
@@ -35,7 +125,7 @@ def extract_barcode_candidates(raw_text: str) -> list[str]:
 
 
 def find_numeric_candidates(text: str) -> list[str]:
-    candidates = re.findall(r"(?:\d[\s-]?){8,40}", text)
+    candidates = re.findall(r"(?:\d[\s-]?){8,40}", plain_ocr_text(text))
     results: list[str] = []
 
     for candidate in candidates:
@@ -48,7 +138,10 @@ def find_numeric_candidates(text: str) -> list[str]:
 
 
 def find_pin_candidates(text: str) -> list[str]:
-    pin_nearby = re.findall(r"(?:PIN|Pin|pin)[^\d]{0,30}(\d{3,8})", text)
+    pin_nearby = re.findall(
+        r"(?:PIN|Pin|pin)[^\d]{0,30}(\d{3,8})",
+        plain_ocr_text(text),
+    )
 
     return [pin for pin in pin_nearby if pin not in {"2024", "2025", "2026", "0525"}]
 
@@ -104,9 +197,27 @@ def calculate_confidence(
 
 
 def parse_best_buy(text: str) -> ParsedCardData:
+    ocr_text = plain_ocr_text(text)
     card_number = choose_card_number(text)
-    pins = find_pin_candidates(text)
-    pin = pins[0] if pins else None
+    card_match = re.search(
+        r"(?:CARD\s*#?|CARD\s*NUMBER)[^\d]{0,40}((?:\d[\s-]?){16})",
+        ocr_text,
+        flags=re.IGNORECASE,
+    )
+
+    if card_match:
+        card_number = digits_only(card_match.group(1))
+
+    pin_match = re.search(r"\bPIN\s*[:#-]?\s*(\d{4})\b", ocr_text, flags=re.IGNORECASE)
+    pin = pin_match.group(1) if pin_match else None
+
+    if not pin:
+        inline_pin_match = re.search(r"((?:\d[\s-]?){16})\s+(\d{4})\b", ocr_text)
+        pin = inline_pin_match.group(2) if inline_pin_match else None
+
+    if not pin:
+        pins = [candidate for candidate in find_pin_candidates(text) if len(candidate) == 4]
+        pin = pins[0] if pins else None
 
     confidence = calculate_confidence(
         text=text,
@@ -119,7 +230,48 @@ def parse_best_buy(text: str) -> ParsedCardData:
         card_number=card_number,
         pin=pin,
         confidence_score=confidence,
-        notes="Best Buy parser. Barcode candidates preferred. Human verification required.",
+        notes=(
+            "Best Buy parser. CARD #, barcode card number, and 4-digit PIN "
+            "after PIN label or beside card number preferred."
+        ),
+    )
+
+
+def parse_nike(text: str) -> ParsedCardData:
+    ocr_text = plain_ocr_text(text)
+    card_number = choose_card_number(text)
+    card_match = re.search(
+        r"(?:CARD\s*#?|CARD\s*NUMBER)[^\d]{0,40}((?:\d[\s-]?){12,24})",
+        ocr_text,
+        flags=re.IGNORECASE,
+    )
+
+    if card_match:
+        card_number = digits_only(card_match.group(1))
+
+    pin_match = re.search(
+        r"(?:PIN|SECURITY\s*CODE|SCRATCH(?:-|\s)?OFF)[^\d]{0,50}(\d{6})",
+        ocr_text,
+        flags=re.IGNORECASE,
+    )
+    pin = pin_match.group(1) if pin_match else None
+
+    if not pin:
+        pins = [candidate for candidate in find_pin_candidates(text) if len(candidate) == 6]
+        pin = pins[0] if pins else None
+
+    confidence = calculate_confidence(
+        text=text,
+        card_number=card_number,
+        pin=pin,
+        max_confidence=0.92,
+    )
+
+    return ParsedCardData(
+        card_number=card_number,
+        pin=pin,
+        confidence_score=confidence,
+        notes="Nike parser. CARD # and 6-digit PIN near scratch-off area preferred.",
     )
 
 
@@ -146,7 +298,20 @@ def parse_generic(text: str) -> ParsedCardData:
 def parse_card_data(raw_text: str, brand: str | None = None) -> ParsedCardData:
     brand_normalized = (brand or "").strip().lower()
 
+    if "uber" in brand_normalized:
+        parsed = parse_prefixed_gift_code(raw_text, brand_name="Uber", prefix="NAAD")
+        if parsed:
+            return parsed
+
+    if "doordash" in brand_normalized:
+        parsed = parse_prefixed_gift_code(raw_text, brand_name="DoorDash", prefix="NAAW")
+        if parsed:
+            return parsed
+
     if "best buy" in brand_normalized:
         return parse_best_buy(raw_text)
+
+    if "nike" in brand_normalized:
+        return parse_nike(raw_text)
 
     return parse_generic(raw_text)

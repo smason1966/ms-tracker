@@ -4,6 +4,14 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { API_BASE_URL } from "@/lib/api";
 
+type RewardProgram = {
+  id: number;
+  name: string;
+  short_code: string;
+  category: string;
+  active: boolean;
+};
+
 type CreditCard = {
   id: number;
   nickname: string;
@@ -17,6 +25,8 @@ type CreditCard = {
   signup_bonus_spend: string | number | null;
   signup_bonus_deadline: string | null;
   current_spend_progress: string | number;
+  reward_program_id: number | null;
+  reward_program: RewardProgram | null;
   rewards_type: string;
   rewards_rate: string | number | null;
   is_active: boolean;
@@ -39,7 +49,7 @@ type CardForm = {
   signup_bonus_spend: string;
   signup_bonus_deadline: string;
   current_spend_progress: string;
-  rewards_type: string;
+  reward_program_id: string;
   rewards_rate: string;
   notes: string;
 };
@@ -56,7 +66,7 @@ const emptyForm: CardForm = {
   signup_bonus_spend: "",
   signup_bonus_deadline: "",
   current_spend_progress: "0",
-  rewards_type: "OTHER",
+  reward_program_id: "",
   rewards_rate: "",
   notes: "",
 };
@@ -113,6 +123,7 @@ function isDeadlineSoon(value: string | null) {
 
 export default function CreditCardsPage() {
   const [cards, setCards] = useState<CreditCard[]>([]);
+  const [rewardPrograms, setRewardPrograms] = useState<RewardProgram[]>([]);
   const [form, setForm] = useState<CardForm>(emptyForm);
   const [editingCard, setEditingCard] = useState<CreditCard | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -130,13 +141,24 @@ export default function CreditCardsPage() {
     setError(null);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/credit-cards`);
+      const [cardsResponse, programsResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/credit-cards`),
+        fetch(
+          `${API_BASE_URL}/reward-programs/?active_only=true&eligible_for_credit_cards=true`,
+        ),
+      ]);
 
-      if (!response.ok) {
-        throw new Error(`Failed to load credit cards (${response.status})`);
+      if (!cardsResponse.ok) {
+        throw new Error(`Failed to load credit cards (${cardsResponse.status})`);
+      }
+      if (!programsResponse.ok) {
+        throw new Error(
+          `Failed to load reward programs (${programsResponse.status})`,
+        );
       }
 
-      setCards((await response.json()) as CreditCard[]);
+      setCards((await cardsResponse.json()) as CreditCard[]);
+      setRewardPrograms((await programsResponse.json()) as RewardProgram[]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load cards.");
     } finally {
@@ -174,7 +196,8 @@ export default function CreditCardsPage() {
         card.signup_bonus_spend === null ? "" : String(card.signup_bonus_spend),
       signup_bonus_deadline: card.signup_bonus_deadline ?? "",
       current_spend_progress: String(card.current_spend_progress ?? 0),
-      rewards_type: card.rewards_type,
+      reward_program_id:
+        card.reward_program_id === null ? "" : String(card.reward_program_id),
       rewards_rate: card.rewards_rate === null ? "" : String(card.rewards_rate),
       notes: card.notes ?? "",
     });
@@ -207,7 +230,9 @@ export default function CreditCardsPage() {
       signup_bonus_spend: form.signup_bonus_spend || null,
       signup_bonus_deadline: form.signup_bonus_deadline || null,
       current_spend_progress: form.current_spend_progress || "0",
-      rewards_type: form.rewards_type,
+      reward_program_id: form.reward_program_id
+        ? Number(form.reward_program_id)
+        : null,
       rewards_rate: form.rewards_rate || null,
       notes: form.notes.trim() || null,
     };
@@ -335,7 +360,11 @@ export default function CreditCardsPage() {
                     </div>
                     <div>
                       <dt className="font-medium text-slate-500">Rewards</dt>
-                      <dd className="font-semibold">{card.rewards_type}</dd>
+                      <dd className="font-semibold">
+                        {card.reward_program
+                          ? card.reward_program.name
+                          : card.rewards_type}
+                      </dd>
                     </div>
                   </dl>
 
@@ -441,15 +470,16 @@ export default function CreditCardsPage() {
               ))}
 
               <label className="space-y-2 text-sm font-medium text-slate-700">
-                <span>Rewards Type</span>
+                <span>Reward Program</span>
                 <select
                   className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                  onChange={(event) => updateFormField("rewards_type", event.target.value)}
-                  value={form.rewards_type}
+                  onChange={(event) => updateFormField("reward_program_id", event.target.value)}
+                  value={form.reward_program_id}
                 >
-                  {["CASHBACK", "MR", "UR", "TY", "MILES", "OTHER"].map((type) => (
-                    <option key={type} value={type}>
-                      {type}
+                  <option value="">No default program</option>
+                  {rewardPrograms.map((program) => (
+                    <option key={program.id} value={program.id}>
+                      {program.name} ({program.short_code})
                     </option>
                   ))}
                 </select>

@@ -27,6 +27,13 @@ class PurchaseBatch(Base):
         ForeignKey("credit_cards.id"),
         nullable=True,
     )
+    player_id: Mapped[int | None] = mapped_column(
+        ForeignKey("players.id"),
+        nullable=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    imported_from_environment: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    imported_source_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    imported_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

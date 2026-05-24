@@ -35,6 +35,11 @@ class GiftCard(Base):
         default="PENDING",
         nullable=False,
     )
+    ocr_status: Mapped[str] = mapped_column(
+        String(50),
+        default="pending",
+        nullable=False,
+    )
 
     detected_card_number: Mapped[str | None] = mapped_column(String(255), nullable=True)
     detected_pin: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -53,8 +58,17 @@ class GiftCard(Base):
     sold_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     expected_payment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     settlement_received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    settlement_payment_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("payment_accounts.id"),
+        nullable=True,
+    )
     payout_received: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     internal_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    void_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    intake_idempotency_key: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
+    imported_from_environment: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    imported_source_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    imported_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

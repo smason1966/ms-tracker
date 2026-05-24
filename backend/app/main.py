@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.card_brands import router as card_brands_router
+from app.api.card_issuers import router as card_issuers_router
+from app.api.card_networks import router as card_networks_router
 from app.api.buyers import router as buyers_router
 from app.api.gift_cards import router as gift_cards_router
 from app.api.purchase_batches import router as purchase_batches_router
@@ -15,8 +17,19 @@ from app.api.receipts import router as receipts_router
 from app.api.fuel_accounts import router as fuel_accounts_router
 from app.api.fuel_point_entries import router as fuel_point_entries_router
 from app.api.credit_cards import router as credit_cards_router
+from app.api.spending_categories import router as spending_categories_router
 from app.api.dashboard import router as dashboard_router
 from app.api.purchase_payments import router as purchase_payments_router
+from app.api.sales import router as sales_router
+from app.api.payment_accounts import router as payment_accounts_router
+from app.api.players import router as players_router
+from app.api.reward_program_categories import router as reward_program_categories_router
+from app.api.reward_programs import router as reward_programs_router
+from app.api.data_transfer import router as data_transfer_router
+from app.db.session import SessionLocal
+from app.services.card_brand_defaults import ensure_card_brand_defaults
+from app.services.reward_program_categories import load_reward_program_categories
+from app.services.reward_program_defaults import ensure_default_reward_program_values
 
 app = FastAPI(title="MS Tracker API")
 
@@ -35,6 +48,8 @@ app.include_router(purchase_batches_router)
 app.include_router(gift_cards_router)
 app.include_router(stores_router)
 app.include_router(card_brands_router)
+app.include_router(card_issuers_router)
+app.include_router(card_networks_router)
 app.include_router(buyers_router)
 app.include_router(card_images_router)
 app.include_router(card_image_queries_router)
@@ -44,8 +59,15 @@ app.include_router(extraction_candidates_router)
 app.include_router(fuel_accounts_router)
 app.include_router(fuel_point_entries_router)
 app.include_router(credit_cards_router)
+app.include_router(spending_categories_router)
 app.include_router(dashboard_router)
 app.include_router(purchase_payments_router)
+app.include_router(sales_router)
+app.include_router(payment_accounts_router)
+app.include_router(players_router)
+app.include_router(reward_program_categories_router)
+app.include_router(reward_programs_router)
+app.include_router(data_transfer_router)
 
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
@@ -53,3 +75,16 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 @app.get("/health")
 def health_check():
     return {"status": "ok", "service": "ms-tracker-api"}
+
+
+@app.on_event("startup")
+def ensure_reward_program_defaults():
+    db = SessionLocal()
+
+    try:
+        ensure_card_brand_defaults(db)
+        load_reward_program_categories(db)
+        ensure_default_reward_program_values(db)
+        db.commit()
+    finally:
+        db.close()
