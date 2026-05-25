@@ -693,10 +693,10 @@ export default function PurchaseIntakePage() {
                 onChange={(event) =>
                   updateFormField("purchase_total_paid", event.target.value)
                 }
-                required
               />
               <p className="text-sm text-slate-500">
-                Actual amount spent for the purchase.
+                Optional receipt/payment context. Gift card cost is entered on
+                the next screen.
               </p>
             </label>
 

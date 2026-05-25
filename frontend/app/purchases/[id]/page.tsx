@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 import { API_BASE_URL } from "@/lib/api";
 
@@ -75,6 +75,23 @@ type PurchaseFinancialForm = {
   financial_notes: string;
 };
 
+type PurchaseDeleteReport = {
+  can_delete: boolean;
+  blocking_dependencies: { message?: string }[];
+  warnings: string[];
+  impact: {
+    gift_cards_to_delete: number;
+    receipts_to_delete: number;
+    fuel_point_entries_to_delete: number;
+    payment_lines_to_remove: number;
+    reward_transactions_to_delete: number;
+    ocr_attempts_to_delete: number;
+    ocr_candidates_to_delete: number;
+    ocr_metrics_to_delete: number;
+    card_images_to_delete: number;
+  };
+};
+
 const emptyGiftCardForm: GiftCardForm = {
   brand: "",
   face_value: "",
@@ -116,6 +133,7 @@ function formatFuelPoints(quantity: number | null, unit: number | null) {
 
 export default function PurchaseDetailPage() {
   const params = useParams<{ id: string | string[] }>();
+  const router = useRouter();
   const purchaseId = useMemo(() => {
     const rawId = params.id;
     return Array.isArray(rawId) ? rawId[0] : rawId;
@@ -146,6 +164,9 @@ export default function PurchaseDetailPage() {
     useState(false);
   const [isSavingFinancials, setIsSavingFinancials] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteReport, setDeleteReport] = useState<PurchaseDeleteReport | null>(null);
+  const [isLoadingDeleteReport, setIsLoadingDeleteReport] = useState(false);
+  const [isDeletingPurchase, setIsDeletingPurchase] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [receiptsError, setReceiptsError] = useState<string | null>(null);
   const [paymentsError, setPaymentsError] = useState<string | null>(null);
@@ -154,8 +175,10 @@ export default function PurchaseDetailPage() {
   const [cardBrandsError, setCardBrandsError] = useState<string | null>(null);
   const [allocationError, setAllocationError] = useState<string | null>(null);
   const [financialError, setFinancialError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const purchaseUrl = `${API_BASE_URL}/purchase-batches/${purchaseId}`;
+  const deleteReportUrl = `${API_BASE_URL}/purchase-batches/${purchaseId}/delete-report`;
   const paymentsUrl = `${API_BASE_URL}/purchase-batches/${purchaseId}/payments`;
   const receiptsUrl = `${API_BASE_URL}/receipts/purchase/${purchaseId}`;
   const giftCardsUrl = `${API_BASE_URL}/gift-cards/purchase/${purchaseId}`;
@@ -223,6 +246,43 @@ export default function PurchaseDetailPage() {
 
     return summary;
   }, [giftCards, purchase]);
+  const deleteImpact = deleteReport?.impact;
+  const realRecordDeleteImpactCount = deleteImpact
+    ? deleteImpact.gift_cards_to_delete +
+      deleteImpact.receipts_to_delete +
+      deleteImpact.fuel_point_entries_to_delete +
+      deleteImpact.ocr_attempts_to_delete +
+      deleteImpact.ocr_candidates_to_delete +
+      deleteImpact.ocr_metrics_to_delete +
+      deleteImpact.card_images_to_delete
+    : 0;
+  const generatedCleanupRows = deleteImpact
+    ? [
+        ["Generated payment records", deleteImpact.payment_lines_to_remove],
+        [
+          "Generated reward transactions",
+          deleteImpact.reward_transactions_to_delete,
+        ],
+      ].filter(([, count]) => Number(count) > 0)
+    : [];
+  const canDeleteEmptyPurchase =
+    Boolean(deleteReport?.can_delete) && realRecordDeleteImpactCount === 0;
+  const deleteBlockedReason =
+    deleteReport?.blocking_dependencies[0]?.message ??
+    (deleteReport && realRecordDeleteImpactCount > 0
+      ? "Purchase has inventory, receipt, fuel, OCR, or card-image records."
+      : null);
+  const deleteImpactRows = deleteImpact
+    ? [
+        ["Gift cards", deleteImpact.gift_cards_to_delete],
+        ["Receipts", deleteImpact.receipts_to_delete],
+        ["Fuel point entries", deleteImpact.fuel_point_entries_to_delete],
+        ["OCR attempts", deleteImpact.ocr_attempts_to_delete],
+        ["OCR candidates", deleteImpact.ocr_candidates_to_delete],
+        ["OCR metrics", deleteImpact.ocr_metrics_to_delete],
+        ["Card images", deleteImpact.card_images_to_delete],
+      ].filter(([, count]) => Number(count) > 0)
+    : [];
 
   const loadGiftCards = useCallback(
     async (options: { showLoading?: boolean } = {}) => {
@@ -499,6 +559,51 @@ export default function PurchaseDetailPage() {
     };
   }, [giftCardsUrl, purchaseId]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadDeleteReport() {
+      if (!purchaseId) {
+        return;
+      }
+
+      setIsLoadingDeleteReport(true);
+      setDeleteError(null);
+
+      try {
+        const response = await fetch(deleteReportUrl);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load delete report (${response.status})`);
+        }
+
+        const data = (await response.json()) as PurchaseDeleteReport;
+
+        if (isMounted) {
+          setDeleteReport(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setDeleteError(
+            err instanceof Error
+              ? err.message
+              : "Failed to load delete safety report.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingDeleteReport(false);
+        }
+      }
+    }
+
+    loadDeleteReport();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [deleteReportUrl, purchaseId]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
@@ -623,6 +728,44 @@ export default function PurchaseDetailPage() {
       );
     } finally {
       setIsRecalculatingAllocation(false);
+    }
+  }
+
+  async function handleDeleteEmptyPurchase() {
+    if (!purchaseId || !canDeleteEmptyPurchase) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Delete this empty purchase and generated payment/reward records? This cannot be undone.",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsDeletingPurchase(true);
+    setDeleteError(null);
+
+    try {
+      const response = await fetch(purchaseUrl, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const responseBody = await response.text();
+        throw new Error(
+          `Failed to delete purchase (${response.status}): ${responseBody}`,
+        );
+      }
+
+      router.push("/purchases");
+    } catch (err) {
+      setDeleteError(
+        err instanceof Error ? err.message : "Failed to delete purchase.",
+      );
+    } finally {
+      setIsDeletingPurchase(false);
     }
   }
 
@@ -898,6 +1041,98 @@ export default function PurchaseDetailPage() {
             {error}
           </div>
         ) : null}
+
+        <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Purchase Cleanup</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Empty test purchases can be deleted when they have no inventory,
+                receipt, fuel, OCR, or card-image records.
+              </p>
+              {isLoadingDeleteReport ? (
+                <p className="mt-2 text-sm text-slate-500">
+                  Checking delete safety...
+                </p>
+              ) : deleteBlockedReason ? (
+                <p className="mt-2 text-sm font-medium text-amber-700">
+                  {deleteBlockedReason}
+                </p>
+              ) : canDeleteEmptyPurchase ? (
+                <p className="mt-2 text-sm font-medium text-emerald-700">
+                  This purchase is empty and safe to delete.
+                </p>
+              ) : null}
+              {deleteReport?.blocking_dependencies.length ? (
+                <div className="mt-3 text-sm text-slate-600">
+                  <p className="font-medium text-slate-700">Delete blockers</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-5">
+                    {deleteReport.blocking_dependencies.map((blocker, index) => (
+                      <li key={index}>
+                        {blocker.message ?? "Related dependency blocks delete."}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {deleteImpactRows.length ? (
+                <div className="mt-3 text-sm text-slate-600">
+                  <p className="font-medium text-slate-700">
+                    Records blocking empty-purchase delete
+                  </p>
+                  <ul className="mt-1 grid gap-1 sm:grid-cols-2">
+                    {deleteImpactRows.map(([label, count]) => (
+                      <li key={label}>
+                        {label}: {count}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {generatedCleanupRows.length ? (
+                <div className="mt-3 text-sm text-slate-600">
+                  <p className="font-medium text-slate-700">
+                    Will also clean up
+                  </p>
+                  <ul className="mt-1 grid gap-1 sm:grid-cols-2">
+                    {generatedCleanupRows.map(([label, count]) => (
+                      <li key={label}>
+                        {label}: {count}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {deleteReport?.warnings.length ? (
+                <div className="mt-3 text-sm text-slate-600">
+                  <p className="font-medium text-slate-700">Warnings</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-5">
+                    {deleteReport.warnings.map((warning, index) => (
+                      <li key={index}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {deleteError ? (
+                <p className="mt-2 text-sm font-medium text-red-700">
+                  {deleteError}
+                </p>
+              ) : null}
+            </div>
+            <button
+              className="h-10 rounded-md border border-red-300 px-4 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-transparent"
+              disabled={
+                isLoadingDeleteReport ||
+                isDeletingPurchase ||
+                !canDeleteEmptyPurchase
+              }
+              onClick={handleDeleteEmptyPurchase}
+              type="button"
+            >
+              {isDeletingPurchase ? "Deleting..." : "Delete Empty Purchase"}
+            </button>
+          </div>
+        </section>
 
         <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
