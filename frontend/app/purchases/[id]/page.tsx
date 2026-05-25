@@ -13,6 +13,7 @@ type PurchaseBatch = {
   purchase_date: string;
   total_amount: string | number;
   purchase_total_paid: string | number | null;
+  credit_card_id: number | null;
   sales_tax: string | number | null;
   activation_fees: string | number | null;
   discounts: string | number | null;
@@ -143,6 +144,7 @@ export default function PurchaseDetailPage() {
   const [payments, setPayments] = useState<PurchasePayment[]>([]);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [giftCards, setGiftCards] = useState<GiftCard[]>([]);
+  const [destinationPurchases, setDestinationPurchases] = useState<PurchaseBatch[]>([]);
   const [cardBrands, setCardBrands] = useState<CardBrand[]>([]);
   const [revealedCardNumbers, setRevealedCardNumbers] = useState<
     Record<number, boolean>
@@ -159,11 +161,16 @@ export default function PurchaseDetailPage() {
   const [isLoadingReceipts, setIsLoadingReceipts] = useState(true);
   const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
   const [isLoadingGiftCards, setIsLoadingGiftCards] = useState(true);
+  const [isLoadingDestinationPurchases, setIsLoadingDestinationPurchases] =
+    useState(true);
   const [isLoadingCardBrands, setIsLoadingCardBrands] = useState(true);
   const [isRecalculatingAllocation, setIsRecalculatingAllocation] =
     useState(false);
   const [isSavingFinancials, setIsSavingFinancials] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [movingGiftCardId, setMovingGiftCardId] = useState<number | null>(null);
+  const [moveTargetPurchaseId, setMoveTargetPurchaseId] = useState("");
+  const [isMovingGiftCard, setIsMovingGiftCard] = useState(false);
   const [deleteReport, setDeleteReport] = useState<PurchaseDeleteReport | null>(null);
   const [isLoadingDeleteReport, setIsLoadingDeleteReport] = useState(false);
   const [isDeletingPurchase, setIsDeletingPurchase] = useState(false);
@@ -175,9 +182,12 @@ export default function PurchaseDetailPage() {
   const [cardBrandsError, setCardBrandsError] = useState<string | null>(null);
   const [allocationError, setAllocationError] = useState<string | null>(null);
   const [financialError, setFinancialError] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [moveMessage, setMoveMessage] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const purchaseUrl = `${API_BASE_URL}/purchase-batches/${purchaseId}`;
+  const purchasesUrl = `${API_BASE_URL}/purchase-batches/`;
   const deleteReportUrl = `${API_BASE_URL}/purchase-batches/${purchaseId}/delete-report`;
   const paymentsUrl = `${API_BASE_URL}/purchase-batches/${purchaseId}/payments`;
   const receiptsUrl = `${API_BASE_URL}/receipts/purchase/${purchaseId}`;
@@ -283,6 +293,71 @@ export default function PurchaseDetailPage() {
         ["Card images", deleteImpact.card_images_to_delete],
       ].filter(([, count]) => Number(count) > 0)
     : [];
+  const moveDestinationOptions = useMemo(
+    () =>
+      destinationPurchases
+        .filter((destinationPurchase) => String(destinationPurchase.id) !== purchaseId)
+        .sort((left, right) => {
+          const rightDate = new Date(right.purchase_date).getTime();
+          const leftDate = new Date(left.purchase_date).getTime();
+
+          if (rightDate !== leftDate) {
+            return rightDate - leftDate;
+          }
+
+          return right.id - left.id;
+        }),
+    [destinationPurchases, purchaseId],
+  );
+  const selectedMoveDestination = useMemo(
+    () =>
+      moveDestinationOptions.find(
+        (destinationPurchase) =>
+          String(destinationPurchase.id) === moveTargetPurchaseId,
+      ) ?? null,
+    [moveDestinationOptions, moveTargetPurchaseId],
+  );
+  const movingGiftCard = useMemo(
+    () =>
+      giftCards.find((giftCard) => giftCard.id === movingGiftCardId) ?? null,
+    [giftCards, movingGiftCardId],
+  );
+  const moveWarnings = useMemo(() => {
+    if (!purchase || !selectedMoveDestination) {
+      return [];
+    }
+
+    const warnings: string[] = [];
+    const currentPurchaseDate = purchase.purchase_date.slice(0, 10);
+    const destinationPurchaseDate =
+      selectedMoveDestination.purchase_date.slice(0, 10);
+
+    if (purchase.store_name !== selectedMoveDestination.store_name) {
+      warnings.push(
+        `Store differs: ${purchase.store_name} → ${selectedMoveDestination.store_name}`,
+      );
+    }
+
+    if (currentPurchaseDate !== destinationPurchaseDate) {
+      warnings.push(
+        `Purchase date differs: ${formatDate(purchase.purchase_date)} → ${formatDate(
+          selectedMoveDestination.purchase_date,
+        )}`,
+      );
+    }
+
+    if (purchase.credit_card_id !== selectedMoveDestination.credit_card_id) {
+      warnings.push(
+        `Funding card differs: ${purchase.credit_card_id ? `Card #${purchase.credit_card_id}` : "none"} → ${
+          selectedMoveDestination.credit_card_id
+            ? `Card #${selectedMoveDestination.credit_card_id}`
+            : "none"
+        }`,
+      );
+    }
+
+    return warnings;
+  }, [purchase, selectedMoveDestination]);
 
   const loadGiftCards = useCallback(
     async (options: { showLoading?: boolean } = {}) => {
@@ -433,6 +508,49 @@ export default function PurchaseDetailPage() {
       isMounted = false;
     };
   }, [paymentsUrl, purchaseId]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadDestinationPurchases() {
+      setIsLoadingDestinationPurchases(true);
+      setMoveError(null);
+
+      try {
+        const response = await fetch(purchasesUrl);
+
+        if (!response.ok) {
+          throw new Error(
+            `Failed to load destination purchases (${response.status})`,
+          );
+        }
+
+        const data = (await response.json()) as PurchaseBatch[];
+
+        if (isMounted) {
+          setDestinationPurchases(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setMoveError(
+            err instanceof Error
+              ? err.message
+              : "Failed to load destination purchases.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingDestinationPurchases(false);
+        }
+      }
+    }
+
+    loadDestinationPurchases();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [purchasesUrl]);
 
   useEffect(() => {
     let isMounted = true;
@@ -731,6 +849,108 @@ export default function PurchaseDetailPage() {
     }
   }
 
+  function beginMoveGiftCard(giftCard: GiftCard) {
+    setMovingGiftCardId(giftCard.id);
+    setMoveTargetPurchaseId("");
+    setMoveError(null);
+    setMoveMessage(null);
+  }
+
+  function cancelMoveGiftCard() {
+    if (isMovingGiftCard) {
+      return;
+    }
+
+    setMovingGiftCardId(null);
+    setMoveTargetPurchaseId("");
+    setMoveError(null);
+  }
+
+  function purchaseOptionLabel(destinationPurchase: PurchaseBatch) {
+    return `#${destinationPurchase.id} · ${destinationPurchase.store_name} · ${formatDate(
+      destinationPurchase.purchase_date,
+    )} · ${formatAmount(destinationPurchase.total_amount)}`;
+  }
+
+  function apiErrorDetail(bodyText: string) {
+    if (!bodyText) {
+      return "";
+    }
+
+    try {
+      const parsed = JSON.parse(bodyText) as { detail?: unknown };
+      if (typeof parsed.detail === "string") {
+        return parsed.detail;
+      }
+      if (
+        parsed.detail &&
+        typeof parsed.detail === "object" &&
+        "message" in parsed.detail &&
+        typeof parsed.detail.message === "string"
+      ) {
+        return parsed.detail.message;
+      }
+    } catch {
+      return bodyText;
+    }
+
+    return bodyText;
+  }
+
+  async function handleMoveGiftCard(giftCard: GiftCard) {
+    if (!moveTargetPurchaseId || !selectedMoveDestination) {
+      setMoveError("Select a destination purchase before moving.");
+      return;
+    }
+
+    const warningText =
+      moveWarnings.length > 0 ? `\n\nWarnings:\n${moveWarnings.join("\n")}` : "";
+    const confirmed = window.confirm(
+      `Move ${giftCard.brand} card #${giftCard.id} to purchase #${selectedMoveDestination.id}?${warningText}`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsMovingGiftCard(true);
+    setMoveError(null);
+    setMoveMessage(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/gift-cards/${giftCard.id}/move`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          purchase_batch_id: Number(moveTargetPurchaseId),
+        }),
+      });
+
+      if (!response.ok) {
+        const bodyText = await response.text();
+        const detail = apiErrorDetail(bodyText);
+        throw new Error(
+          detail || `Failed to move gift card (${response.status})`,
+        );
+      }
+
+      setMoveMessage(
+        `${giftCard.brand} card #${giftCard.id} moved to purchase #${selectedMoveDestination.id}.`,
+      );
+      setMovingGiftCardId(null);
+      setMoveTargetPurchaseId("");
+      await loadGiftCards({ showLoading: false });
+    } catch (err) {
+      setMoveError(
+        err instanceof Error ? err.message : "Failed to move gift card.",
+      );
+    } finally {
+      setIsMovingGiftCard(false);
+    }
+  }
+
   async function handleDeleteEmptyPurchase() {
     if (!purchaseId || !canDeleteEmptyPurchase) {
       return;
@@ -1011,6 +1231,19 @@ export default function PurchaseDetailPage() {
       ...currentRevealedCardNumbers,
       [giftCardId]: !currentRevealedCardNumbers[giftCardId],
     }));
+  }
+
+  function getCardEndingDisplay(giftCard: GiftCard) {
+    const cardNumber = giftCard.card_number_encrypted;
+
+    if (!cardNumber) {
+      return "Card number not verified";
+    }
+
+    const normalizedCardNumber = cardNumber.replace(/\s/g, "");
+    const lastFour = normalizedCardNumber.slice(-4);
+
+    return lastFour ? `Ending ${lastFour}` : "Card number saved";
   }
 
   return (
@@ -1539,6 +1772,16 @@ export default function PurchaseDetailPage() {
             <p className="mt-1 text-sm text-slate-500">
               {giftCards.length} {giftCards.length === 1 ? "card" : "cards"}
             </p>
+            {moveMessage ? (
+              <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+                {moveMessage}
+              </p>
+            ) : null}
+            {moveError ? (
+              <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+                {moveError}
+              </p>
+            ) : null}
           </div>
 
           {isLoadingGiftCards ? (
@@ -1604,17 +1847,27 @@ export default function PurchaseDetailPage() {
                         </div>
                       </td>
                       <td className="whitespace-nowrap px-6 py-4">
-                        <Link
-                          className={`inline-flex h-9 items-center rounded-md px-4 text-xs font-semibold text-white transition ${giftCard.status === "VERIFIED_AVAILABLE"
-                              ? "bg-emerald-700 hover:bg-emerald-800"
-                              : "bg-red-700 hover:bg-red-800"
-                            }`}
-                          href={`/gift-cards/${giftCard.id}/verify?returnTo=/purchases/${purchaseId}`}
-                        >
-                          {giftCard.status === "VERIFIED_AVAILABLE"
-                            ? "Verified"
-                            : "Verify"}
-                        </Link>
+                        <div className="flex flex-wrap gap-2">
+                          <Link
+                            className={`inline-flex h-9 items-center rounded-md px-4 text-xs font-semibold text-white transition ${giftCard.status === "VERIFIED_AVAILABLE"
+                                ? "bg-emerald-700 hover:bg-emerald-800"
+                                : "bg-red-700 hover:bg-red-800"
+                              }`}
+                            href={`/gift-cards/${giftCard.id}/verify?returnTo=/purchases/${purchaseId}`}
+                          >
+                            {giftCard.status === "VERIFIED_AVAILABLE"
+                              ? "Verified"
+                              : "Verify"}
+                          </Link>
+                          <button
+                            className="inline-flex h-9 items-center rounded-md border border-slate-300 px-4 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                            disabled={isMovingGiftCard}
+                            onClick={() => beginMoveGiftCard(giftCard)}
+                            type="button"
+                          >
+                            Move
+                          </button>
+                        </div>
                       </td>
                       <td className="max-w-md px-6 py-4 text-xs text-slate-500">
                         {giftCard.notes || ""}
@@ -1627,6 +1880,25 @@ export default function PurchaseDetailPage() {
           )}
         </section>
       </div>
+
+      {movingGiftCard ? (
+        <MoveGiftCardModal
+          cardEndingLabel={getCardEndingDisplay(movingGiftCard)}
+          currentPurchase={purchase}
+          destinationOptions={moveDestinationOptions}
+          error={moveError}
+          giftCard={movingGiftCard}
+          isLoadingDestinations={isLoadingDestinationPurchases}
+          isMoving={isMovingGiftCard}
+          moveWarnings={moveWarnings}
+          onCancel={cancelMoveGiftCard}
+          onConfirm={() => handleMoveGiftCard(movingGiftCard)}
+          onDestinationChange={setMoveTargetPurchaseId}
+          purchaseOptionLabel={purchaseOptionLabel}
+          selectedDestination={selectedMoveDestination}
+          selectedDestinationId={moveTargetPurchaseId}
+        />
+      ) : null}
 
       {isEditingFinancials ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 px-4 py-6 sm:items-center">
@@ -1797,6 +2069,171 @@ export default function PurchaseDetailPage() {
       ) : null}
     </main>
   );
+}
+
+function MoveGiftCardModal({
+  cardEndingLabel,
+  currentPurchase,
+  destinationOptions,
+  error,
+  giftCard,
+  isLoadingDestinations,
+  isMoving,
+  moveWarnings,
+  onCancel,
+  onConfirm,
+  onDestinationChange,
+  purchaseOptionLabel,
+  selectedDestination,
+  selectedDestinationId,
+}: {
+  cardEndingLabel: string;
+  currentPurchase: PurchaseBatch | null;
+  destinationOptions: PurchaseBatch[];
+  error: string | null;
+  giftCard: GiftCard;
+  isLoadingDestinations: boolean;
+  isMoving: boolean;
+  moveWarnings: string[];
+  onCancel: () => void;
+  onConfirm: () => void;
+  onDestinationChange: (purchaseId: string) => void;
+  purchaseOptionLabel: (purchase: PurchaseBatch) => string;
+  selectedDestination: PurchaseBatch | null;
+  selectedDestinationId: string;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 px-4 py-6 sm:items-center">
+      <section className="max-h-[calc(100vh-3rem)] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-slate-500">
+              Move Gift Card
+            </p>
+            <h2 className="mt-1 text-xl font-semibold text-slate-950">
+              Move to another purchase
+            </h2>
+          </div>
+          <button
+            className="h-10 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+            disabled={isMoving}
+            onClick={onCancel}
+            type="button"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Card
+            </p>
+            <p className="mt-2 text-sm font-semibold text-slate-950">
+              {giftCard.brand} · {formatModalAmount(giftCard.face_value)}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">{cardEndingLabel}</p>
+          </div>
+
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Current Purchase
+            </p>
+            <p className="mt-2 text-sm font-semibold text-slate-950">
+              {currentPurchase ? purchaseOptionLabel(currentPurchase) : "Loading..."}
+            </p>
+            {currentPurchase?.credit_card_id ? (
+              <p className="mt-1 text-xs text-slate-500">
+                Funding card #{currentPurchase.credit_card_id}
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        <label className="mt-5 block space-y-2 text-sm font-medium text-slate-700">
+          <span>Destination purchase</span>
+          <select
+            className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+            disabled={isLoadingDestinations || isMoving}
+            onChange={(event) => onDestinationChange(event.target.value)}
+            value={selectedDestinationId}
+          >
+            <option value="">
+              {isLoadingDestinations ? "Loading purchases..." : "Select destination"}
+            </option>
+            {destinationOptions.map((destinationPurchase) => (
+              <option key={destinationPurchase.id} value={destinationPurchase.id}>
+                {purchaseOptionLabel(destinationPurchase)}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {selectedDestination ? (
+          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+            <p className="font-semibold text-slate-900">Selected destination</p>
+            <p className="mt-1">{purchaseOptionLabel(selectedDestination)}</p>
+            {selectedDestination.credit_card_id ? (
+              <p className="mt-1 text-xs text-slate-500">
+                Funding card #{selectedDestination.credit_card_id}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {selectedDestination && moveWarnings.length > 0 ? (
+          <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <p className="font-semibold">
+              Destination differs from the current purchase:
+            </p>
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              {moveWarnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {error ? (
+          <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            className="h-11 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+            disabled={isMoving}
+            onClick={onCancel}
+            type="button"
+          >
+            Cancel
+          </button>
+          <button
+            className="h-11 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+            disabled={isMoving || !selectedDestinationId || isLoadingDestinations}
+            onClick={onConfirm}
+            type="button"
+          >
+            {isMoving ? "Moving..." : "Confirm Move"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function formatModalAmount(value: string | number | null) {
+  const amount = Number(value);
+
+  if (Number.isNaN(amount)) {
+    return String(value ?? "");
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(amount);
 }
 
 function EyeIcon({ hidden }: { hidden?: boolean }) {
