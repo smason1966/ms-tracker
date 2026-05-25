@@ -83,25 +83,48 @@ label:has(input[type="file"]:not(:disabled)):active {
   }
 }
 
+/*
+  Temporary compatibility shim:
+  A number of recovered pages still carry light Tailwind utility classes.
+  While those components are gradually refactored, force legacy light surfaces
+  to render as dark app-shell surfaces only when wrapped by data-app-shell.
+  Focused barcode mode intentionally bypasses AppShell, so it remains white.
+*/
 [data-app-shell] main.bg-slate-50,
 [data-app-shell] main.bg-gray-50,
 [data-app-shell] main.bg-zinc-50,
 [data-app-shell] main.bg-slate-100,
 [data-app-shell] main.bg-gray-100,
-[data-app-shell] .bg-slate-50 {
-  background-color: transparent !important;
+[data-app-shell] main.bg-zinc-100,
+[data-app-shell] .min-h-screen.bg-slate-50,
+[data-app-shell] .min-h-screen.bg-gray-50,
+[data-app-shell] .min-h-screen.bg-zinc-50,
+[data-app-shell] .min-h-screen.bg-slate-100,
+[data-app-shell] .min-h-screen.bg-gray-100,
+[data-app-shell] .min-h-screen.bg-zinc-100 {
+  background: transparent !important;
+  color: #f8fafc !important;
 }
 
 [data-app-shell] .bg-white,
 [data-app-shell] .bg-gray-50,
-[data-app-shell] .bg-zinc-50 {
+[data-app-shell] .bg-zinc-50,
+[data-app-shell] .bg-slate-50,
+[data-app-shell] tbody.bg-white,
+[data-app-shell] tr.bg-white {
   background-color: var(--panel) !important;
 }
 
 [data-app-shell] .bg-slate-100,
 [data-app-shell] .bg-gray-100,
 [data-app-shell] .bg-zinc-100 {
-  background-color: rgba(30, 41, 59, 0.9) !important;
+  background-color: var(--panel-soft) !important;
+}
+
+[data-app-shell] .bg-slate-200,
+[data-app-shell] .bg-gray-200,
+[data-app-shell] .bg-zinc-200 {
+  background-color: rgba(51, 65, 85, 0.86) !important;
 }
 
 [data-app-shell] .bg-slate-900,
@@ -120,6 +143,17 @@ label:has(input[type="file"]:not(:disabled)):active {
   background-color: rgba(51, 65, 85, 0.95) !important;
 }
 
+[data-app-shell] thead,
+[data-app-shell] thead.bg-white,
+[data-app-shell] thead.bg-slate-50,
+[data-app-shell] thead.bg-gray-50,
+[data-app-shell] thead.bg-slate-100,
+[data-app-shell] thead.bg-gray-100 {
+  background-color: rgba(15, 23, 42, 0.95) !important;
+  color: #cbd5e1 !important;
+}
+
+[data-app-shell] .hover\:bg-white:hover,
 [data-app-shell] .hover\:bg-slate-50:hover,
 [data-app-shell] .hover\:bg-slate-100:hover,
 [data-app-shell] .hover\:bg-gray-50:hover,
@@ -129,21 +163,53 @@ label:has(input[type="file"]:not(:disabled)):active {
   background-color: rgba(51, 65, 85, 0.74) !important;
 }
 
+[data-app-shell] .active\:bg-white:active,
+[data-app-shell] .active\:bg-slate-50:active,
+[data-app-shell] .active\:bg-slate-100:active,
+[data-app-shell] .active\:bg-gray-50:active,
+[data-app-shell] .active\:bg-gray-100:active,
+[data-app-shell] .active\:bg-zinc-50:active,
+[data-app-shell] .active\:bg-zinc-100:active {
+  background-color: rgba(71, 85, 105, 0.84) !important;
+}
+
+[data-app-shell] .border-white,
+[data-app-shell] .border-slate-100,
 [data-app-shell] .border-slate-200,
 [data-app-shell] .border-slate-300,
+[data-app-shell] .border-gray-100,
 [data-app-shell] .border-gray-200,
 [data-app-shell] .border-gray-300,
+[data-app-shell] .border-zinc-100,
 [data-app-shell] .border-zinc-200,
-[data-app-shell] .border-zinc-300 {
+[data-app-shell] .border-zinc-300,
+[data-app-shell] .border-dashed.border-slate-300,
+[data-app-shell] .border-dashed.border-gray-300 {
   border-color: var(--border-soft) !important;
 }
 
+[data-app-shell] .divide-slate-100 > :not([hidden]) ~ :not([hidden]),
+[data-app-shell] .divide-slate-200 > :not([hidden]) ~ :not([hidden]),
+[data-app-shell] .divide-slate-300 > :not([hidden]) ~ :not([hidden]),
+[data-app-shell] .divide-gray-100 > :not([hidden]) ~ :not([hidden]),
+[data-app-shell] .divide-gray-200 > :not([hidden]) ~ :not([hidden]),
+[data-app-shell] .divide-gray-300 > :not([hidden]) ~ :not([hidden]),
+[data-app-shell] .divide-zinc-100 > :not([hidden]) ~ :not([hidden]),
+[data-app-shell] .divide-zinc-200 > :not([hidden]) ~ :not([hidden]),
+[data-app-shell] .divide-zinc-300 > :not([hidden]) ~ :not([hidden]),
+[data-app-shell] .divide-slate-100 > :not(:last-child),
 [data-app-shell] .divide-slate-200 > :not(:last-child),
+[data-app-shell] .divide-slate-300 > :not(:last-child),
+[data-app-shell] .divide-gray-100 > :not(:last-child),
 [data-app-shell] .divide-gray-200 > :not(:last-child),
-[data-app-shell] .divide-zinc-200 > :not(:last-child) {
+[data-app-shell] .divide-gray-300 > :not(:last-child),
+[data-app-shell] .divide-zinc-100 > :not(:last-child),
+[data-app-shell] .divide-zinc-200 > :not(:last-child),
+[data-app-shell] .divide-zinc-300 > :not(:last-child) {
   border-color: var(--border-soft) !important;
 }
 
+[data-app-shell] .text-black,
 [data-app-shell] .text-slate-950,
 [data-app-shell] .text-slate-900,
 [data-app-shell] .text-slate-800,
@@ -179,6 +245,7 @@ label:has(input[type="file"]:not(:disabled)):active {
 
 [data-app-shell] .shadow-sm,
 [data-app-shell] .shadow-md,
+[data-app-shell] .shadow-lg,
 [data-app-shell] .shadow-xl {
   box-shadow: 0 20px 55px rgba(0, 0, 0, 0.22) !important;
 }
@@ -193,17 +260,19 @@ label:has(input[type="file"]:not(:disabled)):active {
   color: #e5edf7;
 }
 
-[data-app-shell] thead {
-  background-color: rgba(15, 23, 42, 0.95) !important;
-}
-
 [data-app-shell] tbody tr:hover {
   background-color: rgba(51, 65, 85, 0.32);
 }
 
 [data-app-shell] input,
 [data-app-shell] select,
-[data-app-shell] textarea {
+[data-app-shell] textarea,
+[data-app-shell] input.bg-white,
+[data-app-shell] select.bg-white,
+[data-app-shell] textarea.bg-white,
+[data-app-shell] input.bg-slate-50,
+[data-app-shell] select.bg-slate-50,
+[data-app-shell] textarea.bg-slate-50 {
   background-color: rgba(2, 6, 23, 0.72) !important;
   border-color: rgba(148, 163, 184, 0.28) !important;
   color: #f8fafc !important;
@@ -223,15 +292,22 @@ label:has(input[type="file"]:not(:disabled)):active {
   box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.14) !important;
 }
 
+[data-app-shell] input[type="file"]::file-selector-button {
+  background-color: rgba(15, 23, 42, 0.96);
+  color: #e2e8f0;
+}
+
 [data-app-shell] code {
   color: #dbeafe;
 }
 
+/* Keep semantic status colors recognizable while moving legacy badges dark. */
 [data-app-shell] .bg-emerald-50,
 [data-app-shell] .bg-emerald-100 {
   background-color: rgba(6, 78, 59, 0.28) !important;
 }
 
+[data-app-shell] .text-emerald-700,
 [data-app-shell] .text-emerald-800,
 [data-app-shell] .text-emerald-900 {
   color: #a7f3d0 !important;
@@ -242,16 +318,23 @@ label:has(input[type="file"]:not(:disabled)):active {
 }
 
 [data-app-shell] .bg-yellow-50,
-[data-app-shell] .bg-yellow-100 {
+[data-app-shell] .bg-yellow-100,
+[data-app-shell] .bg-amber-50,
+[data-app-shell] .bg-amber-100 {
   background-color: rgba(113, 63, 18, 0.28) !important;
 }
 
+[data-app-shell] .text-yellow-700,
 [data-app-shell] .text-yellow-800,
-[data-app-shell] .text-yellow-900 {
+[data-app-shell] .text-yellow-900,
+[data-app-shell] .text-amber-700,
+[data-app-shell] .text-amber-800,
+[data-app-shell] .text-amber-900 {
   color: #fde68a !important;
 }
 
-[data-app-shell] .border-yellow-200 {
+[data-app-shell] .border-yellow-200,
+[data-app-shell] .border-amber-200 {
   border-color: rgba(245, 158, 11, 0.34) !important;
 }
 
@@ -260,6 +343,7 @@ label:has(input[type="file"]:not(:disabled)):active {
   background-color: rgba(127, 29, 29, 0.32) !important;
 }
 
+[data-app-shell] .text-red-700,
 [data-app-shell] .text-red-800,
 [data-app-shell] .text-red-900 {
   color: #fecaca !important;
@@ -270,13 +354,24 @@ label:has(input[type="file"]:not(:disabled)):active {
 }
 
 [data-app-shell] .bg-blue-50,
-[data-app-shell] .bg-blue-100 {
+[data-app-shell] .bg-blue-100,
+[data-app-shell] .bg-cyan-50,
+[data-app-shell] .bg-cyan-100 {
   background-color: rgba(30, 64, 175, 0.22) !important;
 }
 
+[data-app-shell] .text-blue-700,
 [data-app-shell] .text-blue-800,
-[data-app-shell] .text-blue-900 {
+[data-app-shell] .text-blue-900,
+[data-app-shell] .text-cyan-700,
+[data-app-shell] .text-cyan-800,
+[data-app-shell] .text-cyan-900 {
   color: #bfdbfe !important;
+}
+
+[data-app-shell] .border-blue-200,
+[data-app-shell] .border-cyan-200 {
+  border-color: rgba(34, 211, 238, 0.32) !important;
 }
 
 [data-app-shell] .modal-backdrop {
@@ -287,8 +382,15 @@ label:has(input[type="file"]:not(:disabled)):active {
 
 [data-app-shell] .modal-backdrop > .bg-white,
 [data-app-shell] .modal-backdrop > form.bg-white,
-[data-app-shell] .modal-backdrop > div.bg-white {
+[data-app-shell] .modal-backdrop > div.bg-white,
+[data-app-shell] .modal-backdrop > .bg-slate-50,
+[data-app-shell] .modal-backdrop > form.bg-slate-50,
+[data-app-shell] .modal-backdrop > div.bg-slate-50,
+[data-app-shell] .fixed .bg-white,
+[data-app-shell] .fixed form.bg-white,
+[data-app-shell] .fixed div.bg-white {
   background-color: #0f172a !important;
   border: 1px solid rgba(148, 163, 184, 0.24);
+  color: #f8fafc !important;
   box-shadow: 0 30px 90px rgba(0, 0, 0, 0.62) !important;
 }
