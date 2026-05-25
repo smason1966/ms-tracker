@@ -12,6 +12,8 @@ type RewardProgramMetric = {
   short_code: string;
   category: string;
   estimated_value_cents_per_point: string | number | null;
+  value_unit: string | null;
+  valuation_status: "fixed" | "variable" | "not_configured" | string;
   estimated_rewards_earned: string | number;
   estimated_value: string | number;
 };
@@ -37,6 +39,8 @@ type ProgramPurchaseMetric = {
   multiplier: string | number | null;
   rewards_earned: string | number;
   estimated_value: string | number;
+  value_unit: string | null;
+  valuation_status: "fixed" | "variable" | "not_configured" | string;
   credit_card_id: number | null;
   credit_card_nickname: string | null;
   player_id: number | null;
@@ -71,6 +75,9 @@ type RewardProgramDrilldown = {
   name: string;
   short_code: string;
   category: string;
+  estimated_value_cents_per_point: string | number | null;
+  value_unit: string | null;
+  valuation_status: "fixed" | "variable" | "not_configured" | string;
   cards: ProgramCardMetric[];
   purchases: ProgramPurchaseMetric[];
   categories: ProgramCategoryMetric[];
@@ -186,14 +193,19 @@ function rewardAmount(
 }
 
 function estimatedValueLabel(program: RewardProgramMetric) {
-  if (
-    program.estimated_value_cents_per_point === null ||
-    program.estimated_value_cents_per_point === undefined
-  ) {
+  if (program.valuation_status === "variable") {
+    return "Variable value";
+  }
+
+  if (program.valuation_status !== "fixed") {
     return "Value not configured";
   }
 
   return formatCurrency(program.estimated_value);
+}
+
+function hasFixedValuation(program: Pick<RewardProgramMetric, "valuation_status">) {
+  return program.valuation_status === "fixed";
 }
 
 function programKey(program: Pick<RewardProgramMetric, "short_code" | "reward_program_id">) {
@@ -442,9 +454,11 @@ export default function RewardsPage() {
     0,
   );
   const estimatedValue = programs.reduce(
-    (total, reward) => total + numericValue(reward.estimated_value),
+    (total, reward) =>
+      total + (hasFixedValuation(reward) ? numericValue(reward.estimated_value) : 0),
     0,
   );
+  const hasAnyFixedEstimatedValue = programs.some(hasFixedValuation);
   const activeFilterLabels = [
     selectedCategory !== "ALL" ? `Reward category: ${selectedCategory}` : null,
     selectedProgram !== "ALL" ? `Program: ${selectedProgram}` : null,
@@ -583,7 +597,7 @@ export default function RewardsPage() {
           <>
             <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
               <SummaryCard href="/rewards" label="Total rewards" value={formatNumber(totalRewards)} />
-              <SummaryCard href="/rewards" label="Estimated value" value={estimatedValue > 0 ? formatCurrency(estimatedValue) : "Value not configured"} />
+              <SummaryCard href="/rewards" label="Estimated value" value={hasAnyFixedEstimatedValue ? formatCurrency(estimatedValue) : "Value not configured"} />
               <SummaryCard href="/rewards?category=fuel" label="Fuel points" value={formatNumber(summary.fuel_points_earned)} />
               <SummaryCard href="/rewards?section=signup-bonuses" label="Signup bonuses" value={formatNumber(summary.signup_bonuses_earned)} />
               <SummaryCard href="/rewards?filter=pending" label="Pending rewards" value={formatNumber(summary.pending_rewards)} />

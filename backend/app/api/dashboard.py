@@ -38,6 +38,48 @@ def to_decimal(value) -> Decimal:
     return Decimal(str(value))
 
 
+def reward_program_valuation(
+    program: RewardProgram | None,
+    reward_amount,
+) -> dict:
+    if program is None:
+        return {
+            "estimated_value": Decimal("0"),
+            "valuation_status": "not_configured",
+            "value_unit": None,
+        }
+
+    value_unit = program.value_unit or "cents_per_point"
+    configured_value = program.estimated_value_cents_per_point
+
+    if value_unit == "variable":
+        return {
+            "estimated_value": Decimal("0"),
+            "valuation_status": "variable",
+            "value_unit": value_unit,
+        }
+
+    if configured_value is None:
+        return {
+            "estimated_value": Decimal("0"),
+            "valuation_status": "not_configured",
+            "value_unit": value_unit,
+        }
+
+    reward_decimal = to_decimal(reward_amount)
+    configured_decimal = to_decimal(configured_value)
+    if value_unit == "usd_per_token":
+        estimated_value = reward_decimal * configured_decimal
+    else:
+        estimated_value = reward_decimal * configured_decimal / Decimal("100")
+
+    return {
+        "estimated_value": estimated_value,
+        "valuation_status": "fixed",
+        "value_unit": value_unit,
+    }
+
+
 def utilization_percent(card: CreditCard) -> float | None:
     credit_limit = to_decimal(card.credit_limit)
 
@@ -442,19 +484,20 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
                     "estimated_value_cents_per_point": (
                         program.estimated_value_cents_per_point if program else None
                     ),
+                    "value_unit": program.value_unit if program else None,
+                    "valuation_status": (
+                        reward_program_valuation(program, Decimal("0"))[
+                            "valuation_status"
+                        ]
+                    ),
                     "estimated_rewards_earned": Decimal("0"),
                     "estimated_value": Decimal("0"),
                 },
             )
             reward_amount = to_decimal(transaction.rewards_earned)
             qualifying_spend = to_decimal(transaction.qualifying_spend)
-            estimated_value = Decimal("0")
-            if program and program.estimated_value_cents_per_point is not None:
-                estimated_value = (
-                    reward_amount
-                    * to_decimal(program.estimated_value_cents_per_point)
-                    / Decimal("100")
-                )
+            valuation = reward_program_valuation(program, reward_amount)
+            estimated_value = valuation["estimated_value"]
             program_drilldown = reward_program_drilldowns.setdefault(
                 program_key,
                 {
@@ -462,6 +505,11 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
                     "name": program.name if program else rewards_type,
                     "short_code": program.short_code if program else rewards_type,
                     "category": program.category if program else "Other",
+                    "estimated_value_cents_per_point": (
+                        program.estimated_value_cents_per_point if program else None
+                    ),
+                    "value_unit": valuation["value_unit"],
+                    "valuation_status": valuation["valuation_status"],
                     "cards": {},
                     "purchases": [],
                     "categories": {},
@@ -668,6 +716,8 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
                     "reward_program_short_code": (
                         program.short_code if program else rewards_type
                     ),
+                    "value_unit": valuation["value_unit"],
+                    "valuation_status": valuation["valuation_status"],
                     "calculation_source": transaction.calculation_source,
                 }
             )
@@ -701,6 +751,12 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
                     "estimated_value_cents_per_point": (
                         kroger_fuel_program.estimated_value_cents_per_point
                     ),
+                    "value_unit": kroger_fuel_program.value_unit,
+                    "valuation_status": (
+                        reward_program_valuation(kroger_fuel_program, Decimal("0"))[
+                            "valuation_status"
+                        ]
+                    ),
                     "estimated_rewards_earned": Decimal("0"),
                     "estimated_value": Decimal("0"),
                 },
@@ -710,12 +766,8 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
             )
             fuel_points_earned = fuel_points
             fuel_metric["estimated_rewards_earned"] += fuel_points
-            if kroger_fuel_program.estimated_value_cents_per_point is not None:
-                fuel_metric["estimated_value"] += (
-                    fuel_points
-                    * to_decimal(kroger_fuel_program.estimated_value_cents_per_point)
-                    / Decimal("100")
-                )
+            fuel_valuation = reward_program_valuation(kroger_fuel_program, fuel_points)
+            fuel_metric["estimated_value"] += fuel_valuation["estimated_value"]
             fuel_drilldown = reward_program_drilldowns.setdefault(
                 kroger_fuel_program.short_code,
                 {
@@ -723,6 +775,11 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
                     "name": kroger_fuel_program.name,
                     "short_code": kroger_fuel_program.short_code,
                     "category": kroger_fuel_program.category,
+                    "estimated_value_cents_per_point": (
+                        kroger_fuel_program.estimated_value_cents_per_point
+                    ),
+                    "value_unit": fuel_valuation["value_unit"],
+                    "valuation_status": fuel_valuation["valuation_status"],
                     "cards": {},
                     "purchases": [],
                     "categories": {},
@@ -735,13 +792,11 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
                 purchase = purchases_by_id.get(entry.purchase_batch_id)
                 month_key = entry.earned_date.strftime("%Y-%m")
                 entry_rewards = Decimal(entry.points_earned)
-                entry_estimated_value = Decimal("0")
-                if kroger_fuel_program.estimated_value_cents_per_point is not None:
-                    entry_estimated_value = (
-                        entry_rewards
-                        * to_decimal(kroger_fuel_program.estimated_value_cents_per_point)
-                        / Decimal("100")
-                    )
+                entry_valuation = reward_program_valuation(
+                    kroger_fuel_program,
+                    entry_rewards,
+                )
+                entry_estimated_value = entry_valuation["estimated_value"]
                 fuel_month_metric = fuel_drilldown["months"].setdefault(
                     month_key,
                     {
@@ -772,6 +827,8 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
                         "reward_program_id": kroger_fuel_program.id,
                         "reward_program_name": kroger_fuel_program.name,
                         "reward_program_short_code": kroger_fuel_program.short_code,
+                        "value_unit": entry_valuation["value_unit"],
+                        "valuation_status": entry_valuation["valuation_status"],
                         "calculation_source": entry.entry_type or "fuel_points",
                     }
                 )
@@ -785,6 +842,11 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
                     "name": drilldown["name"],
                     "short_code": drilldown["short_code"],
                     "category": drilldown["category"],
+                    "estimated_value_cents_per_point": drilldown[
+                        "estimated_value_cents_per_point"
+                    ],
+                    "value_unit": drilldown["value_unit"],
+                    "valuation_status": drilldown["valuation_status"],
                     "cards": sorted(
                         drilldown["cards"].values(),
                         key=lambda metric: metric["estimated_rewards_earned"],
