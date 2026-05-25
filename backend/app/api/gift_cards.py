@@ -96,12 +96,17 @@ def create_gift_card(payload: GiftCardCreate):
             "manual_digital" if card_source == "digital" else None
         )
         has_manual_credential = bool(confirmed_card_number or confirmed_redemption_code)
+        acquisition_cost = (
+            payload.acquisition_cost
+            if payload.acquisition_cost is not None
+            else payload.face_value
+        )
         card = GiftCard(
             purchase_batch_id=payload.purchase_batch_id,
             brand=payload.brand,
             card_source=card_source,
             face_value=payload.face_value,
-            acquisition_cost=payload.acquisition_cost,
+            acquisition_cost=acquisition_cost,
             status="VERIFIED_AVAILABLE"
             if card_source == "digital" and has_manual_credential
             else "NEEDS_VERIFICATION",
