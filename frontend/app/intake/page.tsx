@@ -293,7 +293,6 @@ export default function PurchaseIntakePage() {
     !isSplitTenderEnabled ||
     form.purchase_total_paid.trim() === "" ||
     Math.round(paymentDifference * 100) !== 0;
-  const receiptTotal = Number(form.purchase_total_paid);
 
   useEffect(() => {
     let isMounted = true;
@@ -414,17 +413,6 @@ export default function PurchaseIntakePage() {
     } else {
       setPaymentRows([]);
     }
-  }
-
-  function buildFinancialNotes() {
-    const contextNotes = [
-      form.purchase_total_paid.trim() && !Number.isNaN(receiptTotal)
-        ? `Receipt total paid: $${receiptTotal.toFixed(2)}`
-        : null,
-      form.financial_notes.trim() || null,
-    ].filter(Boolean);
-
-    return contextNotes.join("\n") || null;
   }
 
   function updatePaymentRow(
@@ -577,7 +565,7 @@ export default function PurchaseIntakePage() {
 
     try {
       if (hasPaymentMismatch) {
-        throw new Error("Split tender payments must equal Receipt Total.");
+        throw new Error("Split tender payments must equal Total Paid.");
       }
 
       if (hasMissingCreditCardPayment) {
@@ -596,12 +584,12 @@ export default function PurchaseIntakePage() {
         body: JSON.stringify({
           store_name: form.store_name.trim(),
           purchase_date: new Date(form.purchase_date).toISOString(),
-          total_amount: "0",
-          purchase_total_paid: null,
+          total_amount: form.total_amount || "0",
+          purchase_total_paid: form.purchase_total_paid || null,
           credit_card_id: !isSplitTenderEnabled && form.credit_card_id
             ? Number(form.credit_card_id)
             : null,
-          financial_notes: buildFinancialNotes(),
+          financial_notes: form.financial_notes.trim() || null,
           notes: form.notes.trim() || null,
         }),
       });
@@ -692,6 +680,42 @@ export default function PurchaseIntakePage() {
                 }
                 required
               />
+            </label>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Total Paid</span>
+              <input
+                className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.purchase_total_paid}
+                onChange={(event) =>
+                  updateFormField("purchase_total_paid", event.target.value)
+                }
+                required
+              />
+              <p className="text-sm text-slate-500">
+                Actual amount spent for the purchase.
+              </p>
+            </label>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Face Value</span>
+              <input
+                className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.total_amount}
+                onChange={(event) =>
+                  updateFormField("total_amount", event.target.value)
+                }
+                placeholder="Optional"
+              />
+              <p className="text-sm text-slate-500">
+                Optional total value of cards expected in the batch.
+              </p>
             </label>
 
             <section className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4">
@@ -864,7 +888,7 @@ export default function PurchaseIntakePage() {
                       </div>
                       <div>
                         <dt className="text-xs font-medium text-slate-500">
-                          Receipt Total
+                          Total Paid
                         </dt>
                         <dd className="font-semibold">
                           $
@@ -890,7 +914,7 @@ export default function PurchaseIntakePage() {
                     </dl>
                     {hasPaymentMismatch ? (
                       <p className="mt-2 text-sm font-medium text-red-700">
-                        Payment rows must equal Receipt Total.
+                        Payment rows must equal Total Paid.
                       </p>
                     ) : null}
                     {hasMissingCreditCardPayment ? (
@@ -1090,8 +1114,8 @@ export default function PurchaseIntakePage() {
                   </p>
                   <p className="mt-1 text-sm text-slate-500">
                     {form.purchase_total_paid
-                      ? "Based on Receipt Total × multiplier."
-                      : "Enter Receipt Total to calculate fuel points."}
+                      ? "Based on Total Paid × multiplier."
+                      : "Enter Total Paid to calculate fuel points."}
                   </p>
                 </div>
 
@@ -1145,67 +1169,42 @@ export default function PurchaseIntakePage() {
               </section>
             ) : null}
 
-            <details className="rounded-md border border-slate-200 bg-slate-50 p-4">
-              <summary className="cursor-pointer text-sm font-semibold text-slate-700">
-                Receipt details
-              </summary>
-              <div className="mt-4 space-y-4">
-                <label className="block space-y-2 text-sm font-medium text-slate-700">
-                  <span>Receipt Total Optional</span>
-                  <input
-                    className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.purchase_total_paid}
-                    onChange={(event) =>
-                      updateFormField("purchase_total_paid", event.target.value)
-                    }
-                  />
-                  <p className="text-sm text-slate-500">
-                    Optional full transaction total. Gift card cost is entered on
-                    the next screen.
-                  </p>
-                </label>
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Financial Notes</span>
+              <textarea
+                className="min-h-24 w-full rounded-md border border-slate-300 px-3 py-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                value={form.financial_notes}
+                onChange={(event) =>
+                  updateFormField("financial_notes", event.target.value)
+                }
+                placeholder="Optional"
+              />
+            </label>
 
-                <label className="block space-y-2 text-sm font-medium text-slate-700">
-                  <span>Financial Notes</span>
-                  <textarea
-                    className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                    value={form.financial_notes}
-                    onChange={(event) =>
-                      updateFormField("financial_notes", event.target.value)
-                    }
-                    placeholder="Optional"
-                  />
-                </label>
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Notes</span>
+              <textarea
+                className="min-h-28 w-full rounded-md border border-slate-300 px-3 py-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                value={form.notes}
+                onChange={(event) =>
+                  updateFormField("notes", event.target.value)
+                }
+                placeholder="Optional"
+              />
+            </label>
 
-                <label className="block space-y-2 text-sm font-medium text-slate-700">
-                  <span>Notes</span>
-                  <textarea
-                    className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                    value={form.notes}
-                    onChange={(event) =>
-                      updateFormField("notes", event.target.value)
-                    }
-                    placeholder="Optional"
-                  />
-                </label>
-
-                <label className="block space-y-2 text-sm font-medium text-slate-700">
-                  <span>Receipt Image</span>
-                  <input
-                    className="block w-full cursor-pointer rounded-md border border-slate-300 bg-white text-sm text-slate-700 file:mr-4 file:h-12 file:cursor-pointer file:border-0 file:bg-slate-900 file:px-4 file:text-sm file:font-semibold file:text-white file:transition file:hover:bg-slate-700"
-                    type="file"
-                    accept="image/*"
-                    onChange={handleReceiptChange}
-                  />
-                  {receiptFile ? (
-                    <p className="text-sm text-slate-500">{receiptFile.name}</p>
-                  ) : null}
-                </label>
-              </div>
-            </details>
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Receipt Image</span>
+              <input
+                className="block w-full cursor-pointer rounded-md border border-slate-300 bg-white text-sm text-slate-700 file:mr-4 file:h-12 file:cursor-pointer file:border-0 file:bg-slate-900 file:px-4 file:text-sm file:font-semibold file:text-white file:transition file:hover:bg-slate-700"
+                type="file"
+                accept="image/*"
+                onChange={handleReceiptChange}
+              />
+              {receiptFile ? (
+                <p className="text-sm text-slate-500">{receiptFile.name}</p>
+              ) : null}
+            </label>
           </section>
 
           {submitError ? (
