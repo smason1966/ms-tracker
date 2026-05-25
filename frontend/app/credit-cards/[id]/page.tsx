@@ -100,6 +100,14 @@ type SpendingCategory = {
   name: string;
 };
 
+type Store = {
+  id: number;
+  name: string;
+  merchant_type: string | null;
+  merchant_category: string | null;
+  active: boolean;
+};
+
 type CardIssuer = {
   id: number;
   name: string;
@@ -118,14 +126,20 @@ type CardNetwork = {
 type RewardRule = {
   id: number;
   spending_category_id: number;
+  store_id: number | null;
   reward_program_id: number | null;
+  reward_type: string;
+  merchant_type: string | null;
   multiplier: string | number;
+  value: string | number | null;
+  priority: number;
   effective_start_date: string;
   effective_end_date: string | null;
   active: boolean;
   notes: string | null;
   spending_category: SpendingCategory;
   reward_program: RewardProgram | null;
+  store: Store | null;
 };
 
 type ProductChange = {
@@ -144,6 +158,12 @@ type RewardTransaction = {
   qualifying_spend: string | number;
   multiplier: string | number;
   rewards_earned: string | number;
+  reward_type: string;
+  points_earned: string | number;
+  cashback_amount: string | number;
+  statement_credit_amount: string | number;
+  purchase_discount_amount: string | number;
+  effective_savings_amount: string | number;
   calculation_source: string;
   notes: string | null;
 };
@@ -204,6 +224,38 @@ type EditableSection =
   | "rewards"
   | "bonus"
   | "notes";
+
+const REWARD_TYPE_OPTIONS = [
+  { value: "points", label: "Points Multiplier" },
+  { value: "cashback_percent", label: "Cashback %" },
+  { value: "instant_discount_percent", label: "Instant Discount %" },
+  { value: "statement_credit", label: "Fixed Credit" },
+  { value: "none", label: "None / exclusion" },
+];
+
+const NETWORK_CODES = new Set(["VISA", "MASTERCARD", "AMEX", "DISCOVER", "OTHER"]);
+
+const MERCHANT_TYPE_OPTIONS = [
+  "target",
+  "costco",
+  "kroger",
+  "speedway",
+  "wholesale",
+  "grocery",
+  "fuel",
+  "retail",
+];
+
+function rewardTypeLabel(value: string) {
+  if (value === "purchase_discount") {
+    return "Instant Discount %";
+  }
+
+  return (
+    REWARD_TYPE_OPTIONS.find((option) => option.value === value)?.label ??
+    value.replaceAll("_", " ")
+  );
+}
 
 function optionalString(value: string | number | null | undefined) {
   return value === null || value === undefined ? "" : String(value);
@@ -464,11 +516,18 @@ export default function CreditCardDetailPage() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [cardIssuers, setCardIssuers] = useState<CardIssuer[]>([]);
   const [cardNetworks, setCardNetworks] = useState<CardNetwork[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
   const [rewardPrograms, setRewardPrograms] = useState<RewardProgram[]>([]);
   const [isMultiPlayerModeEnabled, setIsMultiPlayerModeEnabled] = useState(false);
   const [rewardRuleCategoryId, setRewardRuleCategoryId] = useState("");
+  const [rewardRuleType, setRewardRuleType] = useState("points");
   const [rewardRuleMultiplier, setRewardRuleMultiplier] = useState("");
+  const [rewardRuleValue, setRewardRuleValue] = useState("");
   const [rewardRuleProgramId, setRewardRuleProgramId] = useState("");
+  const [rewardRuleMerchantType, setRewardRuleMerchantType] = useState("");
+  const [rewardRuleStoreId, setRewardRuleStoreId] = useState("");
+  const [rewardRulePriority, setRewardRulePriority] = useState("100");
+  const [rewardRuleActive, setRewardRuleActive] = useState(true);
   const [rewardRuleNotes, setRewardRuleNotes] = useState("");
   const [editingRewardRuleId, setEditingRewardRuleId] = useState<number | null>(null);
   const [rewardRulePendingDelete, setRewardRulePendingDelete] =
@@ -520,8 +579,9 @@ export default function CreditCardDetailPage() {
     () =>
       cardNetworks.filter(
         (network) =>
-          network.active ||
-          (form?.network_id !== "" && String(network.id) === form?.network_id),
+          NETWORK_CODES.has(network.code) &&
+          (network.active ||
+            (form?.network_id !== "" && String(network.id) === form?.network_id)),
       ),
     [cardNetworks, form?.network_id],
   );
@@ -542,6 +602,7 @@ export default function CreditCardDetailPage() {
         playersResponse,
         issuersResponse,
         networksResponse,
+        storesResponse,
         rewardProgramsResponse,
       ] = await Promise.all([
         fetch(`${API_BASE_URL}/credit-cards/${cardId}`),
@@ -550,8 +611,9 @@ export default function CreditCardDetailPage() {
         fetch(`${API_BASE_URL}/players/`),
         fetch(`${API_BASE_URL}/card-issuers/`),
         fetch(`${API_BASE_URL}/card-networks/`),
+        fetch(`${API_BASE_URL}/stores/`),
         fetch(
-          `${API_BASE_URL}/reward-programs/?active_only=true&eligible_for_credit_cards=true`,
+          `${API_BASE_URL}/reward-programs/?active_only=true&eligible_for_credit_cards=true&include_protection=false`,
         ),
       ]);
 
@@ -578,6 +640,9 @@ export default function CreditCardDetailPage() {
       if (!networksResponse.ok) {
         throw new Error(`Failed to load card networks (${networksResponse.status})`);
       }
+      if (!storesResponse.ok) {
+        throw new Error(`Failed to load stores (${storesResponse.status})`);
+      }
       if (!rewardProgramsResponse.ok) {
         throw new Error(
           `Failed to load reward programs (${rewardProgramsResponse.status})`,
@@ -593,6 +658,7 @@ export default function CreditCardDetailPage() {
       setPlayers((await playersResponse.json()) as Player[]);
       setCardIssuers((await issuersResponse.json()) as CardIssuer[]);
       setCardNetworks((await networksResponse.json()) as CardNetwork[]);
+      setStores((await storesResponse.json()) as Store[]);
       setRewardPrograms((await rewardProgramsResponse.json()) as RewardProgram[]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load card.");
@@ -767,7 +833,12 @@ export default function CreditCardDetailPage() {
   async function handleRewardRuleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!card || !rewardRuleCategoryId || !rewardRuleMultiplier) {
+    if (
+      !card ||
+      !rewardRuleCategoryId ||
+      (rewardRuleType === "points" && !rewardRuleMultiplier) ||
+      (rewardRuleType !== "points" && rewardRuleType !== "none" && !rewardRuleValue)
+    ) {
       return;
     }
 
@@ -788,10 +859,28 @@ export default function CreditCardDetailPage() {
           },
           body: JSON.stringify({
             spending_category_id: Number(rewardRuleCategoryId),
-            multiplier: rewardRuleMultiplier,
+            reward_type: rewardRuleType,
+            multiplier:
+              rewardRuleType === "points"
+                ? rewardRuleMultiplier
+                : rewardRuleType === "none"
+                  ? "0"
+                  : null,
+            value:
+              rewardRuleType === "points"
+                ? rewardRuleValue || rewardRuleMultiplier
+                : rewardRuleType === "none"
+                  ? "0"
+                  : rewardRuleValue,
             reward_program_id: rewardRuleProgramId
               ? Number(rewardRuleProgramId)
-              : card.reward_program_id,
+              : rewardRuleType === "points"
+                ? card.reward_program_id
+                : null,
+            merchant_type: rewardRuleMerchantType.trim() || null,
+            store_id: rewardRuleStoreId ? Number(rewardRuleStoreId) : null,
+            priority: rewardRulePriority ? Number(rewardRulePriority) : 100,
+            active: rewardRuleActive,
             notes: rewardRuleNotes.trim() || null,
           }),
         },
@@ -805,8 +894,14 @@ export default function CreditCardDetailPage() {
       }
 
       setRewardRuleCategoryId("");
+      setRewardRuleType("points");
       setRewardRuleMultiplier("");
+      setRewardRuleValue("");
       setRewardRuleProgramId(card.reward_program_id ? String(card.reward_program_id) : "");
+      setRewardRuleMerchantType("");
+      setRewardRuleStoreId("");
+      setRewardRulePriority("100");
+      setRewardRuleActive(true);
       setRewardRuleNotes("");
       setEditingRewardRuleId(null);
       setRewardRuleMessage(
@@ -827,7 +922,13 @@ export default function CreditCardDetailPage() {
   function startEditingRewardRule(rule: RewardRule) {
     setEditingRewardRuleId(rule.id);
     setRewardRuleCategoryId(String(rule.spending_category_id));
+    setRewardRuleType(
+      rule.reward_type === "purchase_discount"
+        ? "instant_discount_percent"
+        : rule.reward_type ?? "points",
+    );
     setRewardRuleMultiplier(String(rule.multiplier));
+    setRewardRuleValue(rule.value === null ? "" : String(rule.value));
     setRewardRuleProgramId(
       rule.reward_program_id
         ? String(rule.reward_program_id)
@@ -835,6 +936,10 @@ export default function CreditCardDetailPage() {
           ? String(card.reward_program_id)
           : "",
     );
+    setRewardRuleMerchantType(rule.merchant_type ?? "");
+    setRewardRuleStoreId(rule.store_id === null ? "" : String(rule.store_id));
+    setRewardRulePriority(String(rule.priority ?? 100));
+    setRewardRuleActive(rule.active);
     setRewardRuleNotes(rule.notes ?? "");
     setRewardRuleMessage(null);
   }
@@ -842,8 +947,14 @@ export default function CreditCardDetailPage() {
   function cancelRewardRuleEdit() {
     setEditingRewardRuleId(null);
     setRewardRuleCategoryId("");
+    setRewardRuleType("points");
     setRewardRuleMultiplier("");
+    setRewardRuleValue("");
     setRewardRuleProgramId(card?.reward_program_id ? String(card.reward_program_id) : "");
+    setRewardRuleMerchantType("");
+    setRewardRuleStoreId("");
+    setRewardRulePriority("100");
+    setRewardRuleActive(true);
     setRewardRuleNotes("");
   }
 
@@ -1434,7 +1545,12 @@ export default function CreditCardDetailPage() {
                     Reward Rules
                   </h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    Category rules apply first. General is used as the default fallback.
+                    Merchant overrides apply first, then category rules, then General fallback.
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Use General as the base/default earning rule. For Target Circle
+                    Mastercard, add General 1x, Fuel 2x, Dining 2x, and a target
+                    merchant instant discount at 5% with higher priority.
                   </p>
                 </div>
                 <button
@@ -1458,21 +1574,40 @@ export default function CreditCardDetailPage() {
                           {rule.spending_category.name}
                         </p>
                         <p className="text-xs font-semibold text-slate-500">
-                          {rule.reward_program
-                            ? `${rule.reward_program.short_code} · ${rule.reward_program.name}`
-                            : card.reward_program
-                              ? `${card.reward_program.short_code} · ${card.reward_program.name}`
-                              : "No reward program"}
+                          {rewardTypeLabel(rule.reward_type)}
+                          {rule.reward_type === "points" && rule.reward_program
+                            ? ` · ${rule.reward_program.short_code} · ${rule.reward_program.name}`
+                            : rule.reward_type === "points" && card.reward_program
+                              ? ` · ${card.reward_program.short_code} · ${card.reward_program.name}`
+                              : ""}
                         </p>
+                        {rule.merchant_type || rule.store ? (
+                          <p className="text-xs text-slate-500">
+                            Merchant override:{" "}
+                            {rule.store
+                              ? rule.store.name
+                              : rule.merchant_type?.replaceAll("_", " ")}
+                          </p>
+                        ) : null}
                         {rule.notes ? (
                           <p className="text-xs text-slate-500">{rule.notes}</p>
                         ) : null}
                         <p className="text-xs text-slate-400">
-                          Effective {formatDate(rule.effective_start_date)}
+                          Priority {rule.priority ?? 100} · Effective{" "}
+                          {formatDate(rule.effective_start_date)}
                         </p>
                       </div>
                       <p className="font-semibold text-slate-950">
-                        {Number(rule.multiplier).toFixed(1)}x
+                        {rule.reward_type === "points"
+                          ? `${Number(rule.multiplier).toFixed(1)}x`
+                          : rule.reward_type === "none"
+                            ? "No rewards"
+                            : `${Number(rule.value ?? 0).toFixed(2)}${
+                                rule.reward_type.includes("percent") ||
+                                rule.reward_type === "purchase_discount"
+                                  ? "%"
+                                  : ""
+                              }`}
                       </p>
                       <div className="flex flex-wrap gap-2 sm:justify-end">
                         <button
@@ -1549,7 +1684,7 @@ export default function CreditCardDetailPage() {
                 </p>
               ) : null}
               <form
-                className="mt-4 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_7rem_1fr_1fr_auto]"
+                className="mt-4 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-4"
                 onSubmit={handleRewardRuleSubmit}
               >
                 <label className="space-y-1 text-sm font-medium text-slate-700">
@@ -1571,23 +1706,53 @@ export default function CreditCardDetailPage() {
                   </select>
                 </label>
                 <label className="space-y-1 text-sm font-medium text-slate-700">
-                  <span>Multiplier</span>
+                  <span>Reward Type</span>
+                  <select
+                    className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
+                    onChange={(event) => {
+                      setRewardRuleType(event.target.value);
+                      if (event.target.value === "none") {
+                        setRewardRuleValue("0");
+                        setRewardRuleMultiplier("0");
+                      }
+                    }}
+                    value={rewardRuleType}
+                  >
+                    {REWARD_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="space-y-1 text-sm font-medium text-slate-700">
+                  <span>{rewardRuleType === "points" ? "Multiplier" : "Value"}</span>
                   <input
                     className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
                     min="0"
                     onChange={(event) =>
-                      setRewardRuleMultiplier(event.target.value)
+                      rewardRuleType === "points"
+                        ? setRewardRuleMultiplier(event.target.value)
+                        : setRewardRuleValue(event.target.value)
                     }
-                    required
+                    required={rewardRuleType !== "none"}
                     step="0.01"
                     type="number"
-                    value={rewardRuleMultiplier}
+                    value={
+                      rewardRuleType === "points"
+                        ? rewardRuleMultiplier
+                        : rewardRuleValue
+                    }
                   />
+                  <p className="text-xs text-slate-500">
+                    Use 5 for a 5% cashback or instant discount rule.
+                  </p>
                 </label>
                 <label className="space-y-1 text-sm font-medium text-slate-700">
                   <span>Program</span>
                   <select
                     className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
+                    disabled={rewardRuleType !== "points"}
                     onChange={(event) =>
                       setRewardRuleProgramId(event.target.value)
                     }
@@ -1600,6 +1765,59 @@ export default function CreditCardDetailPage() {
                       </option>
                     ))}
                   </select>
+                </label>
+                <label className="space-y-1 text-sm font-medium text-slate-700">
+                  <span>Merchant Override</span>
+                  <input
+                    className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
+                    list="merchant-type-options"
+                    onChange={(event) => setRewardRuleMerchantType(event.target.value)}
+                    placeholder="target, costco, kroger..."
+                    value={rewardRuleMerchantType}
+                  />
+                  <datalist id="merchant-type-options">
+                    {MERCHANT_TYPE_OPTIONS.map((merchantType) => (
+                      <option key={merchantType} value={merchantType} />
+                    ))}
+                  </datalist>
+                </label>
+                <label className="space-y-1 text-sm font-medium text-slate-700">
+                  <span>Specific Store</span>
+                  <select
+                    className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
+                    onChange={(event) => setRewardRuleStoreId(event.target.value)}
+                    value={rewardRuleStoreId}
+                  >
+                    <option value="">Any matching merchant</option>
+                    {stores
+                      .filter((store) => store.active || String(store.id) === rewardRuleStoreId)
+                      .map((store) => (
+                        <option key={store.id} value={store.id}>
+                          {store.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label className="space-y-1 text-sm font-medium text-slate-700">
+                  <span>Priority</span>
+                  <input
+                    className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
+                    min="1"
+                    onChange={(event) => setRewardRulePriority(event.target.value)}
+                    step="1"
+                    type="number"
+                    value={rewardRulePriority}
+                  />
+                  <p className="text-xs text-slate-500">Lower numbers win.</p>
+                </label>
+                <label className="flex h-10 items-center gap-2 self-end text-sm font-medium text-slate-700">
+                  <input
+                    checked={rewardRuleActive}
+                    className="h-4 w-4 rounded border-slate-300"
+                    onChange={(event) => setRewardRuleActive(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>Active</span>
                 </label>
                 <label className="space-y-1 text-sm font-medium text-slate-700">
                   <span>Notes</span>

@@ -11,6 +11,7 @@ from app.db.session import SessionLocal
 from app.models.fuel_point_entry import FuelPointEntry
 from app.models.fuel_reward_account import FuelRewardAccount
 from app.models.purchase_batch import PurchaseBatch
+from app.services.fuel_account_rules import ensure_fuel_account_can_receive_points
 
 
 router = APIRouter(prefix="/fuel-point-entries", tags=["fuel-point-entries"])
@@ -70,11 +71,7 @@ def create_fuel_point_entry(payload: FuelPointEntryCreate):
         if not account:
             raise HTTPException(status_code=404, detail="Fuel account not found")
 
-        if account.status in {"SOLD", "INACTIVE"}:
-            raise HTTPException(
-                status_code=400,
-                detail="Sold or inactive fuel accounts cannot receive new points.",
-            )
+        ensure_fuel_account_can_receive_points(db, account)
 
         purchase = (
             db.query(PurchaseBatch)
@@ -127,6 +124,7 @@ def create_fuel_point_entry(payload: FuelPointEntryCreate):
         current_points = (
             db.query(func.coalesce(func.sum(FuelPointEntry.points_earned), 0))
             .filter(FuelPointEntry.fuel_reward_account_id == account.id)
+            .filter(FuelPointEntry.expires_on >= date.today())
             .scalar()
         )
         current_points = int(current_points or 0)

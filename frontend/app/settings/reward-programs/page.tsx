@@ -28,6 +28,20 @@ type RewardProgram = {
   protection_reasons: string[];
 };
 
+type RewardProgramProtection = Pick<
+  RewardProgram,
+  | "linked_card_count"
+  | "linked_payment_count"
+  | "linked_rule_count"
+  | "ledger_entry_count"
+  | "linked_store_count"
+  | "system_default"
+  | "protected"
+  | "can_delete"
+  | "can_deactivate"
+  | "protection_reasons"
+>;
+
 type RewardProgramCategory = {
   name: string;
   active: boolean;
@@ -83,6 +97,27 @@ const emptyForm: RewardProgramForm = {
   active: true,
   notes: "",
 };
+
+const emptyProtection: RewardProgramProtection = {
+  linked_card_count: 0,
+  linked_payment_count: 0,
+  linked_rule_count: 0,
+  ledger_entry_count: 0,
+  linked_store_count: 0,
+  system_default: false,
+  protected: false,
+  can_delete: false,
+  can_deactivate: false,
+  protection_reasons: [],
+};
+
+function withDefaultProtection(program: RewardProgram): RewardProgram {
+  return {
+    ...emptyProtection,
+    ...program,
+    protection_reasons: program.protection_reasons ?? [],
+  };
+}
 
 function formFromProgram(program: RewardProgram): RewardProgramForm {
   return {
@@ -204,6 +239,7 @@ export default function RewardProgramsPage() {
     useState<DuplicateProgramDetail | null>(null);
   const [filter, setFilter] = useState("active");
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingProtection, setIsLoadingProtection] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -232,7 +268,7 @@ export default function RewardProgramsPage() {
     setError(null);
 
     try {
-      const programsEndpoint = `${API_BASE_URL}/reward-programs/`;
+      const programsEndpoint = `${API_BASE_URL}/reward-programs/?include_protection=false`;
       const categoriesEndpoint = `${API_BASE_URL}/reward-program-categories/`;
       const [response, categoriesResponse] = await Promise.all([
         fetch(programsEndpoint),
@@ -256,7 +292,8 @@ export default function RewardProgramsPage() {
         );
       }
 
-      setPrograms((await response.json()) as RewardProgram[]);
+      const loadedPrograms = (await response.json()) as RewardProgram[];
+      setPrograms(loadedPrograms.map(withDefaultProtection));
       const loadedCategories =
         (await categoriesResponse.json()) as RewardProgramCategory[];
       setCategories(
@@ -277,12 +314,55 @@ export default function RewardProgramsPage() {
     });
   }, []);
 
+  async function loadProgramProtection(
+    programId: number,
+    options: { throwOnError?: boolean } = {},
+  ) {
+    const endpoint = `${API_BASE_URL}/reward-programs/${programId}/protection`;
+    setIsLoadingProtection(true);
+
+    try {
+      const response = await fetch(endpoint);
+      const bodyText = await response.text();
+      if (!response.ok) {
+        throw new Error(apiErrorMessage(endpoint, response.status, bodyText));
+      }
+
+      const protection = JSON.parse(bodyText) as RewardProgramProtection;
+      setPrograms((currentPrograms) =>
+        currentPrograms.map((program) =>
+          program.id === programId ? { ...program, ...protection } : program,
+        ),
+      );
+      setEditingProgram((currentProgram) =>
+        currentProgram?.id === programId
+          ? { ...currentProgram, ...protection }
+          : currentProgram,
+      );
+      return protection;
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Failed to load reward program dependency details.";
+      setError(message);
+      if (options.throwOnError) {
+        throw err;
+      }
+      return null;
+    } finally {
+      setIsLoadingProtection(false);
+    }
+  }
+
   function startEdit(program: RewardProgram) {
-    setEditingProgram(program);
+    const programWithProtectionDefaults = withDefaultProtection(program);
+    setEditingProgram(programWithProtectionDefaults);
     setDuplicateProgram(null);
-    setForm(formFromProgram(program));
+    setForm(formFromProgram(programWithProtectionDefaults));
     setError(null);
     setMessage(null);
+    void loadProgramProtection(program.id);
   }
 
   function resetForm() {
@@ -332,7 +412,7 @@ export default function RewardProgramsPage() {
         throw new Error(apiErrorMessage(endpoint, response.status, bodyText));
       }
 
-      const savedProgram = (await response.json()) as RewardProgram;
+      const savedProgram = withDefaultProtection((await response.json()) as RewardProgram);
       setMessage(editingProgram ? "Reward program updated." : "Reward program added.");
       if (editingProgram) {
         setEditingProgram(savedProgram);
@@ -385,7 +465,7 @@ export default function RewardProgramsPage() {
         throw new Error(apiErrorMessage(endpoint, response.status, bodyText));
       }
 
-      const savedProgram = (await response.json()) as RewardProgram;
+      const savedProgram = withDefaultProtection((await response.json()) as RewardProgram);
       setMessage("Existing reward program reactivated.");
       setDuplicateProgram(null);
       setEditingProgram(savedProgram);
@@ -424,7 +504,7 @@ export default function RewardProgramsPage() {
         throw new Error(apiErrorMessage(endpoint, response.status, bodyText));
       }
 
-      const savedProgram = (await response.json()) as RewardProgram;
+      const savedProgram = withDefaultProtection((await response.json()) as RewardProgram);
       setMessage(active ? "Reward program reactivated." : "Reward program deactivated.");
       if (showActiveAfter && active) {
         setFilter("active");
@@ -468,6 +548,35 @@ export default function RewardProgramsPage() {
       await loadPrograms();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete reward program.");
+    }
+  }
+
+  async function deleteProgramWithProtection(program: RewardProgram) {
+    setError(null);
+    setMessage(null);
+
+    const programWithProtectionDefaults = withDefaultProtection(program);
+    setEditingProgram(programWithProtectionDefaults);
+    setForm(formFromProgram(programWithProtectionDefaults));
+
+    try {
+      const protection = await loadProgramProtection(program.id, { throwOnError: true });
+      if (!protection) {
+        return;
+      }
+      if (!protection.can_delete) {
+        setError(
+          `Reward program is protected. ${protection.protection_reasons.join("; ")}`,
+        );
+        return;
+      }
+      await deleteProgram({ ...programWithProtectionDefaults, ...protection });
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to check reward program dependencies before delete.",
+      );
     }
   }
 
@@ -711,6 +820,11 @@ export default function RewardProgramsPage() {
             </div>
             {editingProgram ? (
               <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                {isLoadingProtection ? (
+                  <p className="text-xs font-semibold text-slate-600">
+                    Checking linked cards, stores, payments, and reward history...
+                  </p>
+                ) : null}
                 {editingProgram.protection_reasons.length > 0 ? (
                   <div className="space-y-1 text-xs text-slate-600">
                     <p className="font-semibold text-slate-700">
@@ -844,10 +958,10 @@ export default function RewardProgramsPage() {
                           >
                             Edit
                           </button>
-                          {!program.active && program.can_delete ? (
+                          {!program.active ? (
                             <button
                               className="h-9 rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700"
-                              onClick={() => void deleteProgram(program)}
+                              onClick={() => void deleteProgramWithProtection(program)}
                               type="button"
                             >
                               Delete

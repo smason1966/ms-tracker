@@ -1,0 +1,10 @@
+uploads/
+data/uploads/
+ocr-debug/
+.git/
+node_modules/
+.next/
+__pycache__/
+.venv/
+.pytest_cache/
+*.pyc

@@ -1,9 +1,11 @@
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+import logging
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
 
 from app.db.session import SessionLocal
@@ -17,12 +19,24 @@ from app.models.credit_card_reward_transaction import CreditCardRewardTransactio
 from app.models.player import Player
 from app.models.reward_program import RewardProgram
 from app.models.spending_category import SpendingCategory
-from app.services.credit_card_rewards import recalculate_rewards_for_credit_card
+from app.models.store import Store
+from app.services.credit_card_rewards import normalize_reward_type, recalculate_rewards_for_credit_card
 
 
 router = APIRouter(prefix="/credit-cards", tags=["credit-cards"])
+logger = logging.getLogger(__name__)
 
 REWARDS_TYPES = {"CASHBACK", "MR", "UR", "TY", "MILES", "OTHER"}
+NETWORK_VALUES = {
+    "visa": "Visa",
+    "mastercard": "Mastercard",
+    "master_card": "Mastercard",
+    "mc": "Mastercard",
+    "american_express": "American Express",
+    "amex": "American Express",
+    "discover": "Discover",
+    "other": "Other",
+}
 MULTI_PLAYER_MODE_KEY = "multi_player_mode_enabled"
 
 
@@ -118,15 +132,26 @@ class CreditCardUpdate(BaseModel):
 
 class RewardRuleCreate(BaseModel):
     spending_category_id: int
-    multiplier: Decimal
+    reward_type: str = "points"
+    multiplier: Decimal | None = None
+    value: Decimal | None = None
+    merchant_type: str | None = None
+    store_id: int | None = None
+    priority: int = 100
     reward_program_id: int | None = None
     effective_start_date: date | None = None
+    active: bool = True
     notes: str | None = None
 
 
 class RewardRuleUpdate(BaseModel):
     spending_category_id: int | None = None
+    reward_type: str | None = None
     multiplier: Decimal | None = None
+    value: Decimal | None = None
+    merchant_type: str | None = None
+    store_id: int | None = None
+    priority: int | None = None
     reward_program_id: int | None = None
     effective_start_date: date | None = None
     effective_end_date: date | None = None
@@ -392,8 +417,13 @@ def serialize_card(card: CreditCard) -> dict:
                 "id": rule.id,
                 "credit_card_id": rule.credit_card_id,
                 "spending_category_id": rule.spending_category_id,
+                "store_id": rule.store_id,
                 "reward_program_id": rule.reward_program_id,
+                "reward_type": rule.reward_type,
+                "merchant_type": rule.merchant_type,
                 "multiplier": rule.multiplier,
+                "value": rule.value,
+                "priority": rule.priority,
                 "effective_start_date": rule.effective_start_date,
                 "effective_end_date": rule.effective_end_date,
                 "active": rule.active,
@@ -416,6 +446,23 @@ def serialize_card(card: CreditCard) -> dict:
                         and (
                             rule_program := db.query(RewardProgram)
                             .filter(RewardProgram.id == rule.reward_program_id)
+                            .first()
+                        )
+                    )
+                    else None
+                ),
+                "store": (
+                    {
+                        "id": rule_store.id,
+                        "name": rule_store.name,
+                        "merchant_type": rule_store.merchant_type,
+                        "merchant_category": rule_store.merchant_category,
+                    }
+                    if (
+                        rule.store_id is not None
+                        and (
+                            rule_store := db.query(Store)
+                            .filter(Store.id == rule.store_id)
                             .first()
                         )
                     )
@@ -471,6 +518,13 @@ def serialize_card(card: CreditCard) -> dict:
                 "qualifying_spend": transaction.qualifying_spend,
                 "multiplier": transaction.multiplier,
                 "rewards_earned": transaction.rewards_earned,
+                "reward_type": transaction.reward_type,
+                "points_earned": transaction.points_earned,
+                "cashback_amount": transaction.cashback_amount,
+                "statement_credit_amount": transaction.statement_credit_amount,
+                "purchase_discount_amount": transaction.purchase_discount_amount,
+                "effective_savings_amount": transaction.effective_savings_amount,
+                "matched_rule_id": transaction.matched_rule_id,
                 "calculation_source": transaction.calculation_source,
                 "notes": transaction.notes,
             }
@@ -486,6 +540,50 @@ def validate_rewards_type(value: str) -> str:
         raise HTTPException(status_code=400, detail="Invalid rewards_type")
 
     return normalized
+
+
+def normalize_network_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    key = value.strip().lower().replace(" ", "_").replace("-", "_")
+    if not key:
+        return None
+
+    if key not in NETWORK_VALUES:
+        logger.warning("Invalid credit card network value received: %s", value)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_card_network",
+                "allowed_values": sorted(set(NETWORK_VALUES.values())),
+                "received": value,
+            },
+        )
+
+    return NETWORK_VALUES[key]
+
+
+def ensure_unique_card_nickname(
+    db: Session,
+    nickname: str,
+    *,
+    excluding_card_id: int | None = None,
+) -> None:
+    query = db.query(CreditCard).filter(CreditCard.nickname.ilike(nickname.strip()))
+
+    if excluding_card_id is not None:
+        query = query.filter(CreditCard.id != excluding_card_id)
+
+    if query.first():
+        logger.warning("Duplicate credit card nickname rejected: %s", nickname)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "duplicate_credit_card_nickname",
+                "message": f"Credit card '{nickname}' already exists.",
+            },
+        )
 
 
 def get_bool_setting(db: Session, key: str, default: bool = False) -> bool:
@@ -589,8 +687,43 @@ def validate_network(db: Session, network_id: int | None, current_network_id: in
     return network
 
 
+def validate_store(db: Session, store_id: int | None) -> Store | None:
+    if store_id is None:
+        return None
+
+    store = db.query(Store).filter(Store.id == store_id).first()
+
+    if not store:
+        raise HTTPException(status_code=400, detail="Store not found")
+
+    return store
+
+
 def default_reward_program_id(card: CreditCard, reward_program_id: int | None) -> int | None:
     return reward_program_id if reward_program_id is not None else card.reward_program_id
+
+
+def normalized_rule_numbers(
+    reward_type: str,
+    multiplier: Decimal | None,
+    value: Decimal | None,
+) -> tuple[Decimal, Decimal | None]:
+    normalized_type = normalize_reward_type(reward_type)
+
+    if normalized_type == "points":
+        resolved_multiplier = multiplier if multiplier is not None else value
+        if resolved_multiplier is None:
+            raise HTTPException(status_code=400, detail="Point reward rules require a multiplier")
+        return resolved_multiplier, value if value is not None else resolved_multiplier
+
+    resolved_value = value if value is not None else multiplier
+    if resolved_value is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{normalized_type} reward rules require a value",
+        )
+
+    return Decimal("0"), resolved_value
 
 
 @router.get("")
@@ -610,6 +743,11 @@ def create_credit_card(payload: CreditCardCreate):
 
     try:
         payload_data = getattr(payload, "model_dump", payload.dict)()
+        payload_data["nickname"] = payload.nickname.strip()
+        if not payload_data["nickname"]:
+            logger.warning("Credit card create rejected: missing nickname")
+            raise HTTPException(status_code=400, detail="Nickname is required")
+        ensure_unique_card_nickname(db, payload_data["nickname"])
         payload_data["player_id"] = default_player_id_for_create(
             db,
             payload.player_id,
@@ -617,8 +755,13 @@ def create_credit_card(payload: CreditCardCreate):
         validate_reward_program(db, payload.reward_program_id)
         issuer = validate_issuer(db, payload.issuer_id)
         network = validate_network(db, payload.network_id)
+        if not network:
+            payload_data["network"] = normalize_network_value(payload.network)
         if issuer is None and not payload.issuer:
+            logger.warning("Credit card create rejected: missing issuer")
             raise HTTPException(status_code=400, detail="Select a card issuer")
+        if issuer is None:
+            payload_data["issuer"] = payload.issuer.strip()
         card = CreditCard(
             **payload_data
         )
@@ -631,6 +774,16 @@ def create_credit_card(payload: CreditCardCreate):
         db.commit()
         db.refresh(card)
         return serialize_card(card)
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception("Credit card create failed during persistence")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "credit_card_persistence_failed",
+                "message": str(exc.orig),
+            },
+        ) from exc
     finally:
         db.close()
 
@@ -666,6 +819,12 @@ def update_credit_card(card_id: int, payload: CreditCardUpdate):
             if field == "rewards_type" and value is not None:
                 value = validate_rewards_type(value)
 
+            if field == "nickname" and value is not None:
+                value = value.strip()
+                if not value:
+                    raise HTTPException(status_code=400, detail="Nickname is required")
+                ensure_unique_card_nickname(db, value, excluding_card_id=card.id)
+
             if field == "player_id":
                 validate_player(db, value, card.player_id)
 
@@ -687,12 +846,25 @@ def update_credit_card(card_id: int, payload: CreditCardUpdate):
                 card.network_id = value
                 continue
 
+            if field == "network":
+                value = normalize_network_value(value)
+
             setattr(card, field, value)
 
         card.updated_at = datetime.utcnow()
         db.commit()
         db.refresh(card)
         return serialize_card(card)
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception("Credit card update failed during persistence")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "credit_card_persistence_failed",
+                "message": str(exc.orig),
+            },
+        ) from exc
     finally:
         db.close()
 
@@ -731,13 +903,23 @@ def serialize_reward_rule(
         if rule.reward_program_id is not None
         else None
     )
+    store = (
+        db.query(Store).filter(Store.id == rule.store_id).first()
+        if rule.store_id is not None
+        else None
+    )
 
     return {
         "id": rule.id,
         "credit_card_id": rule.credit_card_id,
         "spending_category_id": rule.spending_category_id,
+        "store_id": rule.store_id,
         "reward_program_id": rule.reward_program_id,
+        "reward_type": rule.reward_type,
+        "merchant_type": rule.merchant_type,
         "multiplier": rule.multiplier,
+        "value": rule.value,
+        "priority": rule.priority,
         "effective_start_date": rule.effective_start_date,
         "effective_end_date": rule.effective_end_date,
         "active": rule.active,
@@ -757,6 +939,16 @@ def serialize_reward_rule(
                 "active": reward_program.active,
             }
             if reward_program
+            else None
+        ),
+        "store": (
+            {
+                "id": store.id,
+                "name": store.name,
+                "merchant_type": store.merchant_type,
+                "merchant_category": store.merchant_category,
+            }
+            if store
             else None
         ),
     }
@@ -797,11 +989,22 @@ def create_reward_rule(card_id: int, payload: RewardRuleCreate):
             card_id,
             payload.spending_category_id,
         )
+        reward_type = normalize_reward_type(payload.reward_type)
+        multiplier, value = normalized_rule_numbers(
+            reward_type,
+            payload.multiplier,
+            payload.value,
+        )
+        merchant_type = payload.merchant_type.strip().lower() if payload.merchant_type else None
+        validate_store(db, payload.store_id)
         reward_program_id = default_reward_program_id(
             card,
             payload.reward_program_id,
         )
-        validate_reward_program(db, reward_program_id)
+        if reward_type == "points":
+            validate_reward_program(db, reward_program_id)
+        elif payload.reward_program_id is not None:
+            validate_reward_program(db, payload.reward_program_id)
         existing_rule = (
             db.query(CreditCardRewardRule)
             .filter(CreditCardRewardRule.credit_card_id == card_id)
@@ -809,22 +1012,30 @@ def create_reward_rule(card_id: int, payload: RewardRuleCreate):
                 CreditCardRewardRule.spending_category_id
                 == payload.spending_category_id
             )
+            .filter(CreditCardRewardRule.store_id == payload.store_id)
+            .filter(CreditCardRewardRule.merchant_type == merchant_type)
+            .filter(CreditCardRewardRule.reward_type == reward_type)
             .first()
         )
 
         if existing_rule:
             raise HTTPException(
                 status_code=400,
-                detail="Reward rule already exists for this category",
+                detail="Reward rule already exists for this category and merchant target",
             )
 
         rule = CreditCardRewardRule(
             credit_card_id=card_id,
             spending_category_id=payload.spending_category_id,
-            reward_program_id=reward_program_id,
-            multiplier=payload.multiplier,
+            store_id=payload.store_id,
+            reward_program_id=reward_program_id if reward_type == "points" else payload.reward_program_id,
+            reward_type=reward_type,
+            merchant_type=merchant_type,
+            multiplier=multiplier,
+            value=value,
+            priority=payload.priority,
             effective_start_date=payload.effective_start_date or date.today(),
-            active=True,
+            active=payload.active,
             notes=payload.notes,
         )
         db.add(rule)
@@ -873,10 +1084,37 @@ def update_reward_rule(rule_id: int, payload: RewardRuleUpdate):
             value = getattr(payload, field)
 
             if field == "reward_program_id":
-                value = default_reward_program_id(card, value)
-                validate_reward_program(db, value)
+                pending_reward_type = normalize_reward_type(
+                    payload.reward_type
+                    if "reward_type" in fields and payload.reward_type is not None
+                    else rule.reward_type
+                )
+                if pending_reward_type == "points":
+                    value = default_reward_program_id(card, value)
+                    validate_reward_program(db, value)
+                elif value is not None:
+                    validate_reward_program(db, value)
+
+            if field == "reward_type" and value is not None:
+                value = normalize_reward_type(value)
+
+            if field == "store_id":
+                validate_store(db, value)
+
+            if field == "merchant_type" and isinstance(value, str):
+                value = value.strip().lower() or None
 
             setattr(rule, field, value)
+
+        if {"reward_type", "multiplier", "value"} & fields:
+            rule.reward_type = normalize_reward_type(rule.reward_type)
+            multiplier, value = normalized_rule_numbers(
+                rule.reward_type,
+                rule.multiplier,
+                rule.value,
+            )
+            rule.multiplier = multiplier
+            rule.value = value
 
         affected_purchase_count = recalculate_rewards_for_credit_card(
             db,
@@ -988,8 +1226,13 @@ def record_product_change(card_id: int, payload: ProductChangeCreate):
                 CreditCardRewardRule(
                     credit_card_id=card_id,
                     spending_category_id=rule.spending_category_id,
+                    store_id=rule.store_id,
                     reward_program_id=rule.reward_program_id or card.reward_program_id,
+                    reward_type=rule.reward_type,
+                    merchant_type=rule.merchant_type,
                     multiplier=rule.multiplier,
+                    value=rule.value,
+                    priority=rule.priority,
                     effective_start_date=payload.effective_date,
                     active=True,
                     notes=(

@@ -20,11 +20,21 @@ from app.models.store import Store
 
 AUTOMATIC_REWARD_SOURCES = {
     "automatic",
+    "merchant_reward_rule",
     "product_change_snapshot",
     "effective_reward_rule",
     "general_reward_rule",
     "card_default_rate",
     "fallback_1x",
+}
+REWARD_TYPES = {
+    "points",
+    "points_multiplier",
+    "cashback_percent",
+    "statement_credit",
+    "instant_discount_percent",
+    "purchase_discount",
+    "none",
 }
 
 
@@ -38,13 +48,43 @@ def to_decimal(value) -> Decimal:
     return Decimal(str(value))
 
 
+def normalize_key(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    normalized = value.strip().lower().replace(" ", "_").replace("-", "_")
+    return normalized or None
+
+
+def normalize_reward_type(value: str | None) -> str:
+    normalized = normalize_key(value) or "points"
+    if normalized == "points_multiplier":
+        return "points"
+
+    if normalized not in REWARD_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_reward_type",
+                "allowed_values": sorted(REWARD_TYPES),
+                "received": value,
+            },
+        )
+
+    return normalized
+
+
 def purchase_date_only(purchase: PurchaseBatch) -> date:
     value = purchase.purchase_date
     return value.date() if isinstance(value, datetime) else value
 
 
+def get_purchase_store(db: Session, purchase: PurchaseBatch) -> Store | None:
+    return db.query(Store).filter(Store.name == purchase.store_name).first()
+
+
 def get_purchase_spending_category_id(db: Session, purchase: PurchaseBatch) -> int | None:
-    store = db.query(Store).filter(Store.name == purchase.store_name).first()
+    store = get_purchase_store(db, purchase)
 
     if not store:
         return None
@@ -52,12 +92,13 @@ def get_purchase_spending_category_id(db: Session, purchase: PurchaseBatch) -> i
     if store.spending_category_id is not None:
         return store.spending_category_id
 
-    if not store.merchant_category:
+    category_key = store.merchant_category or store.merchant_type
+    if not category_key:
         return None
 
     category = (
         db.query(SpendingCategory)
-        .filter(SpendingCategory.key == store.merchant_category)
+        .filter(SpendingCategory.key == normalize_key(category_key))
         .first()
     )
 
@@ -116,6 +157,7 @@ def find_effective_reward_rule(
         db.query(CreditCardRewardRule)
         .filter(CreditCardRewardRule.credit_card_id == card_id)
         .filter(CreditCardRewardRule.spending_category_id == spending_category_id)
+        .filter(CreditCardRewardRule.active.is_(True))
         .filter(CreditCardRewardRule.effective_start_date <= purchase_date)
         .filter(
             or_(
@@ -126,6 +168,107 @@ def find_effective_reward_rule(
         .order_by(CreditCardRewardRule.effective_start_date.desc())
         .first()
     )
+
+
+def get_effective_reward_rules(
+    db: Session,
+    *,
+    card_id: int,
+    purchase_date: date,
+) -> list[CreditCardRewardRule]:
+    return (
+        db.query(CreditCardRewardRule)
+        .filter(CreditCardRewardRule.credit_card_id == card_id)
+        .filter(CreditCardRewardRule.active.is_(True))
+        .filter(CreditCardRewardRule.effective_start_date <= purchase_date)
+        .filter(
+            or_(
+                CreditCardRewardRule.effective_end_date.is_(None),
+                CreditCardRewardRule.effective_end_date >= purchase_date,
+            )
+        )
+        .all()
+    )
+
+
+def merchant_tokens(store: Store | None, purchase: PurchaseBatch) -> set[str]:
+    values = {
+        purchase.store_name,
+        store.name if store else None,
+        store.store_type if store else None,
+        store.retailer_group if store else None,
+        store.merchant_category if store else None,
+        store.merchant_type if store else None,
+    }
+
+    return {normalized for value in values if (normalized := normalize_key(value))}
+
+
+def rule_has_merchant_target(rule: CreditCardRewardRule) -> bool:
+    return rule.store_id is not None or bool(normalize_key(rule.merchant_type))
+
+
+def rule_matches_merchant(rule: CreditCardRewardRule, store: Store | None, tokens: set[str]) -> bool:
+    if rule.store_id is not None:
+        return store is not None and rule.store_id == store.id
+
+    merchant_type = normalize_key(rule.merchant_type)
+    return merchant_type is not None and merchant_type in tokens
+
+
+def select_best_reward_rule(
+    db: Session,
+    *,
+    card_id: int,
+    spending_category_id: int | None,
+    store: Store | None,
+    purchase: PurchaseBatch,
+    purchase_date: date,
+) -> tuple[CreditCardRewardRule | None, str]:
+    rules = get_effective_reward_rules(db, card_id=card_id, purchase_date=purchase_date)
+    tokens = merchant_tokens(store, purchase)
+    general_category = get_general_spending_category(db)
+
+    def sort_key(rule: CreditCardRewardRule) -> tuple[int, date, Decimal]:
+        return (
+            rule.priority if rule.priority is not None else 100,
+            date.max - rule.effective_start_date,
+            -to_decimal(rule.value if rule.value is not None else rule.multiplier),
+        )
+
+    merchant_rules = [
+        rule
+        for rule in rules
+        if rule_has_merchant_target(rule) and rule_matches_merchant(rule, store, tokens)
+    ]
+    if merchant_rules:
+        return sorted(merchant_rules, key=sort_key)[0], "merchant_reward_rule"
+
+    category_rules = [
+        rule
+        for rule in rules
+        if (
+            spending_category_id is not None
+            and rule.spending_category_id == spending_category_id
+            and not rule_has_merchant_target(rule)
+        )
+    ]
+    if category_rules:
+        return sorted(category_rules, key=sort_key)[0], "effective_reward_rule"
+
+    general_rules = [
+        rule
+        for rule in rules
+        if (
+            general_category is not None
+            and rule.spending_category_id == general_category.id
+            and not rule_has_merchant_target(rule)
+        )
+    ]
+    if general_rules:
+        return sorted(general_rules, key=sort_key)[0], "general_reward_rule"
+
+    return None, "fallback"
 
 
 def format_multiplier(value: Decimal) -> str:
@@ -149,8 +292,54 @@ def serialize_rule_summary(
         "category_id": rule.spending_category_id,
         "category_key": category.key if category else None,
         "category_name": category.name if category else None,
+        "store_id": rule.store_id,
+        "merchant_type": rule.merchant_type,
+        "reward_type": rule.reward_type,
         "multiplier": rule.multiplier,
+        "value": rule.value,
+        "priority": rule.priority,
         "reward_program_id": rule.reward_program_id,
+    }
+
+
+def calculate_reward_components(
+    *,
+    purchase: PurchaseBatch,
+    amount: Decimal,
+    reward_type: str,
+    multiplier: Decimal,
+    value: Decimal,
+) -> dict[str, Decimal]:
+    reward_type = normalize_reward_type(reward_type)
+    points_earned = Decimal("0")
+    cashback_amount = Decimal("0")
+    statement_credit_amount = Decimal("0")
+    purchase_discount_amount = Decimal("0")
+
+    if reward_type == "points":
+        points_earned = amount * multiplier
+    elif reward_type == "cashback_percent":
+        cashback_amount = amount * value / Decimal("100")
+    elif reward_type == "statement_credit":
+        statement_credit_amount = value
+    elif reward_type in {"instant_discount_percent", "purchase_discount"}:
+        implied_discount = amount * value / Decimal("100")
+        if purchase.purchase_total_paid is not None:
+            implied_discount = max(
+                Decimal("0"),
+                to_decimal(purchase.total_amount) - to_decimal(purchase.purchase_total_paid),
+            )
+        purchase_discount_amount = implied_discount
+
+    effective_savings_amount = cashback_amount + statement_credit_amount + purchase_discount_amount
+
+    return {
+        "rewards_earned": points_earned,
+        "points_earned": points_earned,
+        "cashback_amount": cashback_amount,
+        "statement_credit_amount": statement_credit_amount,
+        "purchase_discount_amount": purchase_discount_amount,
+        "effective_savings_amount": effective_savings_amount,
     }
 
 
@@ -165,58 +354,56 @@ def resolve_reward_for_purchase_payment(
     purchase_date = purchase_date_only(purchase)
     purchase_category_id = spending_category_id
     category = get_spending_category(db, purchase_category_id)
-    exact_rule = find_effective_reward_rule(
+    store = get_purchase_store(db, purchase)
+    selected_rule, rule_source = select_best_reward_rule(
         db,
         card_id=card.id,
         spending_category_id=purchase_category_id,
+        store=store,
+        purchase=purchase,
         purchase_date=purchase_date,
-    )
-    general_category = get_general_spending_category(db)
-    general_rule = (
-        find_effective_reward_rule(
-            db,
-            card_id=card.id,
-            spending_category_id=general_category.id,
-            purchase_date=purchase_date,
-        )
-        if general_category is not None
-        else None
     )
 
     if manual_multiplier is not None:
         multiplier = to_decimal(manual_multiplier)
+        value = multiplier
+        reward_type = "points"
         selected_rule = None
         calculation_source = "manual_override"
         reward_program_id = default_reward_program_id(db, card)
-    elif exact_rule is not None:
-        multiplier = to_decimal(exact_rule.multiplier)
-        selected_rule = exact_rule
-        calculation_source = "effective_reward_rule"
-        reward_program_id = exact_rule.reward_program_id or default_reward_program_id(db, card)
-    elif general_rule is not None:
-        multiplier = to_decimal(general_rule.multiplier)
-        selected_rule = general_rule
-        calculation_source = "general_reward_rule"
-        reward_program_id = general_rule.reward_program_id or default_reward_program_id(db, card)
+    elif selected_rule is not None:
+        multiplier = to_decimal(selected_rule.multiplier)
+        value = to_decimal(selected_rule.value if selected_rule.value is not None else multiplier)
+        reward_type = normalize_reward_type(selected_rule.reward_type)
+        calculation_source = rule_source
+        reward_program_id = selected_rule.reward_program_id or default_reward_program_id(db, card)
     elif card.rewards_rate is not None:
         multiplier = to_decimal(card.rewards_rate)
-        selected_rule = None
+        value = multiplier
+        reward_type = "points"
         calculation_source = "card_default_rate"
         reward_program_id = default_reward_program_id(db, card)
     else:
         multiplier = Decimal("1")
-        selected_rule = None
+        value = multiplier
+        reward_type = "points"
         calculation_source = "fallback_1x"
         reward_program_id = default_reward_program_id(db, card)
 
     return {
         "merchant": purchase.store_name,
+        "merchant_type": store.merchant_type if store else None,
+        "merchant_category": store.merchant_category if store else None,
         "spending_category_id": purchase_category_id,
         "spending_category_name": category.name if category else None,
-        "matched_rule": serialize_rule_summary(db, selected_rule if selected_rule == exact_rule else None),
-        "fallback_rule": serialize_rule_summary(db, general_rule),
+        "matched_rule": serialize_rule_summary(db, selected_rule),
+        "fallback_rule": None,
         "selected_rule": serialize_rule_summary(db, selected_rule),
+        "matched_rule_id": selected_rule.id if selected_rule else None,
+        "reward_type": reward_type,
         "final_multiplier": multiplier,
+        "rule_value": value,
+        "priority": selected_rule.priority if selected_rule else None,
         "reward_program_id": reward_program_id,
         "calculation_source": calculation_source,
     }
@@ -229,10 +416,12 @@ def reward_resolution_note(
     debug_line = (
         "Reward resolution: "
         f"merchant={resolution['merchant'] or '-'}; "
+        f"merchant_type={resolution.get('merchant_type') or '-'}; "
         f"category={resolution['spending_category_name'] or 'Uncategorized'}; "
         f"matched_rule={resolution['matched_rule']['category_name'] if resolution['matched_rule'] else '-'}; "
-        f"fallback_rule={resolution['fallback_rule']['category_name'] if resolution['fallback_rule'] else '-'}; "
-        f"final_multiplier={format_multiplier(resolution['final_multiplier'])}x"
+        f"reward_type={resolution.get('reward_type') or 'points'}; "
+        f"final_multiplier={format_multiplier(resolution['final_multiplier'])}x; "
+        f"value={format_multiplier(to_decimal(resolution.get('rule_value')))}"
     )
 
     if existing_notes and existing_notes.strip():
@@ -328,8 +517,16 @@ def sync_automatic_reward_transactions(db: Session, purchase_id: int) -> list[Cr
             spending_category_id=transaction_category_id,
         )
         multiplier = resolution["final_multiplier"]
+        reward_type = resolution["reward_type"]
+        rule_value = resolution["rule_value"]
         reward_program_id = resolution["reward_program_id"] or payment.reward_program_id
-        rewards_earned = to_decimal(payment.amount) * multiplier
+        reward_components = calculate_reward_components(
+            purchase=purchase,
+            amount=to_decimal(payment.amount),
+            reward_type=reward_type,
+            multiplier=multiplier,
+            value=rule_value,
+        )
         calculation_source = resolution["calculation_source"]
 
         transaction = CreditCardRewardTransaction(
@@ -338,10 +535,18 @@ def sync_automatic_reward_transactions(db: Session, purchase_id: int) -> list[Cr
             player_id=purchase.player_id or card.player_id,
             reward_program_id=reward_program_id,
             spending_category_id=transaction_category_id,
+            matched_rule_id=resolution["matched_rule_id"],
             purchase_date=purchase_date,
             qualifying_spend=payment.amount,
             multiplier=multiplier,
-            rewards_earned=rewards_earned,
+            rewards_earned=reward_components["rewards_earned"],
+            reward_type=reward_type,
+            points_earned=reward_components["points_earned"],
+            cashback_amount=reward_components["cashback_amount"],
+            statement_credit_amount=reward_components["statement_credit_amount"],
+            purchase_discount_amount=reward_components["purchase_discount_amount"],
+            effective_savings_amount=reward_components["effective_savings_amount"],
+            priority=resolution["priority"],
             calculation_source=calculation_source,
             credit_card_product_snapshot=card.nickname,
             notes=reward_resolution_note(payment.notes, resolution),
@@ -351,10 +556,18 @@ def sync_automatic_reward_transactions(db: Session, purchase_id: int) -> list[Cr
 
         payment.spending_category_id = transaction_category_id
         payment.reward_program_id = reward_program_id
+        payment.matched_rule_id = resolution["matched_rule_id"]
         payment.reward_multiplier = multiplier
         payment.applied_multiplier = multiplier
-        payment.estimated_rewards_earned = rewards_earned
-        payment.calculated_rewards = rewards_earned
+        payment.estimated_rewards_earned = reward_components["rewards_earned"]
+        payment.calculated_rewards = reward_components["rewards_earned"]
+        payment.reward_type = reward_type
+        payment.points_earned = reward_components["points_earned"]
+        payment.cashback_amount = reward_components["cashback_amount"]
+        payment.statement_credit_amount = reward_components["statement_credit_amount"]
+        payment.purchase_discount_amount = reward_components["purchase_discount_amount"]
+        payment.effective_savings_amount = reward_components["effective_savings_amount"]
+        payment.priority = resolution["priority"]
         payment.calculation_source = calculation_source
         payment.credit_card_product_snapshot = card.nickname
         payment.rewards_type = card.rewards_type
@@ -410,10 +623,17 @@ def replace_with_manual_reward_override(
         player_id=purchase.player_id or card.player_id,
         reward_program_id=resolved_reward_program_id,
         spending_category_id=spending_category_id or get_purchase_spending_category_id(db, purchase),
+        matched_rule_id=None,
         purchase_date=purchase_date_only(purchase),
         qualifying_spend=qualifying_spend,
         multiplier=multiplier,
         rewards_earned=rewards_earned,
+        reward_type="points",
+        points_earned=rewards_earned,
+        cashback_amount=Decimal("0"),
+        statement_credit_amount=Decimal("0"),
+        purchase_discount_amount=Decimal("0"),
+        effective_savings_amount=Decimal("0"),
         calculation_source="manual_override",
         credit_card_product_snapshot=card.nickname,
         notes=notes,
@@ -472,6 +692,14 @@ def serialize_reward_transaction(db: Session, transaction: CreditCardRewardTrans
         "qualifying_spend": transaction.qualifying_spend,
         "multiplier": transaction.multiplier,
         "rewards_earned": transaction.rewards_earned,
+        "reward_type": transaction.reward_type,
+        "points_earned": transaction.points_earned,
+        "cashback_amount": transaction.cashback_amount,
+        "statement_credit_amount": transaction.statement_credit_amount,
+        "purchase_discount_amount": transaction.purchase_discount_amount,
+        "effective_savings_amount": transaction.effective_savings_amount,
+        "matched_rule_id": transaction.matched_rule_id,
+        "priority": transaction.priority,
         "calculation_source": transaction.calculation_source,
         "credit_card_product_snapshot": transaction.credit_card_product_snapshot,
         "notes": transaction.notes,

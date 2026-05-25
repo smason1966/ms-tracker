@@ -10,10 +10,12 @@ from app.models.credit_card import CreditCard
 from app.models.purchase_batch import PurchaseBatch
 from app.models.purchase_payment import PurchasePayment
 from app.services.credit_card_rewards import (
+    calculate_reward_components,
     get_purchase_spending_category_id,
     resolve_reward_for_purchase_payment,
     sync_automatic_reward_transactions,
 )
+from app.services.purchase_allocation import recalculate_purchase_allocation
 
 
 router = APIRouter(tags=["purchase-payments"])
@@ -74,9 +76,25 @@ def calculate_reward_estimate(
     db: Session,
     purchase: PurchaseBatch,
     payload: PurchasePaymentCreate,
-) -> tuple[int | None, Decimal | None, Decimal | None, str | None, int | None, str | None, str | None]:
+) -> dict:
     if payload.payment_type.strip().upper() != "CREDIT_CARD" or not payload.credit_card_id:
-        return payload.spending_category_id, None, None, payload.rewards_type, None, None, None
+        return {
+            "spending_category_id": payload.spending_category_id,
+            "reward_multiplier": None,
+            "estimated_rewards_earned": None,
+            "rewards_type": payload.rewards_type,
+            "reward_program_id": None,
+            "calculation_source": None,
+            "product_snapshot": None,
+            "matched_rule_id": None,
+            "reward_type": None,
+            "points_earned": None,
+            "cashback_amount": None,
+            "statement_credit_amount": None,
+            "purchase_discount_amount": None,
+            "effective_savings_amount": None,
+            "priority": None,
+        }
 
     card = db.query(CreditCard).filter(CreditCard.id == payload.credit_card_id).first()
 
@@ -96,22 +114,37 @@ def calculate_reward_estimate(
     multiplier = Decimal(resolution["final_multiplier"])
     reward_program_id = resolution["reward_program_id"]
     calculation_source = resolution["calculation_source"]
+    components = calculate_reward_components(
+        purchase=purchase,
+        amount=Decimal(payload.amount),
+        reward_type=resolution["reward_type"],
+        multiplier=multiplier,
+        value=Decimal(resolution["rule_value"]),
+    )
 
     estimated_rewards = (
         payload.estimated_rewards_earned
         if payload.estimated_rewards_earned is not None
-        else Decimal(payload.amount) * multiplier
+        else components["rewards_earned"]
     )
 
-    return (
-        spending_category_id,
-        multiplier,
-        estimated_rewards,
-        payload.rewards_type or card.rewards_type,
-        reward_program_id,
-        calculation_source,
-        card.nickname,
-    )
+    return {
+        "spending_category_id": spending_category_id,
+        "reward_multiplier": multiplier,
+        "estimated_rewards_earned": estimated_rewards,
+        "rewards_type": payload.rewards_type or card.rewards_type,
+        "reward_program_id": reward_program_id,
+        "calculation_source": calculation_source,
+        "product_snapshot": card.nickname,
+        "matched_rule_id": resolution["matched_rule_id"],
+        "reward_type": resolution["reward_type"],
+        "points_earned": components["points_earned"],
+        "cashback_amount": components["cashback_amount"],
+        "statement_credit_amount": components["statement_credit_amount"],
+        "purchase_discount_amount": components["purchase_discount_amount"],
+        "effective_savings_amount": components["effective_savings_amount"],
+        "priority": resolution["priority"],
+    }
 
 
 def create_purchase_payment(
@@ -139,30 +172,30 @@ def create_purchase_payment(
     if not purchase:
         raise HTTPException(status_code=404, detail="Purchase batch not found")
 
-    (
-        spending_category_id,
-        reward_multiplier,
-        estimated_rewards_earned,
-        rewards_type,
-        reward_program_id,
-        calculation_source,
-        product_snapshot,
-    ) = calculate_reward_estimate(db, purchase, payload)
+    reward_estimate = calculate_reward_estimate(db, purchase, payload)
 
     payment = PurchasePayment(
         purchase_batch_id=purchase_batch_id,
         payment_type=payment_type,
         credit_card_id=payload.credit_card_id,
-        spending_category_id=spending_category_id,
-        reward_program_id=reward_program_id,
+        spending_category_id=reward_estimate["spending_category_id"],
+        reward_program_id=reward_estimate["reward_program_id"],
+        matched_rule_id=reward_estimate["matched_rule_id"],
         amount=payload.amount,
-        reward_multiplier=reward_multiplier,
-        estimated_rewards_earned=estimated_rewards_earned,
-        applied_multiplier=reward_multiplier,
-        calculated_rewards=estimated_rewards_earned,
-        calculation_source=calculation_source,
-        credit_card_product_snapshot=product_snapshot,
-        rewards_type=rewards_type,
+        reward_multiplier=reward_estimate["reward_multiplier"],
+        estimated_rewards_earned=reward_estimate["estimated_rewards_earned"],
+        applied_multiplier=reward_estimate["reward_multiplier"],
+        calculated_rewards=reward_estimate["estimated_rewards_earned"],
+        reward_type=reward_estimate["reward_type"],
+        points_earned=reward_estimate["points_earned"],
+        cashback_amount=reward_estimate["cashback_amount"],
+        statement_credit_amount=reward_estimate["statement_credit_amount"],
+        purchase_discount_amount=reward_estimate["purchase_discount_amount"],
+        effective_savings_amount=reward_estimate["effective_savings_amount"],
+        priority=reward_estimate["priority"],
+        calculation_source=reward_estimate["calculation_source"],
+        credit_card_product_snapshot=reward_estimate["product_snapshot"],
+        rewards_type=reward_estimate["rewards_type"],
         notes=payload.notes,
     )
 
@@ -298,12 +331,17 @@ def replace_purchase_payments(
             for payment in new_payments
             if payment.payment_type == "CREDIT_CARD"
         ]
+        purchase.purchase_total_paid = sum(
+            (Decimal(payment.amount) for payment in new_payments),
+            Decimal("0"),
+        )
         purchase.credit_card_id = (
             credit_card_payments[0].credit_card_id
             if len(credit_card_payments) == 1
             else None
         )
         purchase.updated_at = datetime.utcnow()
+        recalculate_purchase_allocation(db, purchase_batch_id)
 
         db.commit()
 

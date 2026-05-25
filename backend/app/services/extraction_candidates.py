@@ -568,9 +568,9 @@ def score_pin_candidate(
     if "nike" in (brand or "").lower() and len(value) == 6:
         score += 0.12
         reasons.append("Nike 6-digit PIN shape")
-    elif "nike" in (brand or "").lower() and len(value) == 5:
-        score += 0.08
-        reasons.append("possible Nike PIN with missing or confused digit")
+    elif "nike" in (brand or "").lower() and len(value) != 6:
+        score = 0.05
+        reasons.append("rejected Nike PIN candidate because Nike PINs must be 6 digits")
 
     if "best buy" in (brand or "").lower() and len(value) == 4 and "pin" in line_context:
         score += 0.16
@@ -662,14 +662,11 @@ def extract_ocr_pin_candidates(
                 ),
             )
 
-    if "nike" in (brand or "").lower() and expected_pin_length == 6:
-        pin_pattern = r"\b\d{5,6}\b"
-    else:
-        pin_pattern = (
-            r"\b\d{%d}\b" % expected_pin_length
-            if expected_pin_length
-            else r"\b\d{3,8}\b"
-        )
+    pin_pattern = (
+        r"\b\d{%d}\b" % expected_pin_length
+        if expected_pin_length
+        else r"\b\d{3,8}\b"
+    )
 
     for match in re.finditer(pin_pattern, searchable_text):
         value = digits_only(match.group(0))

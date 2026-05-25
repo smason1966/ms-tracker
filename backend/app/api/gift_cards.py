@@ -31,17 +31,25 @@ logger = logging.getLogger(__name__)
 class GiftCardCreate(BaseModel):
     purchase_batch_id: int
     brand: str
+    card_source: str | None = None
     face_value: Decimal
     acquisition_cost: Decimal | None = None
+    confirmed_card_number: str | None = None
+    confirmed_pin: str | None = None
+    confirmed_redemption_code: str | None = None
+    confirmed_source: str | None = None
     notes: str | None = None
+    digital_source_notes: str | None = None
     idempotency_key: str | None = None
 
 
 class GiftCardUpdate(BaseModel):
     brand: str | None = None
+    card_source: str | None = None
     face_value: Decimal | None = None
     acquisition_cost: Decimal | None = None
     notes: str | None = None
+    digital_source_notes: str | None = None
 
 
 def get_payload_fields(payload: BaseModel) -> set[str]:
@@ -52,6 +60,13 @@ def get_payload_fields(payload: BaseModel) -> set[str]:
             getattr(payload, "__fields_set__", set()),
         )
     )
+
+
+def normalize_card_source(value: str | None) -> str:
+    normalized = (value or "physical").strip().lower().replace("_", " ")
+    if normalized in {"digital", "digital card", "email", "pdf"}:
+        return "digital"
+    return "physical"
 
 
 @router.post("/")
@@ -73,13 +88,42 @@ def create_gift_card(payload: GiftCardCreate):
             if existing_card:
                 return serialize_gift_card(existing_card, db)
 
+        card_source = normalize_card_source(payload.card_source)
+        confirmed_card_number = clean_credential_value(payload.confirmed_card_number)
+        confirmed_pin = clean_credential_value(payload.confirmed_pin)
+        confirmed_redemption_code = clean_credential_value(payload.confirmed_redemption_code)
+        confirmed_source = clean_credential_value(payload.confirmed_source) or (
+            "manual_digital" if card_source == "digital" else None
+        )
+        has_manual_credential = bool(confirmed_card_number or confirmed_redemption_code)
         card = GiftCard(
             purchase_batch_id=payload.purchase_batch_id,
             brand=payload.brand,
+            card_source=card_source,
             face_value=payload.face_value,
             acquisition_cost=payload.acquisition_cost,
+            status="VERIFIED_AVAILABLE"
+            if card_source == "digital" and has_manual_credential
+            else "NEEDS_VERIFICATION",
+            card_number_encrypted=confirmed_redemption_code or confirmed_card_number,
+            pin_encrypted=confirmed_pin,
+            confirmed_card_number=confirmed_card_number,
+            confirmed_pin=confirmed_pin,
+            confirmed_redemption_code=confirmed_redemption_code,
+            confirmed_at=datetime.utcnow()
+            if card_source == "digital" and has_manual_credential
+            else None,
+            confirmed_source=confirmed_source if has_manual_credential else None,
+            verified_at=datetime.utcnow()
+            if card_source == "digital" and has_manual_credential
+            else None,
+            verification_source=confirmed_source if has_manual_credential else None,
+            verification_status="VERIFIED"
+            if card_source == "digital" and has_manual_credential
+            else "PENDING",
             notes=payload.notes,
-            ocr_status="pending",
+            digital_source_notes=payload.digital_source_notes,
+            ocr_status="not_required" if card_source == "digital" else "pending",
             intake_idempotency_key=idempotency_key,
         )
 
@@ -204,6 +248,10 @@ def get_gift_card(gift_card_id: int):
 class GiftCardVerify(BaseModel):
     card_number: str | None = None
     confirmed_card_number: str | None = None
+    confirmed_pin: str | None = None
+    confirmed_redemption_code: str | None = None
+    confirmed_source: str | None = None
+    update_confirmed_credentials: bool = False
     pin: str | None = None
     face_value: Decimal | None = None
     notes: str | None = None
@@ -333,6 +381,96 @@ def get_sale_history(db: Session | None, card: GiftCard) -> list[dict]:
     ]
 
 
+def clean_credential_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def locked_card_number(card: GiftCard) -> str | None:
+    return clean_credential_value(card.confirmed_card_number) or clean_credential_value(
+        card.card_number_encrypted
+    )
+
+
+def locked_pin(card: GiftCard) -> str | None:
+    return clean_credential_value(card.confirmed_pin) or clean_credential_value(
+        card.pin_encrypted
+    )
+
+
+def locked_redemption_code(card: GiftCard) -> str | None:
+    return clean_credential_value(card.confirmed_redemption_code)
+
+
+def locked_primary_credential(card: GiftCard) -> str | None:
+    return locked_redemption_code(card) or locked_card_number(card)
+
+
+def credential_source(payload: GiftCardVerify) -> str:
+    source = clean_credential_value(payload.confirmed_source or payload.verification_source)
+    normalized_source = (source or "manual").strip().lower()
+
+    if "suggested_pair" in normalized_source:
+        return "suggested_pair"
+    if "barcode" in normalized_source:
+        return "barcode"
+    if "ocr" in normalized_source or "template" in normalized_source:
+        return "OCR"
+    if "manual" in normalized_source:
+        return "manual"
+
+    return "manual"
+
+
+def card_linked_sales(db: Session, card_id: int) -> list[Sale]:
+    return (
+        db.query(Sale)
+        .join(SaleGiftCard, SaleGiftCard.sale_id == Sale.id)
+        .filter(SaleGiftCard.gift_card_id == card_id)
+        .filter(Sale.status != "VOIDED")
+        .all()
+    )
+
+
+def record_credential_update_audit(
+    db: Session,
+    card: GiftCard,
+    old_card_number: str | None,
+    old_pin: str | None,
+    old_redemption_code: str | None,
+    source: str,
+) -> None:
+    for sale in card_linked_sales(db, card.id):
+        changes: list[str] = []
+        if old_card_number != locked_card_number(card):
+            changes.append("card number")
+        if old_pin != locked_pin(card):
+            changes.append("PIN")
+        if old_redemption_code != locked_redemption_code(card):
+            changes.append("redemption code")
+
+        if not changes:
+            continue
+
+        db.add(
+            SaleEvent(
+                sale_id=sale.id,
+                action="confirmed_credentials_updated",
+                affected_asset_count=1,
+                user_label="verification",
+                field_name="gift_card.confirmed_credentials",
+                reason="Credential update after sale/export may affect prior exports.",
+                notes=(
+                    f"Gift card #{card.id} locked credentials updated "
+                    f"({', '.join(changes)}). Source: {source}."
+                ),
+            )
+        )
+
+
 def serialize_gift_card(card: GiftCard, db: Session | None = None) -> dict:
     acquisition_cost = to_decimal(card.acquisition_cost)
     expected_payout = to_decimal(card.expected_payout)
@@ -366,15 +504,31 @@ def serialize_gift_card(card: GiftCard, db: Session | None = None) -> dict:
         "id": card.id,
         "purchase_batch_id": card.purchase_batch_id,
         "brand": card.brand,
+        "card_source": card.card_source,
         "face_value": card.face_value,
         "acquisition_cost": card.acquisition_cost,
         "status": card.status,
         "ocr_status": card.ocr_status,
         "extraction_candidate_count": extraction_candidate_count,
         "rejected_extraction_candidate_count": rejected_extraction_candidate_count,
-        "card_number_encrypted": card.card_number_encrypted,
-        "pin_encrypted": card.pin_encrypted,
+        "card_number_encrypted": locked_primary_credential(card),
+        "pin_encrypted": locked_pin(card),
+        "confirmed_card_number": clean_credential_value(card.confirmed_card_number)
+        or (
+            clean_credential_value(card.card_number_encrypted)
+            if not locked_redemption_code(card)
+            else None
+        ),
+        "confirmed_pin": clean_credential_value(card.confirmed_pin)
+        or clean_credential_value(card.pin_encrypted),
+        "confirmed_redemption_code": locked_redemption_code(card),
+        "confirmed_at": card.confirmed_at,
+        "confirmed_source": card.confirmed_source,
+        "export_value_source": "confirmed_credentials"
+        if locked_primary_credential(card)
+        else "unconfirmed",
         "notes": card.notes,
+        "digital_source_notes": card.digital_source_notes,
         "sold_to": card.sold_to,
         "sold_date": card.sold_date,
         "sale_price": card.sale_price,
@@ -643,6 +797,8 @@ def find_duplicate_card_number(
         .filter(GiftCard.brand == card.brand)
         .filter(
             or_(
+                func.trim(GiftCard.confirmed_card_number) == card_number,
+                func.trim(GiftCard.confirmed_redemption_code) == card_number,
                 func.trim(GiftCard.card_number_encrypted) == card_number,
                 func.trim(GiftCard.detected_card_number) == card_number,
             )
@@ -654,7 +810,9 @@ def find_duplicate_card_number(
 
 def duplicate_card_number_payload(duplicate_card: GiftCard) -> dict:
     duplicate_number = (
-        normalize_card_number(duplicate_card.card_number_encrypted)
+        normalize_card_number(duplicate_card.confirmed_redemption_code)
+        or normalize_card_number(duplicate_card.confirmed_card_number)
+        or normalize_card_number(duplicate_card.card_number_encrypted)
         or normalize_card_number(duplicate_card.detected_card_number)
         or ""
     )
@@ -1272,36 +1430,56 @@ def verify_gift_card(gift_card_id: int, payload: GiftCardVerify):
         if not card:
             raise HTTPException(status_code=404, detail="Gift card not found")
 
-        if card.status in {"SOLD", "SOLD_PENDING_PAYMENT", "SETTLED"}:
+        sale_locked = card.status in {"SOLD", "SOLD_PENDING_PAYMENT", "SETTLED"}
+        if sale_locked and not payload.update_confirmed_credentials:
             raise HTTPException(
                 status_code=400,
-                detail="Sold cards cannot be verified",
+                detail=(
+                    "Sold cards require explicit Update confirmed credentials "
+                    "before locked values can be changed."
+                ),
             )
 
+        old_card_number = locked_card_number(card)
+        old_pin = locked_pin(card)
+        old_redemption_code = locked_redemption_code(card)
+        source = credential_source(payload)
+        payload_fields = get_payload_fields(payload)
         confirmed_card_number = payload.confirmed_card_number
+        confirmed_redemption_code = clean_credential_value(
+            payload.confirmed_redemption_code
+        )
 
-        if confirmed_card_number is None:
+        if confirmed_card_number is None and confirmed_redemption_code is None:
             confirmed_card_number = payload.card_number
 
-        if confirmed_card_number is not None:
-            confirmed_card_number = confirmed_card_number.strip()
+        confirmed_card_number = clean_credential_value(confirmed_card_number)
+        confirmed_pin = clean_credential_value(payload.confirmed_pin)
+        if confirmed_pin is None:
+            confirmed_pin = clean_credential_value(payload.pin)
+
+        duplicate_check_value = confirmed_card_number or confirmed_redemption_code
+        if duplicate_check_value is not None:
             duplicate_card = find_duplicate_card_number(
                 db,
                 card,
-                confirmed_card_number,
+                duplicate_check_value,
             )
             if duplicate_card:
                 return JSONResponse(
                     status_code=409,
                     content=duplicate_card_number_payload(duplicate_card),
                 )
+        if confirmed_card_number is not None:
             card.card_number_encrypted = confirmed_card_number
+            card.confirmed_card_number = confirmed_card_number
+        elif "confirmed_card_number" in payload_fields:
+            card.confirmed_card_number = None
 
         has_confirmed_card_number = bool(
             confirmed_card_number
-            and confirmed_card_number.strip()
-            or card.card_number_encrypted
-            and card.card_number_encrypted.strip()
+            or confirmed_redemption_code
+            or locked_primary_credential(card)
         )
 
         if not has_confirmed_card_number:
@@ -1310,13 +1488,23 @@ def verify_gift_card(gift_card_id: int, payload: GiftCardVerify):
                 detail="Confirmed card number is required before verification",
             )
 
-        if payload.pin is not None:
-            card.pin_encrypted = payload.pin
+        if (
+            confirmed_pin is not None
+            or "pin" in payload_fields
+            or "confirmed_pin" in payload_fields
+        ):
+            card.pin_encrypted = confirmed_pin
+            card.confirmed_pin = confirmed_pin
 
-        if payload.verified_balance is not None:
+        if confirmed_redemption_code is not None or "confirmed_redemption_code" in payload_fields:
+            card.confirmed_redemption_code = confirmed_redemption_code
+            if confirmed_redemption_code is not None:
+                card.card_number_encrypted = confirmed_redemption_code
+
+        if payload.verified_balance is not None and not sale_locked:
             card.verified_balance = payload.verified_balance
 
-        if payload.face_value is not None:
+        if payload.face_value is not None and not sale_locked:
             card.face_value = payload.face_value
             recalculate_purchase_allocation(db, card.purchase_batch_id)
 
@@ -1326,19 +1514,30 @@ def verify_gift_card(gift_card_id: int, payload: GiftCardVerify):
         if payload.verification_notes is not None:
             card.verification_notes = payload.verification_notes
 
-        if payload.verification_source is not None:
-            card.verification_source = payload.verification_source
+        card.verification_source = source
+        card.confirmed_source = source
 
         card.verification_status = "VERIFIED"
-        card.verified_at = datetime.utcnow()
-        card.status = "VERIFIED_AVAILABLE"
+        card.verified_at = card.verified_at or datetime.utcnow()
+        card.confirmed_at = datetime.utcnow()
+        if not sale_locked:
+            card.status = "VERIFIED_AVAILABLE"
 
         card.updated_at = datetime.utcnow()
+        if sale_locked:
+            record_credential_update_audit(
+                db,
+                card,
+                old_card_number,
+                old_pin,
+                old_redemption_code,
+                source,
+            )
 
         db.commit()
         db.refresh(card)
 
-        return card
+        return serialize_gift_card(card, db)
 
     finally:
         db.close()

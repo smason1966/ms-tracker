@@ -1,3 +1,5 @@
+import threading
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -26,11 +28,23 @@ from app.api.players import router as players_router
 from app.api.reward_program_categories import router as reward_program_categories_router
 from app.api.reward_programs import router as reward_programs_router
 from app.api.data_transfer import router as data_transfer_router
+from app.api.retention import router as retention_router
 from app.db.session import SessionLocal
+from app.services.attachment_schema import ensure_attachment_schema
 from app.services.card_brand_defaults import ensure_card_brand_defaults
+from app.services.card_image_schema import ensure_card_image_schema
+from app.services.gift_card_credential_schema import ensure_gift_card_credential_schema
+from app.services.ocr_debug import cleanup_ocr_debug_files
+from app.services.retention_schema import ensure_retention_schema
 from app.services.reward_program_categories import load_reward_program_categories
 from app.services.reward_program_defaults import ensure_default_reward_program_values
+from app.services.upload_storage import (
+    UPLOAD_ROOT,
+    ensure_upload_directories,
+    warn_if_uploads_empty_but_db_references,
+)
 
+ensure_upload_directories()
 app = FastAPI(title="MS Tracker API")
 
 app.add_middleware(
@@ -68,8 +82,9 @@ app.include_router(players_router)
 app.include_router(reward_program_categories_router)
 app.include_router(reward_programs_router)
 app.include_router(data_transfer_router)
+app.include_router(retention_router)
 
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/uploads", StaticFiles(directory=UPLOAD_ROOT), name="uploads")
 
 
 @app.get("/health")
@@ -79,12 +94,24 @@ def health_check():
 
 @app.on_event("startup")
 def ensure_reward_program_defaults():
+    ensure_upload_directories()
+    threading.Thread(
+        target=cleanup_ocr_debug_files,
+        name="ocr-debug-cleanup",
+        daemon=True,
+    ).start()
+
     db = SessionLocal()
 
     try:
         ensure_card_brand_defaults(db)
+        ensure_card_image_schema(db)
+        ensure_attachment_schema(db)
+        ensure_gift_card_credential_schema(db)
+        ensure_retention_schema(db)
         load_reward_program_categories(db)
         ensure_default_reward_program_values(db)
+        warn_if_uploads_empty_but_db_references(db)
         db.commit()
     finally:
         db.close()

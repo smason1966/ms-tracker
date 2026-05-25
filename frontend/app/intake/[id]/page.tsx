@@ -24,26 +24,40 @@ type CardBrand = {
 type GiftCard = {
   id: number;
   brand: string;
+  card_source?: string | null;
   face_value: string | number;
   acquisition_cost: string | number | null;
   status: string;
+  ocr_status?: string | null;
   notes: string | null;
 };
 
 type GiftCardForm = {
+  card_source: "physical" | "digital";
   brand: string;
   face_value: string;
+  card_number: string;
+  pin: string;
+  redemption_code: string;
   notes: string;
+  digital_source_notes: string;
 };
 
 const initialForm: GiftCardForm = {
+  card_source: "physical",
   brand: "",
   face_value: "",
+  card_number: "",
+  pin: "",
+  redemption_code: "",
   notes: "",
+  digital_source_notes: "",
 };
 
 const cardImageAccept =
   "image/jpeg,image/png,image/webp,image/heic,.jpg,.jpeg,.png,.webp,.heic";
+const digitalAttachmentAccept =
+  "application/pdf,image/jpeg,image/png,image/webp,image/heic,.pdf,.jpg,.jpeg,.png,.webp,.heic";
 
 function shouldUseEnvironmentCapture() {
   if (typeof window === "undefined") {
@@ -77,6 +91,9 @@ export default function RapidCardIntakePage() {
   const [giftCardsError, setGiftCardsError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [cardUploadStatuses, setCardUploadStatuses] = useState<
+    Record<number, string>
+  >({});
   const useCameraCapture = shouldUseEnvironmentCapture();
 
   async function loadGiftCards(options: { showLoading?: boolean } = {}) {
@@ -209,14 +226,21 @@ export default function RapidCardIntakePage() {
     setCardImageFile(event.target.files?.[0] ?? null);
   }
 
-  async function uploadCardImage(giftCardId: number) {
-    if (!cardImageFile) {
-      return;
-    }
-
+  async function uploadCardImage(
+    giftCardId: number,
+    imageFile: File,
+    options: {
+      imageType?: string;
+      attachmentType?: string;
+      runOcr?: boolean;
+    } = {},
+  ) {
     const imageFormData = new FormData();
     imageFormData.append("gift_card_id", String(giftCardId));
-    imageFormData.append("file", cardImageFile);
+    imageFormData.append("file", imageFile);
+    imageFormData.append("image_type", options.imageType ?? "primary");
+    imageFormData.append("attachment_type", options.attachmentType ?? "card_image");
+    imageFormData.append("run_ocr", String(options.runOcr ?? true));
 
     const response = await fetch(`${API_BASE_URL}/card-images/upload`, {
       method: "POST",
@@ -224,10 +248,13 @@ export default function RapidCardIntakePage() {
     });
 
     if (!response.ok) {
+      const responseBody = await response.text();
       throw new Error(
-        `Gift card created, but image upload failed (${response.status})`,
+        `Image upload failed (${response.status}): ${responseBody}`,
       );
     }
+
+    return (await response.json()) as { message?: string; ocr_status?: string };
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -237,6 +264,18 @@ export default function RapidCardIntakePage() {
     setIsSubmitting(true);
 
     try {
+      const selectedImageFile = cardImageFile;
+      const idempotencyKey =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random()}`;
+      console.info("Saving intake gift card", {
+        purchaseId,
+        brand: form.brand.trim(),
+        cardSource: form.card_source,
+        hasImage: Boolean(selectedImageFile),
+        idempotencyKey,
+      });
       const response = await fetch(`${API_BASE_URL}/gift-cards/`, {
         method: "POST",
         headers: {
@@ -245,27 +284,102 @@ export default function RapidCardIntakePage() {
         body: JSON.stringify({
           purchase_batch_id: Number(purchaseId),
           brand: form.brand.trim(),
+          card_source: form.card_source,
           face_value: form.face_value,
           acquisition_cost: form.face_value,
+          confirmed_card_number:
+            form.card_source === "digital" && form.redemption_code.trim() === ""
+              ? form.card_number.trim() || null
+              : null,
+          confirmed_pin:
+            form.card_source === "digital" ? form.pin.trim() || null : null,
+          confirmed_redemption_code:
+            form.card_source === "digital"
+              ? form.redemption_code.trim() || null
+              : null,
+          confirmed_source:
+            form.card_source === "digital" &&
+            (form.card_number.trim() || form.redemption_code.trim())
+              ? "manual_digital"
+              : null,
           notes: form.notes.trim() || null,
+          digital_source_notes:
+            form.card_source === "digital"
+              ? form.digital_source_notes.trim() || null
+              : null,
+          idempotency_key: idempotencyKey,
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to create gift card (${response.status})`);
+        const responseBody = await response.text();
+        throw new Error(
+          `Failed to create gift card (${response.status}): ${responseBody}`,
+        );
       }
 
       const giftCard = (await response.json()) as GiftCard;
-      await uploadCardImage(giftCard.id);
 
       setForm((currentForm) => ({
         ...currentForm,
+        card_number: "",
+        pin: "",
+        redemption_code: "",
         notes: "",
+        digital_source_notes: "",
       }));
       setCardImageFile(null);
       setFileInputKey((currentKey) => currentKey + 1);
-      setSuccessMessage("Gift card saved.");
+      setSuccessMessage(
+        selectedImageFile
+          ? form.card_source === "digital"
+            ? `Digital gift card #${giftCard.id} saved. Attachment upload started; OCR was not queued.`
+            : `Gift card #${giftCard.id} saved. Image upload started — OCR will run in the background.`
+          : `Gift card #${giftCard.id} saved.`,
+      );
       await loadGiftCards({ showLoading: false });
+
+      if (selectedImageFile) {
+        setCardUploadStatuses((currentStatuses) => ({
+          ...currentStatuses,
+          [giftCard.id]: "Uploading image...",
+        }));
+        const isDigital = form.card_source === "digital";
+        void uploadCardImage(giftCard.id, selectedImageFile, {
+          imageType: isDigital ? "digital_attachment" : "primary",
+          attachmentType: isDigital
+            ? selectedImageFile.name.toLowerCase().endsWith(".pdf")
+              ? "digital_pdf"
+              : "digital_image"
+            : "card_image",
+          runOcr: !isDigital,
+        })
+          .then((result) => {
+            setCardUploadStatuses((currentStatuses) => ({
+              ...currentStatuses,
+              [giftCard.id]:
+                result?.message ??
+                (isDigital
+                  ? "Attachment saved. OCR was not queued."
+                  : "Image saved — OCR queued."),
+            }));
+            void loadGiftCards({ showLoading: false });
+          })
+          .catch((error) => {
+            console.error("Intake card image upload failed", {
+              purchaseId,
+              giftCardId: giftCard.id,
+              error,
+            });
+            setCardUploadStatuses((currentStatuses) => ({
+              ...currentStatuses,
+              [giftCard.id]:
+                error instanceof Error
+                  ? error.message
+                  : "Image upload failed.",
+            }));
+          });
+      }
     } catch (err) {
       setSubmitError(
         err instanceof Error ? err.message : "Failed to save gift card.",
@@ -327,63 +441,43 @@ export default function RapidCardIntakePage() {
             </Link>
           </div>
 
-          <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            {isLoadingPurchase ? (
-              <p className="text-sm text-slate-500">Loading purchase...</p>
-            ) : purchaseError ? (
-              <p className="text-sm font-medium text-red-700">
-                {purchaseError}
-              </p>
-            ) : purchase ? (
-              <div className="space-y-1 text-sm">
-                <p className="font-semibold">{purchase.store_name}</p>
-                <p className="text-slate-600">
-                  Purchase #{purchase.id} · Face value{" "}
-                  {formatAmount(purchase.total_amount)}
-                </p>
-              </div>
-            ) : (
-              <p className="text-sm text-slate-500">Purchase not found.</p>
-            )}
-          </div>
-
-          <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <h2 className="text-base font-semibold">Session Summary</h2>
-            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
-              <div className="rounded-md bg-slate-50 p-3">
-                <p className="text-xs font-medium text-slate-500">Cards Added</p>
-                <p className="mt-1 text-xl font-semibold">{giftCards.length}</p>
-              </div>
-              <div className="rounded-md bg-slate-50 p-3">
-                <p className="text-xs font-medium text-slate-500">
-                  Face Value Added
-                </p>
-                <p className="mt-1 text-xl font-semibold">
-                  {formatAmount(totalFaceValueAdded)}
-                </p>
-              </div>
-              <div className="rounded-md bg-slate-50 p-3">
-                <p className="text-xs font-medium text-slate-500">Total Paid</p>
-                <p className="mt-1 text-xl font-semibold">
-                  {purchase?.purchase_total_paid
-                    ? formatAmount(purchase.purchase_total_paid)
-                    : ""}
-                </p>
-              </div>
-              <div className="rounded-md bg-slate-50 p-3">
-                <p className="text-xs font-medium text-slate-500">Card Cost</p>
-                <p className="mt-1 text-xl font-semibold">
-                  {totalAcquisitionCost > 0
-                    ? formatAmount(totalAcquisitionCost)
-                    : ""}
-                </p>
-              </div>
-            </div>
-          </section>
         </header>
 
         <form className="flex flex-1 flex-col" onSubmit={handleSubmit}>
           <section className="space-y-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <fieldset className="space-y-2 text-sm font-medium text-slate-700">
+              <legend>Card Source</legend>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  ["physical", "Physical card"],
+                  ["digital", "Digital card"],
+                ].map(([value, label]) => (
+                  <label
+                    className={`flex min-h-11 cursor-pointer items-center justify-center rounded-md border px-3 text-center text-sm font-semibold transition ${
+                      form.card_source === value
+                        ? "border-slate-950 bg-slate-950 text-white"
+                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                    key={value}
+                  >
+                    <input
+                      checked={form.card_source === value}
+                      className="sr-only"
+                      name="card_source"
+                      onChange={() =>
+                        updateFormField(
+                          "card_source",
+                          value as GiftCardForm["card_source"],
+                        )
+                      }
+                      type="radio"
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
             <label className="block space-y-2 text-sm font-medium text-slate-700">
               <span>Card Brand</span>
               <select
@@ -432,22 +526,96 @@ export default function RapidCardIntakePage() {
               />
             </label>
 
+            {form.card_source === "digital" ? (
+              <section className="space-y-4 rounded-md border border-cyan-200 bg-cyan-50 p-4">
+                <div>
+                  <h2 className="text-base font-semibold text-slate-950">
+                    Digital/manual credential entry
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Paste the credentials from the PDF/email. OCR will not run unless
+                    requested later from verification.
+                  </p>
+                </div>
+                <label className="block space-y-2 text-sm font-medium text-slate-700">
+                  <span>Card Number</span>
+                  <input
+                    className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    onChange={(event) =>
+                      updateFormField("card_number", event.target.value)
+                    }
+                    type="text"
+                    value={form.card_number}
+                  />
+                </label>
+                <label className="block space-y-2 text-sm font-medium text-slate-700">
+                  <span>PIN</span>
+                  <input
+                    className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    onChange={(event) =>
+                      updateFormField("pin", event.target.value)
+                    }
+                    type="text"
+                    value={form.pin}
+                  />
+                </label>
+                <label className="block space-y-2 text-sm font-medium text-slate-700">
+                  <span>Redemption Code</span>
+                  <input
+                    className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    onChange={(event) =>
+                      updateFormField("redemption_code", event.target.value)
+                    }
+                    type="text"
+                    value={form.redemption_code}
+                  />
+                </label>
+                <label className="block space-y-2 text-sm font-medium text-slate-700">
+                  <span>Source / Email Notes</span>
+                  <textarea
+                    className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    onChange={(event) =>
+                      updateFormField("digital_source_notes", event.target.value)
+                    }
+                    placeholder="Email sender, order number, PDF source, etc."
+                    value={form.digital_source_notes}
+                  />
+                </label>
+              </section>
+            ) : null}
+
             <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Primary Card Image Optional</span>
+              <span>
+                {form.card_source === "digital"
+                  ? "Digital PDF/Image Attachment Optional"
+                  : "Primary Card Image Optional"}
+              </span>
               <div className="flex min-h-24 cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-center transition hover:bg-slate-100">
                 <span className="text-base font-semibold text-slate-900">
-                  Take Photo / Upload Card Image
+                  {form.card_source === "digital"
+                    ? "Upload PDF / Email Image"
+                    : "Take Photo / Upload Card Image"}
                 </span>
                 <span className="mt-1 text-sm text-slate-500">
-                  Camera opens on supported mobile devices.
+                  {form.card_source === "digital"
+                    ? "Stored as supporting documentation; OCR is not queued."
+                    : "Camera opens on supported mobile devices."}
                 </span>
               </div>
               <input
                 className="sr-only"
                 key={fileInputKey}
                 type="file"
-                accept={cardImageAccept}
-                capture={useCameraCapture ? "environment" : undefined}
+                accept={
+                  form.card_source === "digital"
+                    ? digitalAttachmentAccept
+                    : cardImageAccept
+                }
+                capture={
+                  form.card_source === "physical" && useCameraCapture
+                    ? "environment"
+                    : undefined
+                }
                 onChange={handleCardImageChange}
               />
               {cardImageFile ? (
@@ -468,6 +636,60 @@ export default function RapidCardIntakePage() {
                 placeholder="Optional"
               />
             </label>
+          </section>
+
+          <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            {isLoadingPurchase ? (
+              <p className="text-sm text-slate-500">Loading purchase...</p>
+            ) : purchaseError ? (
+              <p className="text-sm font-medium text-red-700">
+                {purchaseError}
+              </p>
+            ) : purchase ? (
+              <div className="space-y-1 text-sm">
+                <p className="font-semibold">{purchase.store_name}</p>
+                <p className="text-slate-600">
+                  Purchase #{purchase.id} · Face value{" "}
+                  {formatAmount(purchase.total_amount)}
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">Purchase not found.</p>
+            )}
+          </section>
+
+          <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-base font-semibold">Session Summary</h2>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-md bg-slate-50 p-3">
+                <p className="text-xs font-medium text-slate-500">Cards Added</p>
+                <p className="mt-1 text-xl font-semibold">{giftCards.length}</p>
+              </div>
+              <div className="rounded-md bg-slate-50 p-3">
+                <p className="text-xs font-medium text-slate-500">
+                  Face Value Added
+                </p>
+                <p className="mt-1 text-xl font-semibold">
+                  {formatAmount(totalFaceValueAdded)}
+                </p>
+              </div>
+              <div className="rounded-md bg-slate-50 p-3">
+                <p className="text-xs font-medium text-slate-500">Total Paid</p>
+                <p className="mt-1 text-xl font-semibold">
+                  {purchase?.purchase_total_paid
+                    ? formatAmount(purchase.purchase_total_paid)
+                    : ""}
+                </p>
+              </div>
+              <div className="rounded-md bg-slate-50 p-3">
+                <p className="text-xs font-medium text-slate-500">Card Cost</p>
+                <p className="mt-1 text-xl font-semibold">
+                  {totalAcquisitionCost > 0
+                    ? formatAmount(totalAcquisitionCost)
+                    : ""}
+                </p>
+              </div>
+            </div>
           </section>
 
           {successMessage ? (
@@ -509,9 +731,20 @@ export default function RapidCardIntakePage() {
                   >
                     <div className="min-w-0">
                       <p className="font-medium">{giftCard.brand}</p>
+                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                        {giftCard.card_source === "digital"
+                          ? "Digital"
+                          : "Physical"}
+                      </p>
                       {giftCard.notes ? (
                         <p className="truncate text-sm text-slate-500">
                           {giftCard.notes}
+                        </p>
+                      ) : null}
+                      {cardUploadStatuses[giftCard.id] || giftCard.ocr_status ? (
+                        <p className="mt-1 text-xs font-medium text-slate-500">
+                          {cardUploadStatuses[giftCard.id] ??
+                            `OCR ${giftCard.ocr_status?.replaceAll("_", " ")}`}
                         </p>
                       ) : null}
                     </div>

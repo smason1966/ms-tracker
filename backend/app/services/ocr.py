@@ -1,9 +1,9 @@
 from dataclasses import dataclass
-from pathlib import Path
 import base64
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 import io
 import logging
+from pathlib import Path
 import time
 from uuid import uuid4
 
@@ -13,8 +13,14 @@ import pytesseract
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from pytesseract import Output
 
+from app.services.ocr_debug import (
+    OCR_DEBUG_DIR,
+    OCR_DEBUG_WRITE_WARNING,
+    OCRDebugRun,
+    current_ocr_debug_run,
+)
+
 logger = logging.getLogger(__name__)
-OCR_DEBUG_DIR = Path("uploads/ocr-debug")
 
 
 @dataclass
@@ -141,6 +147,7 @@ def extract_region_ocr_result(
     rotation_degrees: int = 0,
     horizontal_padding_pct: float = 0,
     vertical_padding_pct: float = 0,
+    debug_run: OCRDebugRun | None = None,
 ) -> OCRRegionResult:
     path = Path(image_path)
 
@@ -220,10 +227,12 @@ def extract_region_ocr_result(
         )
         debug_prefix = uuid4().hex
         debug_started_at = time.monotonic()
+        effective_debug_run = debug_run or current_ocr_debug_run()
         debug_image_paths = save_region_debug_images(
             selected_crop=selected_crop,
             padded_crop=cropped,
             prefix=debug_prefix,
+            debug_run=effective_debug_run,
         )
         stage_timings.append(
             {
@@ -235,6 +244,7 @@ def extract_region_ocr_result(
             selected_crop,
             crop_label="selected_baseline",
             debug_prefix=debug_prefix,
+            debug_run=effective_debug_run,
             total_timeout_seconds=3.0,
             baseline_only=True,
         )
@@ -242,6 +252,7 @@ def extract_region_ocr_result(
             cropped,
             crop_label="padded",
             debug_prefix=debug_prefix,
+            debug_run=effective_debug_run,
             total_timeout_seconds=6.5,
         )
         pass_results = [*selected_results, *padded_results]
@@ -379,10 +390,10 @@ def run_region_ocr_passes(
     *,
     crop_label: str,
     debug_prefix: str,
+    debug_run: OCRDebugRun,
     total_timeout_seconds: float,
     baseline_only: bool = False,
 ) -> tuple[list[dict], bool, list[dict]]:
-    OCR_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
     batch_started_at = time.monotonic()
     base_config = "--oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     ocr_modes = [("single_line", "--psm 7"), ("block", "--psm 6"), ("raw_line", "--psm 13")]
@@ -419,6 +430,7 @@ def run_region_ocr_passes(
             mode_config=mode_config,
             base_config=base_config,
             debug_prefix=debug_prefix,
+            debug_run=debug_run,
         )
         for pass_name, variant, mode_name, mode_config in tasks
     ]
@@ -472,11 +484,12 @@ def run_single_ocr_pass(
     mode_config: str,
     base_config: str,
     debug_prefix: str,
+    debug_run: OCRDebugRun,
 ) -> dict:
     started_at = time.monotonic()
     config = f"{mode_config} {base_config}"
     debug_path = OCR_DEBUG_DIR / f"{debug_prefix}-{crop_label}-{pass_name}-{mode_name}.png"
-    variant.save(debug_path)
+    debug_path_value = safe_save_debug_image(variant, debug_path, debug_run=debug_run)
     logger.info(
         "OCR pass started",
         extra={
@@ -488,7 +501,7 @@ def run_single_ocr_pass(
             "image_mode": variant.mode,
             "image_width": variant.width,
             "image_height": variant.height,
-            "debug_path": str(debug_path),
+            "debug_path": debug_path_value,
         },
     )
 
@@ -575,9 +588,28 @@ def run_single_ocr_pass(
         "image_mode": variant.mode,
         "image_width": variant.width,
         "image_height": variant.height,
-        "debug_image_path": str(debug_path),
+        "debug_image_path": debug_path_value,
         "raw_tokens": raw_tokens[:20],
     }
+
+
+def safe_save_debug_image(
+    image: Image.Image,
+    path: Path,
+    *,
+    debug_run: OCRDebugRun,
+) -> str:
+    if not debug_run.reserve_file():
+        return ""
+
+    try:
+        OCR_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+        image.save(path)
+    except OSError:
+        logger.warning(OCR_DEBUG_WRITE_WARNING, exc_info=True)
+        return ""
+
+    return str(path)
 
 
 def save_region_debug_images(
@@ -585,15 +617,17 @@ def save_region_debug_images(
     selected_crop: Image.Image,
     padded_crop: Image.Image,
     prefix: str,
+    debug_run: OCRDebugRun,
 ) -> list[str]:
-    OCR_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
     paths = [
         OCR_DEBUG_DIR / f"{prefix}-selected-crop.png",
         OCR_DEBUG_DIR / f"{prefix}-padded-crop.png",
     ]
-    selected_crop.save(paths[0])
-    padded_crop.save(paths[1])
-    return [str(path) for path in paths]
+    saved_paths = [
+        safe_save_debug_image(selected_crop, paths[0], debug_run=debug_run),
+        safe_save_debug_image(padded_crop, paths[1], debug_run=debug_run),
+    ]
+    return [path for path in saved_paths if path]
 
 
 def suppress_red_orange_background(image: Image.Image) -> Image.Image:

@@ -11,13 +11,15 @@ from app.db.session import SessionLocal
 from app.models.fuel_point_entry import FuelPointEntry
 from app.models.fuel_reward_account import FuelRewardAccount
 from app.models.purchase_batch import PurchaseBatch
+from app.services.attachments import record_attachment
 from app.services.barcode import decode_barcodes
+from app.services.storage import object_key_for, storage
+from app.services.upload_storage import upload_dir
 
 
 router = APIRouter(prefix="/fuel-accounts", tags=["fuel-accounts"])
 
-BARCODE_UPLOAD_DIR = Path("uploads/fuel-account-barcodes")
-BARCODE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+BARCODE_UPLOAD_DIR = upload_dir("fuel-account-barcodes")
 
 
 class FuelRewardAccountCreate(BaseModel):
@@ -103,6 +105,25 @@ def account_to_dict(db: Session, account: FuelRewardAccount):
     }
 
 
+def fuel_account_sort_key(item: dict):
+    expiration = item.get("nearest_expiration_date") or item.get("expiration_cycle")
+    return (
+        expiration or date.max,
+        int(item.get("current_points") or 0),
+        item.get("created_at") or datetime.max,
+        int(item.get("id") or 0),
+    )
+
+
+def is_intake_eligible(account_payload: dict) -> bool:
+    target_points = account_payload.get("target_points")
+    current_points = int(account_payload.get("current_points") or 0)
+    return (
+        account_payload.get("status") == "ACTIVE"
+        and (target_points is None or current_points < int(target_points))
+    )
+
+
 @router.get("/")
 def list_fuel_accounts():
     db: Session = SessionLocal()
@@ -131,6 +152,30 @@ def list_active_fuel_accounts():
             .all()
         )
         return [account_to_dict(db, account) for account in accounts]
+
+    finally:
+        db.close()
+
+
+@router.get("/intake-eligible")
+def list_intake_eligible_fuel_accounts():
+    db: Session = SessionLocal()
+
+    try:
+        accounts = (
+            db.query(FuelRewardAccount)
+            .filter(FuelRewardAccount.status == "ACTIVE")
+            .all()
+        )
+        account_payloads = [account_to_dict(db, account) for account in accounts]
+        return sorted(
+            [
+                account_payload
+                for account_payload in account_payloads
+                if is_intake_eligible(account_payload)
+            ],
+            key=fuel_account_sort_key,
+        )
 
     finally:
         db.close()
@@ -185,12 +230,15 @@ async def upload_fuel_account_barcode_image(
 ):
     extension = Path(file.filename or "").suffix
     filename = f"{uuid4()}{extension}"
-    file_path = BARCODE_UPLOAD_DIR / filename
+    object_key = object_key_for("fuel-account-barcodes", filename)
 
     contents = await file.read()
-
-    with open(file_path, "wb") as f:
-        f.write(contents)
+    stored = storage.save(
+        object_key=object_key,
+        data=contents,
+        original_filename=file.filename,
+        content_type=file.content_type,
+    )
 
     db: Session = SessionLocal()
 
@@ -204,11 +252,18 @@ async def upload_fuel_account_barcode_image(
         if not account:
             raise HTTPException(status_code=404, detail="Fuel account not found")
 
-        account.barcode_image_url = str(file_path)
+        account.barcode_image_url = storage.generate_view_url(stored.object_key)
         account.updated_at = datetime.utcnow()
+        record_attachment(
+            db,
+            owner_type="fuel_reward_account",
+            owner_id=account.id,
+            attachment_type="barcode_image",
+            stored=stored,
+        )
 
         try:
-            barcode_values = decode_barcodes(str(file_path))
+            barcode_values = decode_barcodes(str(storage.materialize_to_local(stored.object_key)))
 
             if barcode_values:
                 account.barcode_value = barcode_values[0]

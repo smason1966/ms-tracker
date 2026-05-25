@@ -1,7 +1,10 @@
 from pathlib import Path
 
 import cv2
-from pyzbar.pyzbar import decode
+try:
+    from pyzbar.pyzbar import decode
+except ImportError:  # pragma: no cover - zbar may be absent in lightweight test envs
+    decode = None
 
 
 def decode_barcodes(image_path: str, rotation_degrees: int = 0) -> list[str]:
@@ -33,6 +36,9 @@ def decode_barcode_details(image_path: str, rotation_degrees: int = 0) -> list[d
         image = cv2.rotate(image, cv2.ROTATE_180)
     elif normalized_rotation == 270:
         image = cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+    if decode is None:
+        return []
 
     barcodes = decode(image)
 

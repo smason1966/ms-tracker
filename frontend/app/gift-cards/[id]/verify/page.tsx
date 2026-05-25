@@ -20,12 +20,20 @@ type GiftCard = {
   id: number;
   purchase_batch_id: number;
   brand: string;
+  card_source?: string | null;
   face_value: string | number;
   status: string;
   ocr_status?: string;
   card_number_encrypted: string | null;
   pin_encrypted: string | null;
+  confirmed_card_number: string | null;
+  confirmed_pin: string | null;
+  confirmed_redemption_code: string | null;
+  confirmed_at: string | null;
+  confirmed_source: string | null;
+  export_value_source: string | null;
   notes: string | null;
+  digital_source_notes?: string | null;
   void_reason: string | null;
   sold_to: string | null;
   sold_date: string | null;
@@ -51,8 +59,30 @@ type CardImage = {
   gift_card_id: number;
   image_type: string;
   original_image_url: string;
+  original_filename?: string | null;
   processed_image_url: string | null;
+  canonical_rotation_degrees: number | null;
+  orientation_source: string | null;
+  canonical_transform_metadata: string | null;
+  attachment_type?: string | null;
+  retention_status?: string | null;
+  retention_until?: string | null;
+  retain_attachment?: boolean;
+  purged_at?: string | null;
   created_at?: string;
+};
+
+type CardImageOcrStatus = {
+  card_image_id: number;
+  gift_card_id: number;
+  ocr_status?: string | null;
+  processed_image_url?: string | null;
+  canonical_rotation_degrees?: number | null;
+  orientation_source?: string | null;
+  canonical_transform_metadata?: string | null;
+  latest_attempt_id?: number | null;
+  latest_attempt_created_at?: string | null;
+  candidate_count?: number;
 };
 
 type Receipt = {
@@ -60,6 +90,9 @@ type Receipt = {
   purchase_batch_id: number;
   image_url: string;
   original_filename: string | null;
+  attachment_type?: string | null;
+  retention_status?: string | null;
+  purged_at?: string | null;
   notes: string | null;
   created_at: string;
 };
@@ -91,6 +124,7 @@ type VerificationForm = {
   pin: string;
   face_value: string;
   notes: string;
+  confirmed_source: string;
 };
 
 type OCRZone = {
@@ -106,6 +140,15 @@ type OCRZone = {
   notes?: string;
 };
 
+type OCRLayout = {
+  layout_name: string;
+  label: string;
+  zones: OCRZone[];
+  active: boolean;
+  active_managed?: boolean;
+  coordinate_space?: string;
+};
+
 type OCRCandidatePayload = {
   candidate_type: string;
   source: string;
@@ -117,6 +160,9 @@ type OCRCandidatePayload = {
 type OCRZoneTestResult = {
   image_source: string;
   rotation_degrees: number;
+  coordinate_mode?: string;
+  card_boundary?: Partial<OCRZone> | null;
+  image_space_zone?: Partial<OCRZone> | null;
   transform_chain: string;
   source_image_dimensions: {
     width: number;
@@ -127,6 +173,10 @@ type OCRZoneTestResult = {
     y_pct: number;
     width_pct: number;
     height_pct: number;
+    image_x_pct?: number;
+    image_y_pct?: number;
+    image_width_pct?: number;
+    image_height_pct?: number;
     x_px: number;
     y_px: number;
     width_px: number;
@@ -137,6 +187,10 @@ type OCRZoneTestResult = {
     y_pct: number;
     width_pct: number;
     height_pct: number;
+    image_x_pct?: number;
+    image_y_pct?: number;
+    image_width_pct?: number;
+    image_height_pct?: number;
     x_px: number;
     y_px: number;
     width_px: number;
@@ -145,6 +199,17 @@ type OCRZoneTestResult = {
   selected_crop_image_data_url: string;
   crop_image_data_url: string;
   debug_image_paths: string[];
+  barcode_attempts: Array<{
+    source: string;
+    zone_name?: string;
+    crop?: string;
+    rotation: number;
+    decoded_value: string;
+    barcode_type: string;
+    normalized_candidate?: string;
+    accepted: boolean;
+    rejected_reason: string;
+  }>;
   timed_out: boolean;
   timing_ms: number;
   stage_timings: Array<Record<string, string | number | boolean>>;
@@ -241,6 +306,8 @@ type VerificationDetails = {
 };
 
 const cardImageAccept = "image/jpeg,image/png,image/webp,image/heic,.jpg,.jpeg,.png,.webp,.heic";
+const digitalAttachmentAccept =
+  "application/pdf,image/jpeg,image/png,image/webp,image/heic,.pdf,.jpg,.jpeg,.png,.webp,.heic";
 
 function buildUploadUrl(path: string | null | undefined) {
   if (!path) {
@@ -252,6 +319,17 @@ function buildUploadUrl(path: string | null | undefined) {
   }
 
   return `${API_BASE_URL}/${path.replace(/^\/+/, "")}`;
+}
+
+function buildUploadUrlWithVersion(
+  path: string | null | undefined,
+  version: string | number | null | undefined,
+) {
+  const url = buildUploadUrl(path);
+  if (!url || !version) {
+    return url;
+  }
+  return `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(String(version))}`;
 }
 
 function formatAmount(value: string | number) {
@@ -315,6 +393,48 @@ function maskSensitiveValue(value: string | null | undefined) {
   const maskedLength = Math.max(4, normalizedValue.length - 8);
 
   return `${prefix}${"*".repeat(maskedLength)}${suffix}`;
+}
+
+function credentialValue(card: GiftCard | null | undefined) {
+  if (!card) {
+    return null;
+  }
+
+  return (
+    card.confirmed_redemption_code ||
+    card.confirmed_card_number ||
+    card.card_number_encrypted
+  );
+}
+
+function credentialPin(card: GiftCard | null | undefined) {
+  return card?.confirmed_pin || card?.pin_encrypted || null;
+}
+
+function cleanCredential(value: string | null | undefined) {
+  const cleaned = value?.trim() ?? "";
+  return cleaned || null;
+}
+
+function credentialsDiffer(
+  confirmedValue: string | null | undefined,
+  suggestedValue: string | null | undefined,
+) {
+  const confirmed = cleanCredential(confirmedValue);
+  const suggested = cleanCredential(suggestedValue);
+
+  return Boolean(confirmed && suggested && confirmed !== suggested);
+}
+
+function sourceLabel(source: string | null | undefined) {
+  if (!source) {
+    return "Not recorded";
+  }
+  if (source === "manual_digital") {
+    return "manual digital";
+  }
+
+  return source.replaceAll("_", " ");
 }
 
 function archiveReasonText(card: GiftCard) {
@@ -564,7 +684,7 @@ function isCandidateValidForBrand(
       );
     }
     if (candidateType === "pin") {
-      return /^\d{5,6}$/.test(normalizedValue);
+      return /^\d{6}$/.test(normalizedValue);
     }
   }
 
@@ -643,27 +763,33 @@ async function loadGiftCardVerificationDetails(
   }
 
   const giftCard = (await giftCardResponse.json()) as GiftCard;
+  const cardImages = (await imagesResponse.json()) as CardImage[];
+  const shouldLoadOcrResults = !isOcrPendingStatus(giftCard.ocr_status);
   const [
     receiptsResponse,
     attemptsResponse,
     candidatesResponse,
   ] = await Promise.all([
     fetch(`${API_BASE_URL}/receipts/purchase/${giftCard.purchase_batch_id}`),
-    fetch(`${API_BASE_URL}/extraction-attempts/gift-card/${giftCardId}`),
-    fetch(`${API_BASE_URL}/extraction-candidates/gift-card/${giftCardId}`),
+    shouldLoadOcrResults
+      ? fetch(`${API_BASE_URL}/extraction-attempts/gift-card/${giftCardId}`)
+      : Promise.resolve(null),
+    shouldLoadOcrResults
+      ? fetch(`${API_BASE_URL}/extraction-candidates/gift-card/${giftCardId}`)
+      : Promise.resolve(null),
   ]);
 
   if (!receiptsResponse.ok) {
     throw new Error(`Failed to load receipts (${receiptsResponse.status})`);
   }
 
-  if (!attemptsResponse.ok) {
+  if (attemptsResponse && !attemptsResponse.ok) {
     throw new Error(
       `Failed to load extraction attempts (${attemptsResponse.status})`,
     );
   }
 
-  if (!candidatesResponse.ok) {
+  if (candidatesResponse && !candidatesResponse.ok) {
     throw new Error(
       `Failed to load extraction candidates (${candidatesResponse.status})`,
     );
@@ -671,41 +797,27 @@ async function loadGiftCardVerificationDetails(
 
   return {
     giftCard,
-    cardImages: (await imagesResponse.json()) as CardImage[],
+    cardImages,
     receipts: (await receiptsResponse.json()) as Receipt[],
-    extractionAttempts: (await attemptsResponse.json()) as ExtractionAttempt[],
-    extractionCandidates:
-      (await candidatesResponse.json()) as ExtractionCandidate[],
+    extractionAttempts: attemptsResponse
+      ? ((await attemptsResponse.json()) as ExtractionAttempt[])
+      : [],
+    extractionCandidates: candidatesResponse
+      ? ((await candidatesResponse.json()) as ExtractionCandidate[])
+      : [],
   };
 }
 
 function getInitialVerificationForm(details: VerificationDetails) {
   const isRedemptionCodeOnly = isRedemptionCodeOnlyBrand(details.giftCard.brand);
-  const loadedCandidates = isOcrReadyStatus(details.giftCard.ocr_status)
-    ? details.extractionCandidates
-    : [];
-  const bestLoadedCardNumberCandidate = getBestCandidate(
-    loadedCandidates,
-    "card_number",
-    details.giftCard.brand,
-  );
-  const bestLoadedPinCandidate = getBestCandidate(
-    loadedCandidates,
-    "pin",
-    details.giftCard.brand,
-  );
 
   return {
     // TODO: Mask and encrypt these values before production.
-    card_number:
-      details.giftCard.card_number_encrypted ??
-      bestLoadedCardNumberCandidate?.value ??
-      "",
-    pin: isRedemptionCodeOnly
-      ? ""
-      : details.giftCard.pin_encrypted ?? bestLoadedPinCandidate?.value ?? "",
+    card_number: credentialValue(details.giftCard) ?? "",
+    pin: isRedemptionCodeOnly ? "" : credentialPin(details.giftCard) ?? "",
     face_value: String(details.giftCard.face_value),
     notes: details.giftCard.notes ?? "",
+    confirmed_source: details.giftCard.confirmed_source ?? "manual",
   };
 }
 
@@ -734,6 +846,7 @@ function isOcrPendingStatus(status: string | null | undefined) {
   return [
     "pending",
     "uploading",
+    "queued",
     "processing",
     "preprocessing",
     "canonical_ready",
@@ -761,6 +874,334 @@ function ocrDebugBlock(
 
   const pattern = new RegExp(`${label}:\\n([\\s\\S]*?)\\n${nextLabel}:`, "m");
   return rawText.match(pattern)?.[1]?.trim() ?? null;
+}
+
+const BEST_BUY_LAYOUT_OPTIONS = [
+  ["auto", "Auto"],
+  ["best_buy_barcode_above_number", "Best Buy barcode-above-number"],
+  ["best_buy_barcode_below_number", "Best Buy barcode-below-number"],
+  ["best_buy_number_between_bars", "Best Buy number-between-bars"],
+  ["best_buy_legacy_small_pin", "Best Buy legacy/small-PIN"],
+  ["best_buy_unknown_manual", "Best Buy unknown/manual"],
+] as const;
+const DEFAULT_ACTIVE_BEST_BUY_LAYOUT_NAMES = new Set([
+  "best_buy_barcode_above_number",
+  "best_buy_number_between_bars",
+]);
+const LEGACY_BEST_BUY_LAYOUT_NAMES = new Set([
+  "best_buy_horizontal_barcode",
+  "best_buy_vertical_barcode",
+  "best_buy_back_v1",
+  "best_buy_back_v2",
+]);
+
+function bestBuyLayoutLabel(layoutName: string) {
+  const legacyLabels: Record<string, string> = {
+    best_buy_horizontal_barcode: "Best Buy barcode-below-number",
+    best_buy_vertical_barcode: "Best Buy number-between-bars",
+    best_buy_back_v1: "Best Buy barcode-above-number",
+    best_buy_back_v2: "Best Buy legacy/small-PIN",
+  };
+  return (
+    BEST_BUY_LAYOUT_OPTIONS.find(([value]) => value === layoutName)?.[1] ??
+    legacyLabels[layoutName] ??
+    layoutName.replaceAll("_", " ")
+  );
+}
+
+function defaultBestBuyLayout(layoutName: string): OCRLayout {
+  return {
+    layout_name: layoutName,
+    label: bestBuyLayoutLabel(layoutName),
+    active: DEFAULT_ACTIVE_BEST_BUY_LAYOUT_NAMES.has(layoutName),
+    active_managed: false,
+    coordinate_space: "card_boundary_relative",
+    zones: bestBuyLayoutZones(layoutName),
+  };
+}
+
+function normalizeBestBuyLayouts(layouts: OCRLayout[]) {
+  const standardLayouts = BEST_BUY_LAYOUT_OPTIONS.filter(
+    ([layoutName]) => layoutName !== "auto",
+  ).map(([layoutName]) => layoutName);
+  const layoutMap = new Map<string, OCRLayout>();
+
+  for (const layoutName of standardLayouts) {
+    layoutMap.set(layoutName, defaultBestBuyLayout(layoutName));
+  }
+
+  for (const layout of layouts) {
+    if (LEGACY_BEST_BUY_LAYOUT_NAMES.has(layout.layout_name)) {
+      continue;
+    }
+
+    const standardLayout = standardLayouts.includes(
+      layout.layout_name as (typeof standardLayouts)[number],
+    );
+    const existing = layoutMap.get(layout.layout_name);
+    const active =
+      standardLayout && !layout.active_managed
+        ? DEFAULT_ACTIVE_BEST_BUY_LAYOUT_NAMES.has(layout.layout_name)
+        : layout.active;
+    layoutMap.set(layout.layout_name, {
+      ...(existing ?? defaultBestBuyLayout(layout.layout_name)),
+      ...layout,
+      label: layout.label || bestBuyLayoutLabel(layout.layout_name),
+      active,
+      active_managed: layout.active_managed ?? standardLayout,
+      coordinate_space: layout.coordinate_space ?? "card_boundary_relative",
+      zones: layout.zones.length
+        ? layout.zones
+        : existing?.zones ?? bestBuyLayoutZones(layout.layout_name),
+    });
+  }
+
+  return Array.from(layoutMap.values());
+}
+
+function bestBuyLayoutZones(layoutName: string): OCRZone[] {
+  const commonBoundary: OCRZone = {
+    zone_name: "card_boundary",
+    zone_type: "card_boundary",
+    x_pct: 2,
+    y_pct: 2,
+    width_pct: 96,
+    height_pct: 96,
+    priority: 1,
+    notes: "Full saved review/OCR image.",
+  };
+
+  const layouts: Record<string, OCRZone[]> = {
+    best_buy_barcode_above_number: [
+      commonBoundary,
+      {
+        zone_name: "best_buy_card_number",
+        zone_type: "card_number",
+        x_pct: 12,
+        y_pct: 54,
+        width_pct: 54,
+        height_pct: 16,
+        priority: 1,
+        expected_length: 16,
+        notes: "Printed card number below the redeemable barcode.",
+      },
+      {
+        zone_name: "best_buy_pin",
+        zone_type: "pin",
+        x_pct: 58,
+        y_pct: 54,
+        width_pct: 25,
+        height_pct: 18,
+        priority: 2,
+        expected_length: 4,
+        notes: "PIN near/right of card number.",
+      },
+      {
+        zone_name: "best_buy_barcode",
+        zone_type: "barcode",
+        x_pct: 12,
+        y_pct: 34,
+        width_pct: 62,
+        height_pct: 20,
+        priority: 3,
+        expected_length: 16,
+        notes: "Redeemable barcode above card number.",
+      },
+    ],
+    best_buy_barcode_below_number: [
+      commonBoundary,
+      {
+        zone_name: "best_buy_card_number",
+        zone_type: "card_number",
+        x_pct: 12,
+        y_pct: 38,
+        width_pct: 54,
+        height_pct: 16,
+        priority: 1,
+        expected_length: 16,
+        notes: "Printed card number above redeemable barcode.",
+      },
+      {
+        zone_name: "best_buy_pin",
+        zone_type: "pin",
+        x_pct: 58,
+        y_pct: 40,
+        width_pct: 25,
+        height_pct: 18,
+        priority: 2,
+        expected_length: 4,
+        notes: "PIN near/right of card number.",
+      },
+      {
+        zone_name: "best_buy_barcode",
+        zone_type: "barcode",
+        x_pct: 12,
+        y_pct: 54,
+        width_pct: 62,
+        height_pct: 20,
+        priority: 3,
+        expected_length: 16,
+        notes: "Redeemable barcode below card number.",
+      },
+    ],
+    best_buy_number_between_bars: [
+      commonBoundary,
+      {
+        zone_name: "best_buy_card_number",
+        zone_type: "card_number",
+        x_pct: 24,
+        y_pct: 42,
+        width_pct: 46,
+        height_pct: 16,
+        priority: 1,
+        expected_length: 16,
+        notes: "Printed number between barcode/stripe regions.",
+      },
+      {
+        zone_name: "best_buy_pin",
+        zone_type: "pin",
+        x_pct: 66,
+        y_pct: 40,
+        width_pct: 22,
+        height_pct: 18,
+        priority: 2,
+        expected_length: 4,
+        notes: "PIN near the number block.",
+      },
+      {
+        zone_name: "best_buy_barcode",
+        zone_type: "barcode",
+        x_pct: 12,
+        y_pct: 60,
+        width_pct: 68,
+        height_pct: 18,
+        priority: 3,
+        expected_length: 16,
+        notes: "Primary redeemable barcode/stripe region.",
+      },
+    ],
+    best_buy_legacy_small_pin: [
+      commonBoundary,
+      {
+        zone_name: "best_buy_card_number",
+        zone_type: "card_number",
+        x_pct: 18,
+        y_pct: 34,
+        width_pct: 54,
+        height_pct: 16,
+        priority: 1,
+        expected_length: 16,
+        notes: "Legacy printed card number.",
+      },
+      {
+        zone_name: "best_buy_pin",
+        zone_type: "pin",
+        x_pct: 62,
+        y_pct: 34,
+        width_pct: 24,
+        height_pct: 18,
+        priority: 2,
+        expected_length: 4,
+        notes: "Small legacy PIN area.",
+      },
+      {
+        zone_name: "best_buy_barcode",
+        zone_type: "barcode",
+        x_pct: 18,
+        y_pct: 52,
+        width_pct: 62,
+        height_pct: 20,
+        priority: 3,
+        expected_length: 16,
+        notes: "Legacy barcode.",
+      },
+    ],
+  };
+  layouts.best_buy_unknown_manual = [
+    commonBoundary,
+    {
+      zone_name: "best_buy_card_number",
+      zone_type: "card_number",
+      x_pct: 10,
+      y_pct: 40,
+      width_pct: 55,
+      height_pct: 18,
+      priority: 1,
+      expected_length: 16,
+      notes: "Manual Best Buy card number zone.",
+    },
+    {
+      zone_name: "best_buy_pin",
+      zone_type: "pin",
+      x_pct: 60,
+      y_pct: 40,
+      width_pct: 25,
+      height_pct: 18,
+      priority: 2,
+      expected_length: 4,
+      notes: "Manual Best Buy PIN zone.",
+    },
+    {
+      zone_name: "best_buy_barcode",
+      zone_type: "barcode",
+      x_pct: 10,
+      y_pct: 58,
+      width_pct: 70,
+      height_pct: 22,
+      priority: 3,
+      expected_length: 16,
+      notes: "Manual Best Buy redeemable barcode zone.",
+    },
+  ];
+
+  return layouts[layoutName] ?? layouts.best_buy_barcode_above_number;
+}
+
+function parseOcrLayouts(value: string | null | undefined): OCRLayout[] {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    const rawLayouts =
+      parsed &&
+      typeof parsed === "object" &&
+      "layouts" in parsed &&
+      Array.isArray((parsed as { layouts?: unknown }).layouts)
+        ? (parsed as { layouts: unknown[] }).layouts
+        : parsed &&
+              typeof parsed === "object" &&
+              "layout_variants" in parsed &&
+              Array.isArray((parsed as { layout_variants?: unknown }).layout_variants)
+          ? (parsed as { layout_variants: unknown[] }).layout_variants
+          : [];
+
+    return rawLayouts
+      .filter((layout): layout is { layout_name?: string; name?: string; zones?: unknown; active?: boolean; active_managed?: boolean } => {
+        return Boolean(
+          layout &&
+            typeof layout === "object" &&
+            Array.isArray((layout as { zones?: unknown }).zones),
+        );
+      })
+      .map((layout, index) => {
+        const layoutName =
+          layout.layout_name || layout.name || `layout_${index + 1}`;
+        return {
+          layout_name: layoutName,
+          label: bestBuyLayoutLabel(layoutName),
+          active: layout.active !== false,
+          active_managed: layout.active_managed === true,
+          coordinate_space:
+            (layout as { coordinate_space?: string }).coordinate_space ??
+            "card_boundary_relative",
+          zones: parseOcrZones(JSON.stringify({ zones: layout.zones })),
+        };
+      });
+  } catch {
+    return [];
+  }
 }
 
 function parseOcrZones(value: string | null | undefined): OCRZone[] {
@@ -1054,6 +1495,7 @@ function applyCredentialCandidate(
         : normalizedCandidateType === "pin"
           ? candidate.value
           : currentForm.pin,
+    confirmed_source: candidate.source || "OCR",
   }));
 }
 
@@ -1081,6 +1523,33 @@ function candidateTypeForZone(zoneType: string, isRedemptionCodeOnly: boolean) {
   return "card_number";
 }
 
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, value));
+}
+
+function zoneImageBox(zone: OCRZone, boundary: OCRZone | undefined) {
+  if (!boundary || zone.zone_name === "card_boundary") {
+    return {
+      x_pct: clampPercent(zone.x_pct),
+      y_pct: clampPercent(zone.y_pct),
+      width_pct: Math.max(0, Math.min(100 - zone.x_pct, zone.width_pct)),
+      height_pct: Math.max(0, Math.min(100 - zone.y_pct, zone.height_pct)),
+    };
+  }
+
+  const x = boundary.x_pct + (zone.x_pct / 100) * boundary.width_pct;
+  const y = boundary.y_pct + (zone.y_pct / 100) * boundary.height_pct;
+  const width = (zone.width_pct / 100) * boundary.width_pct;
+  const height = (zone.height_pct / 100) * boundary.height_pct;
+
+  return {
+    x_pct: clampPercent(x),
+    y_pct: clampPercent(y),
+    width_pct: Math.max(0, Math.min(100 - x, width)),
+    height_pct: Math.max(0, Math.min(100 - y, height)),
+  };
+}
+
 export default function GiftCardVerificationPage() {
   const params = useParams<{ id: string | string[] }>();
   const router = useRouter();
@@ -1101,6 +1570,7 @@ export default function GiftCardVerificationPage() {
     pin: "",
     face_value: "",
     notes: "",
+    confirmed_source: "manual",
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1110,6 +1580,7 @@ export default function GiftCardVerificationPage() {
   const [imageRotation, setImageRotation] = useState(0);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [isRescanningImage, setIsRescanningImage] = useState(false);
+  const [isSavingOcrOrientation, setIsSavingOcrOrientation] = useState(false);
   const [imageUploadError, setImageUploadError] = useState<string | null>(null);
   const [imageUploadMessage, setImageUploadMessage] = useState<string | null>(
     null,
@@ -1126,6 +1597,9 @@ export default function GiftCardVerificationPage() {
   const [isCleaningUpCard, setIsCleaningUpCard] = useState(false);
   const [duplicateWarning, setDuplicateWarning] =
     useState<DuplicateCardWarning | null>(null);
+  const [showLockedCredentials, setShowLockedCredentials] = useState(false);
+  const [allowLockedCredentialUpdate, setAllowLockedCredentialUpdate] =
+    useState(false);
   const [zoneTemplateMessage, setZoneTemplateMessage] = useState<string | null>(null);
   const [zoneTemplateError, setZoneTemplateError] = useState<string | null>(null);
   const [isTestingZone, setIsTestingZone] = useState(false);
@@ -1134,6 +1608,8 @@ export default function GiftCardVerificationPage() {
   );
   const [zoneTestStage, setZoneTestStage] = useState<string | null>(null);
   const [savedOcrZones, setSavedOcrZones] = useState<OCRZone[]>([]);
+  const [ocrLayouts, setOcrLayouts] = useState<OCRLayout[]>([]);
+  const [selectedBestBuyLayout, setSelectedBestBuyLayout] = useState("auto");
   const [zoneTrainingMode, setZoneTrainingMode] = useState<
     "idle" | "boundary" | "new_zone" | "edit_zone"
   >("idle");
@@ -1146,9 +1622,14 @@ export default function GiftCardVerificationPage() {
     width: number;
     height: number;
   } | null>(null);
+  const [canonicalRenderedSize, setCanonicalRenderedSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
   const [zoneTemplateSaved, setZoneTemplateSaved] = useState(false);
   const [manualZoneCredential, setManualZoneCredential] = useState("");
   const zoneCanvasRef = useRef<HTMLDivElement | null>(null);
+  const savedReviewImageRef = useRef<HTMLImageElement | null>(null);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const [zoneForm, setZoneForm] = useState({
     zone_name: "credential_zone",
@@ -1162,11 +1643,24 @@ export default function GiftCardVerificationPage() {
 
   const primaryImage = useMemo(() => {
     return (
-      cardImages.find((image) => image.image_type === "primary") ??
-      cardImages[0] ??
+      cardImages.find(
+        (image) =>
+          image.image_type === "primary" &&
+          (image.retention_status ?? "active") !== "purged",
+      ) ??
       null
     );
   }, [cardImages]);
+  const supportingAttachments = useMemo(
+    () =>
+      cardImages.filter(
+        (image) =>
+          image.image_type !== "primary" ||
+          (image.retention_status ?? "active") === "purged",
+      ),
+    [cardImages],
+  );
+  const isDigitalCard = giftCard?.card_source === "digital";
   const ocrReady = isOcrReadyStatus(giftCard?.ocr_status);
   const canonicalReady = Boolean(
     primaryImage?.processed_image_url &&
@@ -1237,9 +1731,41 @@ export default function GiftCardVerificationPage() {
     latestExtractionAttempt?.raw_text,
     "OCR_CANONICAL_PERSISTED_ROTATION",
   );
+  const canonicalRotation = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_CANONICAL_ROTATION_DEGREES",
+  );
+  const canonicalOrientationSource = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_CANONICAL_ORIENTATION_SOURCE",
+  );
+  const canonicalOrientationScore = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_CANONICAL_ORIENTATION_SCORE",
+  );
+  const canonicalCoordinateSpace = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_CANONICAL_COORDINATE_SPACE",
+  );
+  const canonicalOrientationTrials = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_CANONICAL_ORIENTATION_TRIALS",
+  );
+  const canonicalReasonSelected = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_CANONICAL_REASON_SELECTED",
+  );
   const selectedTemplateLayout = ocrDebugValue(
     latestExtractionAttempt?.raw_text,
     "OCR_SELECTED_TEMPLATE_LAYOUT",
+  );
+  const selectedTemplateConfidence = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_SELECTED_TEMPLATE_CONFIDENCE",
+  );
+  const templateMismatch = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_TEMPLATE_MISMATCH",
   );
   const detectedOcrProfile = ocrDebugValue(
     latestExtractionAttempt?.raw_text,
@@ -1253,6 +1779,34 @@ export default function GiftCardVerificationPage() {
     latestExtractionAttempt?.raw_text,
     "OCR_PREPROCESSING",
   );
+  const debugDisplayImageUsed = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_DISPLAY_IMAGE_USED",
+  );
+  const debugOcrImageUsed = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_IMAGE_USED",
+  );
+  const debugBarcodeImageUsed = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_BARCODE_IMAGE_USED",
+  );
+  const debugSavedReviewImageDimensions = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_SAVED_REVIEW_IMAGE_DIMENSIONS",
+  );
+  const debugTemplateCoordinateSource = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_TEMPLATE_COORDINATE_SOURCE",
+  );
+  const debugOcrZoneImageNaturalSize = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_ZONE_IMAGE_NATURAL_SIZE",
+  );
+  const debugOcrCardBoundary = ocrDebugValue(
+    latestExtractionAttempt?.raw_text,
+    "OCR_CARD_BOUNDARY",
+  );
   const ocrModeResults = ocrDebugBlock(
     latestExtractionAttempt?.raw_text,
     "OCR_MODE_RESULTS",
@@ -1264,12 +1818,55 @@ export default function GiftCardVerificationPage() {
   const isInactiveCard = ["VOID", "VOIDED", "ARCHIVED"].includes(
     giftCard?.status ?? "",
   );
+  const isBestBuyCard = normalizedBrandName(giftCard?.brand).includes("best buy");
+  const activeBestBuyLayoutOptions = ocrLayouts
+    .filter((layout) => layout.active && !LEGACY_BEST_BUY_LAYOUT_NAMES.has(layout.layout_name))
+    .map((layout) => [layout.layout_name, layout.label] as const);
+  const bestBuyLayoutOptions = [
+    ["auto", "Auto"] as const,
+    ...activeBestBuyLayoutOptions.filter(
+      ([value], index, options) =>
+        options.findIndex(([candidate]) => candidate === value) === index,
+    ),
+  ];
   const isRedemptionCodeOnly = isRedemptionCodeOnlyBrand(giftCard?.brand);
   const primaryCredentialLabel = isRedemptionCodeOnly
     ? "Confirmed Redemption Code"
     : "Confirmed Card Number";
-  const canonicalZoneImageUrl =
-    canonicalReady ? primaryImage?.processed_image_url : null;
+  const lockedPrimaryValue = credentialValue(giftCard);
+  const lockedPinValue = credentialPin(giftCard);
+  const cardSuggestionMismatch = credentialsDiffer(
+    lockedPrimaryValue,
+    bestCardNumberCandidate?.value,
+  );
+  const pinSuggestionMismatch =
+    !isRedemptionCodeOnly &&
+    credentialsDiffer(lockedPinValue, bestPinCandidate?.value);
+  const reviewImagePath =
+    primaryImage?.processed_image_url ?? primaryImage?.original_image_url ?? null;
+  const savedReviewOcrImageUrl = buildUploadUrlWithVersion(
+    primaryImage?.processed_image_url,
+    primaryImage?.canonical_transform_metadata ?? primaryImage?.canonical_rotation_degrees,
+  );
+  const originalUploadPreviewUrl = buildUploadUrl(primaryImage?.original_image_url);
+  const reviewImageUrl = primaryImage?.processed_image_url
+    ? savedReviewOcrImageUrl
+    : originalUploadPreviewUrl;
+  const savedRotationLabel =
+    canonicalRotation ??
+    (primaryImage?.canonical_rotation_degrees !== null &&
+    primaryImage?.canonical_rotation_degrees !== undefined
+      ? String(primaryImage.canonical_rotation_degrees)
+      : null);
+  const savedOrientationSource =
+    canonicalOrientationSource ?? primaryImage?.orientation_source ?? null;
+  const orientationStatusLabel = savedRotationLabel
+    ? savedOrientationSource === "manual"
+      ? `Manual orientation saved: ${savedRotationLabel}°`
+      : savedOrientationSource === "auto"
+        ? `Auto orientation selected: ${savedRotationLabel}°`
+        : `OCR orientation saved: ${savedRotationLabel}°`
+    : null;
   const currentZone: OCRZone = {
     zone_name: zoneForm.zone_name.trim() || "credential_zone",
     zone_type: zoneForm.zone_type,
@@ -1289,6 +1886,26 @@ export default function GiftCardVerificationPage() {
   );
   const hasBoundary = Boolean(boundaryZone);
   const hasCredentialZone = credentialZones.length > 0;
+  const coordinateMode = hasBoundary
+    ? "card-boundary-relative"
+    : "full-image-relative";
+  const currentZoneImageBox = zoneImageBox(currentZone, boundaryZone);
+  const selectedZonePixelBox = canonicalImageSize
+    ? {
+        x: Math.round((currentZoneImageBox.x_pct / 100) * canonicalImageSize.width),
+        y: Math.round((currentZoneImageBox.y_pct / 100) * canonicalImageSize.height),
+        width: Math.round((currentZoneImageBox.width_pct / 100) * canonicalImageSize.width),
+        height: Math.round((currentZoneImageBox.height_pct / 100) * canonicalImageSize.height),
+      }
+    : null;
+  const selectedZoneRenderedBox = canonicalRenderedSize
+    ? {
+        x: Math.round((currentZoneImageBox.x_pct / 100) * canonicalRenderedSize.width),
+        y: Math.round((currentZoneImageBox.y_pct / 100) * canonicalRenderedSize.height),
+        width: Math.round((currentZoneImageBox.width_pct / 100) * canonicalRenderedSize.width),
+        height: Math.round((currentZoneImageBox.height_pct / 100) * canonicalRenderedSize.height),
+      }
+    : null;
   const isZoneDrawingEnabled = ["boundary", "new_zone", "edit_zone"].includes(
     zoneTrainingMode,
   );
@@ -1331,6 +1948,7 @@ export default function GiftCardVerificationPage() {
       rejected_candidates: zoneTestResult.candidates.filter(
         (candidate) => candidate.candidate_type === "rejected",
       ),
+      barcode_attempts: zoneTestResult.barcode_attempts,
       stored_rejected_candidates: rejectedCandidates.map((candidate) => ({
         candidate_type: candidate.candidate_type,
         source: candidate.source,
@@ -1456,12 +2074,26 @@ export default function GiftCardVerificationPage() {
         }
 
         const template = (await response.json()) as { ocr_zones?: string | null };
+        const parsedLayouts = parseOcrLayouts(template.ocr_zones);
+        const layouts = normalizedBrandName(giftCard.brand).includes("best buy")
+          ? normalizeBestBuyLayouts(parsedLayouts)
+          : parsedLayouts;
+        const defaultBestBuyLayout =
+          layouts.find((layout) => layout.active)?.layout_name ??
+          "best_buy_barcode_above_number";
         const zones = zonesForBrand(
           giftCard.brand,
-          parseOcrZones(template.ocr_zones),
+          layouts.length > 0
+            ? layouts.find((layout) => layout.layout_name === defaultBestBuyLayout)
+                ?.zones ?? layouts[0].zones
+            : parseOcrZones(template.ocr_zones),
         );
 
         if (isMounted) {
+          setOcrLayouts(layouts);
+          if (normalizedBrandName(giftCard.brand).includes("best buy")) {
+            setSelectedBestBuyLayout("auto");
+          }
           setSavedOcrZones(zones);
           setZoneTemplateSaved(true);
 
@@ -1551,6 +2183,131 @@ export default function GiftCardVerificationPage() {
     };
   }, [cleanupAction, giftCard]);
 
+  useEffect(() => {
+    const image = savedReviewImageRef.current;
+    if (!image) {
+      return;
+    }
+
+    const measure = () => {
+      const renderedRect = image.getBoundingClientRect();
+      setCanonicalRenderedSize({
+        width: Math.round(renderedRect.width),
+        height: Math.round(renderedRect.height),
+      });
+      if (image.naturalWidth && image.naturalHeight) {
+        setCanonicalImageSize({
+          width: image.naturalWidth,
+          height: image.naturalHeight,
+        });
+      }
+    };
+
+    measure();
+    const resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(image);
+    window.addEventListener("resize", measure);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [reviewImageUrl]);
+
+  useEffect(() => {
+    if (!primaryImage || !giftCard || !isOcrPendingStatus(giftCard.ocr_status)) {
+      return;
+    }
+
+    let isMounted = true;
+    let didLoadFinalResults = false;
+
+    async function pollOcrStatus() {
+      if (!primaryImage) {
+        return;
+      }
+
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/card-images/${primaryImage.id}/ocr-status`,
+        );
+
+        if (!response.ok) {
+          return;
+        }
+
+        const status = (await response.json()) as CardImageOcrStatus;
+
+        if (!isMounted) {
+          return;
+        }
+
+        setGiftCard((currentGiftCard) =>
+          currentGiftCard
+            ? {
+                ...currentGiftCard,
+                ocr_status: status.ocr_status ?? currentGiftCard.ocr_status,
+              }
+            : currentGiftCard,
+        );
+        setCardImages((currentImages) =>
+          currentImages.map((image) =>
+            image.id === status.card_image_id
+              ? {
+                  ...image,
+                  processed_image_url:
+                    status.processed_image_url ?? image.processed_image_url,
+                  canonical_rotation_degrees:
+                    status.canonical_rotation_degrees ??
+                    image.canonical_rotation_degrees,
+                  orientation_source:
+                    status.orientation_source ?? image.orientation_source,
+                  canonical_transform_metadata:
+                    status.canonical_transform_metadata ??
+                    image.canonical_transform_metadata,
+                }
+              : image,
+          ),
+        );
+
+        if (
+          status.ocr_status &&
+          !isOcrPendingStatus(status.ocr_status) &&
+          !didLoadFinalResults
+        ) {
+          didLoadFinalResults = true;
+          const details = await loadGiftCardVerificationDetails(giftCardId);
+          if (!isMounted) {
+            return;
+          }
+          setGiftCard(details.giftCard);
+          setCardImages(details.cardImages);
+          setReceipts(details.receipts);
+          setExtractionAttempts(details.extractionAttempts);
+          setExtractionCandidates(details.extractionCandidates);
+          setForm(getInitialVerificationForm(details));
+          setImageUploadMessage(
+            status.ocr_status === "failed"
+              ? "OCR failed. Manual verification is still available."
+              : "OCR completed.",
+          );
+        }
+      } catch {
+        // Polling is best-effort; the page remains usable for manual entry.
+      }
+    }
+
+    void pollOcrStatus();
+    const intervalId = window.setInterval(() => {
+      void pollOcrStatus();
+    }, 2500);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, [giftCard, giftCardId, primaryImage]);
+
   async function handleImageUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
 
@@ -1574,6 +2331,20 @@ export default function GiftCardVerificationPage() {
       const formData = new FormData();
       formData.append("gift_card_id", giftCardId);
       formData.append("file", file);
+      const isDigitalUpload = giftCard?.card_source === "digital";
+      formData.append(
+        "image_type",
+        isDigitalUpload ? "digital_attachment" : "primary",
+      );
+      formData.append(
+        "attachment_type",
+        isDigitalUpload
+          ? file.name.toLowerCase().endsWith(".pdf")
+            ? "digital_pdf"
+            : "digital_image"
+          : "card_image",
+      );
+      formData.append("run_ocr", String(!isDigitalUpload));
 
       const response = await fetch(`${API_BASE_URL}/card-images/upload`, {
         method: "POST",
@@ -1584,15 +2355,29 @@ export default function GiftCardVerificationPage() {
         throw new Error(`Failed to upload image (${response.status})`);
       }
 
-      const details = await loadGiftCardVerificationDetails(giftCardId);
-      setGiftCard(details.giftCard);
-      setCardImages(details.cardImages);
-      setReceipts(details.receipts);
-      setExtractionAttempts(details.extractionAttempts);
-      setExtractionCandidates(details.extractionCandidates);
-      setForm(getInitialVerificationForm(details));
+      const savedImage = (await response.json()) as CardImage & {
+        ocr_status?: string;
+        message?: string;
+      };
+      setCardImages((currentImages) => [
+        savedImage,
+        ...currentImages.filter((image) => image.id !== savedImage.id),
+      ]);
+      setGiftCard((currentGiftCard) =>
+        currentGiftCard
+          ? {
+              ...currentGiftCard,
+              ocr_status: savedImage.ocr_status ?? "uploading",
+            }
+          : currentGiftCard,
+      );
       setImageRotation(0);
-      setImageUploadMessage("Image uploaded.");
+      setImageUploadMessage(
+        savedImage.message ??
+          (isDigitalUpload
+            ? "Attachment saved. OCR was not queued."
+            : "Image saved — OCR queued."),
+      );
     } catch (err) {
       setImageUploadError(
         err instanceof Error ? err.message : "Failed to upload image.",
@@ -1605,7 +2390,6 @@ export default function GiftCardVerificationPage() {
 
   async function rescanPrimaryImage(
     successText = "OCR re-scanned.",
-    rotationDegrees = imageRotation,
     options: { preserveSavedTemplate?: boolean } = {},
   ) {
     if (!primaryImage) {
@@ -1624,7 +2408,7 @@ export default function GiftCardVerificationPage() {
         : currentGiftCard,
     );
 
-    const endpoint = `${API_BASE_URL}/card-images/${primaryImage.id}/rescan?rotation_degrees=${rotationDegrees}`;
+    const endpoint = `${API_BASE_URL}/card-images/${primaryImage.id}/rescan`;
 
     try {
       const response = await fetch(endpoint, {
@@ -1646,6 +2430,85 @@ export default function GiftCardVerificationPage() {
         );
       }
 
+      const result = (await response.json()) as {
+        ocr_status?: string;
+        message?: string;
+      };
+      setGiftCard((currentGiftCard) =>
+        currentGiftCard
+          ? {
+              ...currentGiftCard,
+              ocr_status: result.ocr_status ?? "preprocessing",
+            }
+          : currentGiftCard,
+      );
+      setZoneTestResult(null);
+      if (options.preserveSavedTemplate) {
+        setZoneTemplateSaved(true);
+        setZoneTemplateMessage(
+          "Saved template OCR queued. Refresh shortly to see updated suggestions.",
+        );
+      } else {
+        setSelectedZoneName(null);
+        setZoneTrainingMode("idle");
+        setZoneTemplateSaved(false);
+        setZoneTemplateMessage(
+          "OCR queued. Draw or test zones against the saved Review/OCR image while processing runs.",
+        );
+      }
+      setImageUploadMessage(result.message ?? successText);
+    } catch (err) {
+      setImageUploadError(
+        err instanceof Error ? err.message : "Failed to re-scan card image.",
+      );
+    } finally {
+      setIsRescanningImage(false);
+    }
+  }
+
+  async function setSavedOcrOrientation() {
+    if (!primaryImage) {
+      return;
+    }
+
+    setIsSavingOcrOrientation(true);
+    setImageUploadError(null);
+    setImageUploadMessage(null);
+    setExtractionAttempts([]);
+    setExtractionCandidates([]);
+    setZoneTestResult(null);
+    setGiftCard((currentGiftCard) =>
+      currentGiftCard
+        ? { ...currentGiftCard, ocr_status: "preprocessing" }
+        : currentGiftCard,
+    );
+
+    const normalizedRotation = ((imageRotation % 360) + 360) % 360;
+    const sourceImage = primaryImage.processed_image_url
+      ? "saved_review_ocr"
+      : "original_upload";
+    const endpoint = `${API_BASE_URL}/card-images/${primaryImage.id}/set-ocr-orientation?rotation_degrees=${normalizedRotation}&source_image=${sourceImage}`;
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const responseBody = await readResponseBody(response);
+        console.error("Set OCR orientation failed", {
+          endpoint,
+          status: response.status,
+          responseBody,
+        });
+        throw new Error(
+          backendErrorMessage(
+            responseBody,
+            `Failed to set OCR orientation (${response.status})`,
+          ),
+        );
+      }
+
       const details = await loadGiftCardVerificationDetails(giftCardId);
       setGiftCard(details.giftCard);
       setCardImages(details.cardImages);
@@ -1653,26 +2516,21 @@ export default function GiftCardVerificationPage() {
       setExtractionAttempts(details.extractionAttempts);
       setExtractionCandidates(details.extractionCandidates);
       setZoneTestResult(null);
-      if (options.preserveSavedTemplate) {
-        setZoneTemplateSaved(true);
-        setZoneTemplateMessage(
-          "Saved template OCR re-run. Suggestions were refreshed above.",
-        );
-      } else {
-        setSelectedZoneName(null);
-        setZoneTrainingMode("idle");
-        setZoneTemplateSaved(false);
-        setZoneTemplateMessage(
-          "Image transform changed. Draw or test zones against the processed OCR image before saving.",
-        );
-      }
-      setImageUploadMessage(successText);
+      setSelectedZoneName(null);
+      setZoneTrainingMode("idle");
+      setZoneTemplateSaved(true);
+      setImageRotation(0);
+      setCanonicalImageSize(null);
+      setCanonicalRenderedSize(null);
+      setImageUploadMessage(
+        "Saved Review/OCR Image updated. OCR and zones will use this orientation.",
+      );
     } catch (err) {
       setImageUploadError(
-        err instanceof Error ? err.message : "Failed to re-scan card image.",
+        err instanceof Error ? err.message : "Failed to set OCR orientation.",
       );
     } finally {
-      setIsRescanningImage(false);
+      setIsSavingOcrOrientation(false);
     }
   }
 
@@ -1689,8 +2547,18 @@ export default function GiftCardVerificationPage() {
     }
 
     const rect = element.getBoundingClientRect();
-    const currentX = ((event.clientX - rect.left) / rect.width) * 100;
-    const currentY = ((event.clientY - rect.top) / rect.height) * 100;
+    const fullX = ((event.clientX - rect.left) / rect.width) * 100;
+    const fullY = ((event.clientY - rect.top) / rect.height) * 100;
+    const usesBoundary =
+      Boolean(boundaryZone) &&
+      zoneTrainingMode !== "boundary" &&
+      currentZone.zone_name !== "card_boundary";
+    const currentX = usesBoundary
+      ? clampPercent(((fullX - boundaryZone!.x_pct) / boundaryZone!.width_pct) * 100)
+      : clampPercent(fullX);
+    const currentY = usesBoundary
+      ? clampPercent(((fullY - boundaryZone!.y_pct) / boundaryZone!.height_pct) * 100)
+      : clampPercent(fullY);
     const x = Math.max(0, Math.min(start.x, currentX));
     const y = Math.max(0, Math.min(start.y, currentY));
     const width = Math.min(100 - x, Math.abs(currentX - start.x));
@@ -1717,9 +2585,19 @@ export default function GiftCardVerificationPage() {
     }
 
     const rect = element.getBoundingClientRect();
+    const fullX = ((event.clientX - rect.left) / rect.width) * 100;
+    const fullY = ((event.clientY - rect.top) / rect.height) * 100;
+    const usesBoundary =
+      Boolean(boundaryZone) &&
+      zoneTrainingMode !== "boundary" &&
+      selectedZoneName !== "card_boundary";
     dragStartRef.current = {
-      x: ((event.clientX - rect.left) / rect.width) * 100,
-      y: ((event.clientY - rect.top) / rect.height) * 100,
+      x: usesBoundary
+        ? clampPercent(((fullX - boundaryZone!.x_pct) / boundaryZone!.width_pct) * 100)
+        : clampPercent(fullX),
+      y: usesBoundary
+        ? clampPercent(((fullY - boundaryZone!.y_pct) / boundaryZone!.height_pct) * 100)
+        : clampPercent(fullY),
     };
     if (zoneTrainingMode === "boundary") {
       setSelectedZoneName("card_boundary");
@@ -1797,6 +2675,111 @@ export default function GiftCardVerificationPage() {
       setZoneTestResult(null);
     }
 
+  function applyBestBuyLayout(layoutName: string) {
+    setSelectedBestBuyLayout(layoutName);
+    if (layoutName === "auto") {
+      const autoLayout =
+        ocrLayouts.find((layout) => layout.active) ??
+        ocrLayouts[0] ??
+        {
+          layout_name: "best_buy_barcode_above_number",
+          label: "Best Buy barcode-above-number",
+          active: true,
+          zones: bestBuyLayoutZones("best_buy_barcode_above_number"),
+        };
+      setSavedOcrZones(zonesForBrand(giftCard?.brand, autoLayout.zones));
+      setZoneTemplateMessage(
+        `Best Buy layout set to Auto. Backend will score all active layouts; editing shows ${autoLayout.label}.`,
+      );
+    } else {
+      const layout =
+        ocrLayouts.find((candidate) => candidate.layout_name === layoutName) ??
+        {
+          layout_name: layoutName,
+          label: bestBuyLayoutLabel(layoutName),
+          active: true,
+          zones: bestBuyLayoutZones(layoutName),
+        };
+      setSavedOcrZones(zonesForBrand(giftCard?.brand, layout.zones));
+      setZoneTemplateMessage(`Editing ${layout.label} zones.`);
+    }
+    setSelectedZoneName(null);
+    setZoneTrainingMode("idle");
+    setZoneTestResult(null);
+    setZoneTemplateSaved(false);
+  }
+
+  function useCurrentCardAsNewBestBuyLayout() {
+    const existingCustomNumbers = ocrLayouts
+      .map((layout) => layout.layout_name.match(/^best_buy_layout_v(\d+)$/)?.[1])
+      .filter((value): value is string => Boolean(value))
+      .map((value) => Number(value));
+    const nextVersion = Math.max(2, ...existingCustomNumbers) + 1;
+    const layoutName = `best_buy_layout_v${nextVersion}`;
+    const layout: OCRLayout = {
+      layout_name: layoutName,
+      label: `Best Buy layout v${nextVersion}`,
+      active: true,
+      coordinate_space: "card_boundary_relative",
+      zones:
+        savedOcrZones.length > 0
+          ? savedOcrZones
+          : bestBuyLayoutZones("best_buy_unknown_manual"),
+    };
+
+    setOcrLayouts((currentLayouts) => [
+      ...currentLayouts.filter(
+        (currentLayout) => currentLayout.layout_name !== layoutName,
+      ),
+      layout,
+    ]);
+    setSelectedBestBuyLayout(layoutName);
+    setSavedOcrZones(layout.zones);
+    setZoneTemplateSaved(false);
+    setZoneTemplateMessage(
+      `${layout.label} prepared from this card. Adjust zones if needed, then save template.`,
+    );
+  }
+
+  function setBestBuyLayoutActive(layoutName: string, active: boolean) {
+    setOcrLayouts((currentLayouts) => {
+      const normalizedLayouts = normalizeBestBuyLayouts(currentLayouts);
+      const existingLayout =
+        normalizedLayouts.find((layout) => layout.layout_name === layoutName) ??
+        defaultBestBuyLayout(layoutName);
+      return [
+        ...normalizedLayouts.filter((layout) => layout.layout_name !== layoutName),
+        {
+          ...existingLayout,
+          active,
+          active_managed: true,
+        },
+      ];
+    });
+    if (!active && selectedBestBuyLayout === layoutName) {
+      setSelectedBestBuyLayout("auto");
+    }
+    setZoneTemplateSaved(false);
+    setZoneTemplateMessage(
+      `${bestBuyLayoutLabel(layoutName)} ${active ? "activated" : "deactivated"}. Save template to persist layout visibility.`,
+    );
+  }
+
+  function deleteBestBuyLayout(layoutName: string) {
+    setOcrLayouts((currentLayouts) =>
+      normalizeBestBuyLayouts(currentLayouts).filter(
+        (layout) => layout.layout_name !== layoutName,
+      ),
+    );
+    if (selectedBestBuyLayout === layoutName) {
+      setSelectedBestBuyLayout("auto");
+    }
+    setZoneTemplateSaved(false);
+    setZoneTemplateMessage(
+      `${bestBuyLayoutLabel(layoutName)} removed from managed templates. Save template to persist.`,
+    );
+  }
+
   function addCurrentZone() {
     const zoneToSave =
       zoneTrainingMode === "boundary"
@@ -1841,6 +2824,34 @@ export default function GiftCardVerificationPage() {
     setZoneTemplateSaved(false);
   }
 
+  function adjustCurrentZone(
+    field: "x_pct" | "y_pct" | "width_pct" | "height_pct",
+    delta: number,
+  ) {
+    setZoneForm((currentForm) => {
+      const nextForm = { ...currentForm };
+      const x = Number(nextForm.x_pct) || 0;
+      const y = Number(nextForm.y_pct) || 0;
+      const width = Number(nextForm.width_pct) || 0;
+      const height = Number(nextForm.height_pct) || 0;
+      const value = Number(nextForm[field]) || 0;
+
+      if (field === "x_pct") {
+        nextForm.x_pct = Math.max(0, Math.min(100 - width, value + delta)).toFixed(2);
+      } else if (field === "y_pct") {
+        nextForm.y_pct = Math.max(0, Math.min(100 - height, value + delta)).toFixed(2);
+      } else if (field === "width_pct") {
+        nextForm.width_pct = Math.max(0.5, Math.min(100 - x, value + delta)).toFixed(2);
+      } else {
+        nextForm.height_pct = Math.max(0.5, Math.min(100 - y, value + delta)).toFixed(2);
+      }
+
+      return nextForm;
+    });
+    setZoneTemplateSaved(false);
+    setZoneTestResult(null);
+  }
+
   function deleteCurrentZone() {
     setSavedOcrZones((currentZones) =>
       currentZones.filter((zone) => zone.zone_name !== currentZone.zone_name),
@@ -1873,10 +2884,10 @@ export default function GiftCardVerificationPage() {
 
     const progressStages = [
       "generating crop",
-      "preprocessing",
-      "OCR pass 1/5",
-      "OCR pass 2/5",
-      "OCR pass 3/5",
+      currentZone.zone_type === "barcode" ? "decoding barcode" : "preprocessing",
+      currentZone.zone_type === "barcode" ? "testing rotations" : "OCR pass 1/5",
+      currentZone.zone_type === "barcode" ? "validating barcode" : "OCR pass 2/5",
+      currentZone.zone_type === "barcode" ? "parsing candidates" : "OCR pass 3/5",
       "parsing candidates",
     ];
     let progressIndex = 0;
@@ -1898,6 +2909,11 @@ export default function GiftCardVerificationPage() {
           signal: controller.signal,
           body: JSON.stringify({
             ...currentZone,
+            coordinate_mode: coordinateMode,
+            card_boundary:
+              boundaryZone && currentZone.zone_name !== "card_boundary"
+                ? boundaryZone
+                : null,
             image_source: primaryImage.processed_image_url
               ? "processed"
               : "original",
@@ -1947,6 +2963,29 @@ export default function GiftCardVerificationPage() {
         (firstZone, secondZone) => firstZone.priority - secondZone.priority,
       ),
     );
+    const savedCanonicalRotation =
+      primaryImage?.canonical_rotation_degrees ??
+      Number(canonicalRotation ?? 0) ??
+      0;
+    const isBestBuy = normalizedBrandName(giftCard.brand).includes("best buy");
+    const managedBestBuyLayouts = isBestBuy
+      ? normalizeBestBuyLayouts(ocrLayouts)
+      : [];
+    const selectedLayoutName =
+      selectedBestBuyLayout === "auto"
+        ? managedBestBuyLayouts.find((layout) => layout.active)?.layout_name ??
+          "best_buy_barcode_above_number"
+        : selectedBestBuyLayout;
+    const savedLayouts = isBestBuy
+      ? managedBestBuyLayouts.map((layout) => ({
+          layout_name: layout.layout_name,
+          name: layout.label,
+          active: layout.active,
+          active_managed: true,
+          coordinate_space: "card_boundary_relative",
+          zones: layout.layout_name === selectedLayoutName ? zones : layout.zones,
+        }))
+      : [];
 
     try {
       const response = await fetch(
@@ -1963,14 +3002,22 @@ export default function GiftCardVerificationPage() {
               : "card_number_plus_pin",
             ocr_zones: JSON.stringify(
               {
-                coordinate_space: "canonical_processed_image",
+                coordinate_space: hasBoundary
+                  ? "card_boundary_relative"
+                  : "full_image_relative",
                 processed_image_dimensions: canonicalImageSize,
                 canonical_width: canonicalImageSize?.width ?? null,
                 canonical_height: canonicalImageSize?.height ?? null,
-                trained_orientation: imageRotation % 360,
+                trained_orientation: savedCanonicalRotation,
                 applied_rotation: 0,
-                rotation_degrees: imageRotation % 360,
-                zones,
+                rotation_degrees: savedCanonicalRotation,
+                selected_layout:
+                  isBestBuy && selectedBestBuyLayout !== "auto"
+                    ? selectedLayoutName
+                    : "auto",
+                ...(isBestBuy
+                  ? { layouts: savedLayouts }
+                  : { zones }),
               },
               null,
               2,
@@ -2010,14 +3057,23 @@ export default function GiftCardVerificationPage() {
       const template = (await reloadResponse.json()) as {
         ocr_zones?: string | null;
       };
+      const parsedReloadedLayouts = parseOcrLayouts(template.ocr_zones);
+      const reloadedLayouts = isBestBuy
+        ? normalizeBestBuyLayouts(parsedReloadedLayouts)
+        : parsedReloadedLayouts;
       const reloadedZones = zonesForBrand(
         giftCard.brand,
-        parseOcrZones(template.ocr_zones),
+        isBestBuy && reloadedLayouts.length > 0
+          ? reloadedLayouts.find(
+              (layout) => layout.layout_name === selectedLayoutName,
+            )?.zones ?? reloadedLayouts[0].zones
+          : parseOcrZones(template.ocr_zones),
       );
 
       setZoneTemplateMessage(
         "OCR zones saved for this brand. Future uploads will scan these regions first.",
       );
+      setOcrLayouts(reloadedLayouts);
       setSavedOcrZones(reloadedZones);
       setZoneTemplateSaved(true);
     } catch (err) {
@@ -2030,8 +3086,10 @@ export default function GiftCardVerificationPage() {
   async function handleVerify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (isSaleLocked) {
-      setSubmitError("Sold or settled cards cannot be re-verified from this page.");
+    if (isSaleLocked && !allowLockedCredentialUpdate) {
+      setSubmitError(
+        "Sold or settled cards require explicit Update confirmed credentials before saving.",
+      );
       return;
     }
 
@@ -2056,7 +3114,12 @@ export default function GiftCardVerificationPage() {
         },
         body: JSON.stringify({
           card_number: form.card_number,
+          confirmed_card_number: isRedemptionCodeOnly ? null : form.card_number,
+          confirmed_redemption_code: isRedemptionCodeOnly ? form.card_number : null,
           pin: isRedemptionCodeOnly ? null : form.pin,
+          confirmed_pin: isRedemptionCodeOnly ? null : form.pin,
+          confirmed_source: form.confirmed_source || "manual",
+          update_confirmed_credentials: isSaleLocked && allowLockedCredentialUpdate,
           face_value: Number(form.face_value),
           notes: form.notes || null,
         }),
@@ -2094,6 +3157,8 @@ export default function GiftCardVerificationPage() {
 
       const updatedGiftCard = (await response.json()) as GiftCard;
       setGiftCard(updatedGiftCard);
+      setShowLockedCredentials(false);
+      setAllowLockedCredentialUpdate(false);
       router.push(getReturnHref());
     } catch (err) {
       if (!loggedResponseError) {
@@ -2410,14 +3475,18 @@ export default function GiftCardVerificationPage() {
                 <dl className="mt-4 grid gap-3">
                   <ArchiveDetailRow
                     label={primaryCredentialLabel}
-                    value={maskSensitiveValue(giftCard.card_number_encrypted)}
+                    value={maskSensitiveValue(lockedPrimaryValue)}
                   />
                   {!isRedemptionCodeOnly ? (
                     <ArchiveDetailRow
                       label="PIN"
-                      value={maskSensitiveValue(giftCard.pin_encrypted)}
+                      value={maskSensitiveValue(lockedPinValue)}
                     />
                   ) : null}
+                  <ArchiveDetailRow
+                    label="Export Value Source"
+                    value={sourceLabel(giftCard.export_value_source)}
+                  />
                   <ArchiveDetailRow
                     label="Face Value"
                     value={formatAmount(giftCard.face_value)}
@@ -2516,14 +3585,18 @@ export default function GiftCardVerificationPage() {
             </div>
             {!isInactiveCard ? (
               <div className="grid grid-cols-2 gap-2 sm:flex">
-                {!isSaleLocked ? (
+                {!isSaleLocked || allowLockedCredentialUpdate ? (
                   <button
                     className="h-11 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 active:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                     disabled={isSubmitting}
                     form="confirm-card-details-form"
                     type="submit"
                   >
-                    {isSubmitting ? "Saving..." : "Confirm Details"}
+                    {isSubmitting
+                      ? "Saving..."
+                      : isSaleLocked
+                        ? "Update Confirmed Credentials"
+                        : "Confirm Details"}
                   </button>
                 ) : null}
                 {canCleanupGiftCard(giftCard) ? (
@@ -2596,32 +3669,181 @@ export default function GiftCardVerificationPage() {
           </section>
         ) : null}
 
+        {!isInactiveCard ? (
+          isDigitalCard ? (
+            <section className="rounded-lg border border-cyan-200 bg-cyan-50 p-4 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">
+                    Digital/manual credential entry
+                  </p>
+                  <h2 className="mt-1 text-lg font-semibold text-slate-950">
+                    OCR is skipped by default
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Paste copied card credentials into Confirm Card Details. Uploaded
+                    PDFs/images are supporting documents unless you explicitly run OCR.
+                  </p>
+                  {giftCard.digital_source_notes ? (
+                    <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                      {giftCard.digital_source_notes}
+                    </p>
+                  ) : null}
+                </div>
+                <button
+                  className="h-10 cursor-pointer rounded-md bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                  disabled={isSubmitting || isInactiveCard}
+                  form="confirm-card-details-form"
+                  type="submit"
+                >
+                  {isSubmitting ? "Saving..." : "Save Manual Credentials"}
+                </button>
+              </div>
+            </section>
+          ) : null
+        ) : null}
+
+        {!isInactiveCard ? (
+          <section className="rounded-lg border border-emerald-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                  Locked / Confirmed Values
+                </p>
+                <h2 className="mt-1 text-lg font-semibold text-slate-950">
+                  Exported credential source
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Inventory, sale previews, and downloads use confirmed credentials,
+                  not the latest OCR suggestions.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {!isSaleLocked || allowLockedCredentialUpdate ? (
+                  <button
+                    className="h-10 cursor-pointer rounded-md bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                    disabled={isSubmitting || isInactiveCard}
+                    form="confirm-card-details-form"
+                    type="submit"
+                  >
+                    {isSubmitting
+                      ? "Saving..."
+                      : isSaleLocked
+                        ? "Update Confirmed Credentials"
+                        : "Confirm Card Details"}
+                  </button>
+                ) : null}
+                <button
+                  className="h-10 cursor-pointer rounded-md border border-emerald-300 bg-emerald-50 px-3 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-100"
+                  onClick={() => setShowLockedCredentials((current) => !current)}
+                  type="button"
+                >
+                  {showLockedCredentials
+                    ? "Hide locked credentials"
+                    : "Reveal locked credential details"}
+                </button>
+              </div>
+            </div>
+            <dl className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {primaryCredentialLabel}
+                </dt>
+                <dd className="mt-1 break-all font-mono text-sm font-semibold text-slate-950">
+                  {showLockedCredentials
+                    ? lockedPrimaryValue || "Not confirmed"
+                    : maskSensitiveValue(lockedPrimaryValue)}
+                </dd>
+              </div>
+              {!isRedemptionCodeOnly ? (
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Locked PIN
+                  </dt>
+                  <dd className="mt-1 break-all font-mono text-sm font-semibold text-slate-950">
+                    {showLockedCredentials
+                      ? lockedPinValue || "Not confirmed"
+                      : maskSensitiveValue(lockedPinValue)}
+                  </dd>
+                </div>
+              ) : null}
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Confirmation
+                </dt>
+                <dd className="mt-1 text-sm font-semibold text-slate-950">
+                  {giftCard.confirmed_at
+                    ? `Last updated ${formatDate(giftCard.confirmed_at)}`
+                    : "Not confirmed"}
+                </dd>
+                <dd className="mt-1 text-xs text-slate-500">
+                  Source: {sourceLabel(giftCard.confirmed_source)}
+                </dd>
+              </div>
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Export value source
+                </dt>
+                <dd className="mt-1 text-sm font-semibold text-slate-950">
+                  {sourceLabel(giftCard.export_value_source)}
+                </dd>
+              </div>
+            </dl>
+            {cardSuggestionMismatch || pinSuggestionMismatch ? (
+              <div className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                New OCR suggestion differs from confirmed value. Exports will keep
+                using the locked confirmed credential until you explicitly update it.
+              </div>
+            ) : null}
+            {isSaleLocked ? (
+              <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                <input
+                  checked={allowLockedCredentialUpdate}
+                  className="mt-1 h-4 w-4"
+                  onChange={(event) =>
+                    setAllowLockedCredentialUpdate(event.target.checked)
+                  }
+                  type="checkbox"
+                />
+                <span>
+                  <span className="block font-semibold">
+                    Update confirmed credentials for a sold card
+                  </span>
+                  <span className="mt-1 block text-amber-800">
+                    This logs an audit event because an export may already have been
+                    generated with the previous locked values.
+                  </span>
+                </span>
+              </label>
+            ) : null}
+          </section>
+        ) : null}
+
         {!isInactiveCard && (bestCardNumberCandidate || bestPinCandidate) ? (
           <section className="rounded-lg border border-cyan-200 bg-white p-4 shadow-sm">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-slate-950">
-                  Best Detected Values
+                  Current OCR Suggestions
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Saved brand templates run automatically. Debug details stay below.
+                  Suggestions come from the saved Review/OCR Image. Manual fields below
+                  remain the source of truth.
                 </p>
               </div>
               {primaryImage ? (
                 <button
                   className="h-10 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={isRescanningImage}
+                  disabled={isRescanningImage || !primaryImage.processed_image_url}
                   onClick={() => {
-                    setImageRotation(0);
                     void rescanPrimaryImage(
-                      "Saved template OCR re-run.",
-                      0,
+                      "OCR re-run on saved orientation.",
                       { preserveSavedTemplate: true },
                     );
                   }}
                   type="button"
                 >
-                  {isRescanningImage ? "Scanning..." : "Re-run Saved Template OCR"}
+                  {isRescanningImage ? "Scanning..." : "Re-run OCR on saved orientation"}
                 </button>
               ) : null}
             </div>
@@ -2705,12 +3927,14 @@ export default function GiftCardVerificationPage() {
                     <span>
                       {isUploadingImage
                         ? "Uploading..."
-                        : primaryImage
+                        : isDigitalCard
+                          ? "Upload Attachment"
+                          : primaryImage
                           ? "Replace Image"
                           : "Upload Image"}
                     </span>
                     <input
-                      accept={cardImageAccept}
+                      accept={isDigitalCard ? digitalAttachmentAccept : cardImageAccept}
                       className="sr-only"
                       disabled={isUploadingImage}
                       onChange={handleImageUpload}
@@ -2721,14 +3945,9 @@ export default function GiftCardVerificationPage() {
                     <>
                       <button
                         className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={isRescanningImage}
+                        disabled={isRescanningImage || isSavingOcrOrientation}
                         onClick={() => {
-                          const nextRotation = imageRotation - 90;
-                          setImageRotation(nextRotation);
-                          void rescanPrimaryImage(
-                            "Image rotated left. OCR re-scanned.",
-                            nextRotation,
-                          );
+                          setImageRotation((currentRotation) => currentRotation - 90);
                         }}
                         type="button"
                       >
@@ -2736,47 +3955,46 @@ export default function GiftCardVerificationPage() {
                       </button>
                       <button
                         className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={isRescanningImage}
+                        disabled={isRescanningImage || isSavingOcrOrientation}
                         onClick={() => {
-                          const nextRotation = imageRotation + 90;
-                          setImageRotation(nextRotation);
-                          void rescanPrimaryImage(
-                            "Image rotated right. OCR re-scanned.",
-                            nextRotation,
-                          );
+                          setImageRotation((currentRotation) => currentRotation + 90);
                         }}
                         type="button"
                       >
                         Rotate Right
                       </button>
                       <button
-                        className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={isRescanningImage}
+                        className="h-11 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                        disabled={isRescanningImage || isSavingOcrOrientation}
                         onClick={() => {
-                          setImageRotation(0);
+                          void setSavedOcrOrientation();
+                        }}
+                        type="button"
+                      >
+                        {isSavingOcrOrientation ? "Saving..." : "Set as OCR orientation"}
+                      </button>
+                      <button
+                        className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={isRescanningImage || !primaryImage.processed_image_url}
+                        onClick={() => {
                           void rescanPrimaryImage(
-                            "Saved template OCR re-run.",
-                            0,
+                            "OCR re-run on saved orientation.",
                             { preserveSavedTemplate: true },
                           );
                         }}
                         type="button"
                       >
-                        Re-run Saved Template OCR
+                        Re-run OCR on saved orientation
                       </button>
                       <button
                         className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={isRescanningImage}
+                        disabled={isRescanningImage || isSavingOcrOrientation}
                         onClick={() => {
                           setImageRotation(0);
-                          void rescanPrimaryImage(
-                            "Image reset. OCR re-scanned.",
-                            0,
-                          );
                         }}
                         type="button"
                       >
-                        Reset
+                        Reset Preview
                       </button>
                     </>
                   )}
@@ -2789,7 +4007,12 @@ export default function GiftCardVerificationPage() {
               ) : null}
               {isRescanningImage ? (
                 <p className="mb-3 text-sm font-medium text-slate-600">
-                  Re-scanning image...
+                  Re-running OCR on saved orientation...
+                </p>
+              ) : null}
+              {isSavingOcrOrientation ? (
+                <p className="mb-3 text-sm font-medium text-slate-600">
+                  Saving visible rotation as the OCR image...
                 </p>
               ) : null}
               {imageUploadError ? (
@@ -2801,11 +4024,11 @@ export default function GiftCardVerificationPage() {
                 <>
                   <p className="mb-2 text-xs font-medium text-slate-500">
                     {canonicalReady
-                      ? "Showing canonical OCR image for zone editing"
-                      : "Showing original upload while OCR preprocessing runs"}
+                      ? "OCR is using the saved Review/OCR Image. Zones are relative to that image only."
+                      : "OCR image not set. Rotate the upload preview, then click Set as OCR orientation."}
                     {primaryImage.processed_image_url
-                      ? ` · OCR used ${selectedOcrImageSource ?? "best"} source`
-                      : " · OCR preprocessing pending or unavailable"}
+                      ? ` · saved Review/OCR Image ready`
+                      : " · OCR and zones are locked until orientation is saved"}
                     {appliedTemplateRotation && appliedTemplateRotation !== "none"
                       ? ` · template tested at ${appliedTemplateRotation}°`
                       : ""}
@@ -2816,6 +4039,7 @@ export default function GiftCardVerificationPage() {
                     persistedCanonicalRotation !== "0"
                       ? ` · canonical image rotated ${persistedCanonicalRotation}°`
                       : ""}
+                    {orientationStatusLabel ? ` · ${orientationStatusLabel}` : ""}
                   </p>
                   <div className="mb-3 flex flex-wrap gap-2 text-xs">
                     <a
@@ -2833,69 +4057,199 @@ export default function GiftCardVerificationPage() {
                         rel="noreferrer"
                         target="_blank"
                       >
-                        Canonical OCR image
+                        Saved Review/OCR Image
                       </a>
                     ) : null}
                   </div>
-                  {canonicalReady && canonicalZoneImageUrl ? (
-                    <div className="relative flex min-h-[28rem] touch-none items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-3 sm:min-h-[34rem] md:min-h-[40rem] lg:min-h-[44rem]">
-                      <div className="relative inline-flex max-h-[78vh] max-w-full">
+                  <dl className="mb-3 grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 md:grid-cols-2">
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        Display image
+                      </dt>
+                      <dd className="break-all">
+                        {primaryImage.processed_image_url
+                          ? primaryImage.processed_image_url
+                          : primaryImage.original_image_url}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">OCR image</dt>
+                      <dd className="break-all">
+                        {primaryImage.processed_image_url ?? "Not set"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        Barcode image
+                      </dt>
+                      <dd className="break-all">
+                        {primaryImage.processed_image_url
+                          ? "Saved Review/OCR Image plus Best Buy original/crop fallbacks"
+                          : "Original upload fallback only"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        Image dimensions
+                      </dt>
+                      <dd>
+                        natural{" "}
+                        {canonicalImageSize
+                          ? `${canonicalImageSize.width} x ${canonicalImageSize.height}`
+                          : debugSavedReviewImageDimensions ?? "not loaded"}
+                        {" · "}rendered{" "}
+                        {canonicalRenderedSize
+                          ? `${canonicalRenderedSize.width} x ${canonicalRenderedSize.height}`
+                          : "not measured"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        Saved rotation
+                      </dt>
+                      <dd>{orientationStatusLabel ?? "Not set"}</dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        Template coordinate source
+                      </dt>
+                      <dd>
+                        {debugTemplateCoordinateSource ??
+                          coordinateMode}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        Card boundary
+                      </dt>
+                      <dd className="break-all">
+                        {boundaryZone
+                          ? `x ${boundaryZone.x_pct.toFixed(2)}%, y ${boundaryZone.y_pct.toFixed(2)}%, w ${boundaryZone.width_pct.toFixed(2)}%, h ${boundaryZone.height_pct.toFixed(2)}%`
+                          : debugOcrCardBoundary ?? "Not set"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        OCR zone image size
+                      </dt>
+                      <dd>{debugOcrZoneImageNaturalSize ?? "Not recorded"}</dd>
+                    </div>
+                  </dl>
+                  <div className="mb-3 grid gap-3 md:grid-cols-2">
+                    <figure className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                      <figcaption className="border-b border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">
+                        Original Upload Preview
+                        {imageRotation % 360
+                          ? ` · preview ${((imageRotation % 360) + 360) % 360}°`
+                          : ""}
+                      </figcaption>
+                      <img
+                        alt={`${giftCard.brand} original upload`}
+                        className="h-48 w-full object-contain"
+                        src={originalUploadPreviewUrl}
+                        style={{
+                          transform: `rotate(${imageRotation}deg)`,
+                        }}
+                      />
+                    </figure>
+                    <figure className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                      <figcaption className="border-b border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">
+                        Saved Review/OCR Image
+                        {orientationStatusLabel
+                          ? ` · ${orientationStatusLabel}`
+                          : ""}
+                      </figcaption>
+                      {primaryImage.processed_image_url ? (
                         <img
-                          alt={`${giftCard.brand} canonical OCR card`}
+                          alt={`${giftCard.brand} saved Review/OCR Image`}
+                          className="h-48 w-full object-contain"
+                          src={savedReviewOcrImageUrl}
+                          style={{
+                            transform: `rotate(${imageRotation}deg)`,
+                          }}
+                        />
+                      ) : (
+                        <div className="flex h-48 items-center justify-center text-sm text-slate-500">
+                          No saved Review/OCR Image yet
+                        </div>
+                      )}
+                    </figure>
+                  </div>
+                  {reviewImagePath ? (
+                    <div className="relative flex min-h-[28rem] touch-none items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-3 sm:min-h-[34rem] md:min-h-[40rem] lg:min-h-[44rem]">
+                      <div
+                        className="relative inline-block max-h-[78vh] max-w-full"
+                      >
+                        <img
+                          ref={savedReviewImageRef}
+                          alt={`${giftCard.brand} review/OCR working image`}
                           className="block h-auto max-h-[78vh] w-auto max-w-full object-contain"
                           onLoad={(event) => {
+                            const renderedRect =
+                              event.currentTarget.getBoundingClientRect();
                             setCanonicalImageSize({
                               width: event.currentTarget.naturalWidth,
                               height: event.currentTarget.naturalHeight,
                             });
+                            setCanonicalRenderedSize({
+                              width: Math.round(renderedRect.width),
+                              height: Math.round(renderedRect.height),
+                            });
                           }}
-                          src={buildUploadUrl(canonicalZoneImageUrl)}
+                          src={reviewImageUrl}
+                          style={{
+                            transform: `rotate(${imageRotation}deg)`,
+                          }}
                         />
-                      <div
-                        className="absolute inset-0 cursor-crosshair"
-                        onPointerCancel={finishZoneDraw}
-                        onPointerDown={startZoneDraw}
-                        onPointerMove={updateZoneFromPointer}
-                        onPointerUp={finishZoneDraw}
-                        ref={zoneCanvasRef}
-                      >
-                        {savedOcrZones.map((zone) => (
-                          <div
-                            className={`absolute rounded ${
-                              zone.zone_name === "card_boundary"
-                                ? "border-2 border-blue-400 bg-blue-400/10"
-                                : zone.zone_name === selectedZoneName
-                                  ? "border-2 border-orange-400 bg-orange-500/20"
-                                  : "border border-emerald-300 bg-emerald-300/10"
-                            }`}
-                            key={zone.zone_name}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setSelectedZoneName(zone.zone_name);
-                              setZoneTrainingMode("idle");
-                              setZoneForm({
-                                zone_name: zone.zone_name,
-                                zone_type: zone.zone_type,
-                                x_pct: String(zone.x_pct),
-                                y_pct: String(zone.y_pct),
-                                width_pct: String(zone.width_pct),
-                                height_pct: String(zone.height_pct),
-                                priority: String(zone.priority || 1),
-                              });
-                            }}
-                            style={{
-                              left: `${zone.x_pct}%`,
-                              top: `${zone.y_pct}%`,
-                              width: `${zone.width_pct}%`,
-                              height: `${zone.height_pct}%`,
-                            }}
-                          >
-                            <span className="absolute left-1 top-1 rounded bg-slate-950 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow">
-                              {zone.zone_name}
-                            </span>
-                          </div>
-                        ))}
-                        {isZoneDrawingEnabled ? (
+                      {canonicalReady && imageRotation % 360 === 0 ? (
+                        <div
+                          className="absolute inset-0 cursor-crosshair"
+                          onPointerCancel={finishZoneDraw}
+                          onPointerDown={startZoneDraw}
+                          onPointerMove={updateZoneFromPointer}
+                          onPointerUp={finishZoneDraw}
+                          ref={zoneCanvasRef}
+                        >
+                          {savedOcrZones.map((zone) => {
+                            const displayBox = zoneImageBox(zone, boundaryZone);
+                            return (
+                              <div
+                                className={`absolute rounded ${
+                                  zone.zone_name === "card_boundary"
+                                    ? "border-2 border-blue-400 bg-blue-400/10"
+                                    : zone.zone_name === selectedZoneName
+                                      ? "border-2 border-orange-400 bg-orange-500/20"
+                                      : "border border-emerald-300 bg-emerald-300/10"
+                                }`}
+                                key={zone.zone_name}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedZoneName(zone.zone_name);
+                                  setZoneTrainingMode("idle");
+                                  setZoneForm({
+                                    zone_name: zone.zone_name,
+                                    zone_type: zone.zone_type,
+                                    x_pct: String(zone.x_pct),
+                                    y_pct: String(zone.y_pct),
+                                    width_pct: String(zone.width_pct),
+                                    height_pct: String(zone.height_pct),
+                                    priority: String(zone.priority || 1),
+                                  });
+                                }}
+                                style={{
+                                  left: `${displayBox.x_pct}%`,
+                                  top: `${displayBox.y_pct}%`,
+                                  width: `${displayBox.width_pct}%`,
+                                  height: `${displayBox.height_pct}%`,
+                                }}
+                              >
+                                <span className="absolute left-1 top-1 rounded bg-slate-950 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow">
+                                  {zone.zone_name}
+                                </span>
+                              </div>
+                            );
+                          })}
+                          {isZoneDrawingEnabled ? (
                           <div
                             className={`absolute rounded border-2 shadow-[0_0_0_9999px_rgba(15,23,42,0.18)] ${
                               zoneTrainingMode === "boundary"
@@ -2905,10 +4259,10 @@ export default function GiftCardVerificationPage() {
                                   : "border-emerald-300 bg-emerald-300/20"
                             }`}
                             style={{
-                              left: `${currentZone.x_pct}%`,
-                              top: `${currentZone.y_pct}%`,
-                              width: `${currentZone.width_pct}%`,
-                              height: `${currentZone.height_pct}%`,
+                              left: `${currentZoneImageBox.x_pct}%`,
+                              top: `${currentZoneImageBox.y_pct}%`,
+                              width: `${currentZoneImageBox.width_pct}%`,
+                              height: `${currentZoneImageBox.height_pct}%`,
                             }}
                           >
                             <span className="absolute left-1 top-1 rounded bg-slate-950 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow">
@@ -2932,8 +4286,14 @@ export default function GiftCardVerificationPage() {
                                 />
                               ))}
                           </div>
-                        ) : null}
-                      </div>
+                          ) : null}
+                        </div>
+                      ) : imageRotation % 360 !== 0 ? (
+                        <div className="absolute inset-x-3 bottom-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900 shadow">
+                          Preview rotation is not saved yet. Click Set as OCR
+                          orientation to persist this view and reload zones.
+                        </div>
+                      ) : null}
                       </div>
                     </div>
                   ) : (
@@ -2941,18 +4301,71 @@ export default function GiftCardVerificationPage() {
                       <img
                         alt={`${giftCard.brand} original upload`}
                         className="block h-auto max-h-[70vh] w-auto max-w-full object-contain"
-                        src={buildUploadUrl(primaryImage.original_image_url)}
+                        src={originalUploadPreviewUrl}
+                        style={{
+                          transform: `rotate(${imageRotation}deg)`,
+                        }}
                       />
                     </div>
                   )}
                 </>
               ) : (
                 <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                  No image uploaded. Upload an image to review and verify this
-                  card.
+                  {isDigitalCard
+                    ? "No physical OCR image. Digital cards can be verified from manual copied credentials."
+                    : "No image uploaded. Upload an image to review and verify this card."}
                 </div>
               )}
             </div>
+
+            {supportingAttachments.length > 0 ? (
+              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <h2 className="text-lg font-semibold">Supporting Attachments</h2>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  {supportingAttachments.map((attachment) => {
+                    const purged =
+                      (attachment.retention_status ?? "active") === "purged";
+                    const attachmentUrl = buildUploadUrl(
+                      attachment.original_image_url,
+                    );
+
+                    return (
+                      <div
+                        className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                        key={attachment.id}
+                      >
+                        <p className="font-semibold text-slate-900">
+                          {attachment.original_filename ||
+                            `Attachment #${attachment.id}`}
+                        </p>
+                        <p className="mt-1 text-xs uppercase tracking-wide text-slate-500">
+                          {attachment.attachment_type?.replaceAll("_", " ") ??
+                            attachment.image_type}
+                        </p>
+                        {purged ? (
+                          <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+                            Attachment purged per retention policy
+                            {attachment.purged_at
+                              ? ` on ${formatDate(attachment.purged_at)}`
+                              : ""}
+                            .
+                          </p>
+                        ) : (
+                          <a
+                            className="mt-3 inline-flex h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                            href={attachmentUrl}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            Open / Download
+                          </a>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
 
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -2980,33 +4393,43 @@ export default function GiftCardVerificationPage() {
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
                   {receipts.map((receipt) => {
                     const receiptUrl = buildUploadUrl(receipt.image_url);
+                    const purged =
+                      (receipt.retention_status ?? "active") === "purged";
 
                     return (
                       <figure
                         className="overflow-hidden rounded-md border border-slate-200 bg-slate-50"
                         key={receipt.id}
                       >
-                        <a href={receiptUrl} target="_blank" rel="noreferrer">
-                          <Image
-                            alt={receipt.original_filename || "Purchase receipt"}
-                            className="h-40 w-full object-cover"
-                            height={160}
-                            src={receiptUrl}
-                            unoptimized
-                            width={320}
-                          />
-                        </a>
+                        {purged ? (
+                          <div className="flex h-40 items-center justify-center bg-amber-50 px-4 text-center text-sm font-medium text-amber-900">
+                            Attachment purged per retention policy
+                          </div>
+                        ) : (
+                          <a href={receiptUrl} target="_blank" rel="noreferrer">
+                            <Image
+                              alt={receipt.original_filename || "Purchase receipt"}
+                              className="h-40 w-full object-cover"
+                              height={160}
+                              src={receiptUrl}
+                              unoptimized
+                              width={320}
+                            />
+                          </a>
+                        )}
                         <figcaption className="space-y-2 p-3 text-xs text-slate-600">
                           <p className="truncate font-medium text-slate-800">
                             {receipt.original_filename || `Receipt #${receipt.id}`}
                           </p>
-                          <a
-                            className="inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 bg-white px-3 font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
-                            download
-                            href={receiptUrl}
-                          >
-                            Open / Download Receipt
-                          </a>
+                          {purged ? null : (
+                            <a
+                              className="inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 bg-white px-3 font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
+                              download
+                              href={receiptUrl}
+                            >
+                              Open / Download Receipt
+                            </a>
+                          )}
                         </figcaption>
                       </figure>
                     );
@@ -3045,6 +4468,27 @@ export default function GiftCardVerificationPage() {
                     </dd>
                   </div>
                   <div>
+                    <dt className="font-medium text-slate-500">
+                      Canonical Orientation
+                    </dt>
+                    <dd>
+                      {canonicalRotation
+                        ? `${canonicalRotation}° (${canonicalOrientationSource ?? "auto"})`
+                        : primaryImage?.canonical_rotation_degrees !== null &&
+                            primaryImage?.canonical_rotation_degrees !== undefined
+                          ? `${primaryImage.canonical_rotation_degrees}° (${
+                              primaryImage.orientation_source ?? "auto"
+                            })`
+                          : "Not recorded"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="font-medium text-slate-500">
+                      Coordinate Space
+                    </dt>
+                    <dd>{canonicalCoordinateSpace ?? "saved Review/OCR image %"}</dd>
+                  </div>
+                  <div>
                     <dt className="font-medium text-slate-500">Profile</dt>
                     <dd>{detectedOcrProfile ?? "generic"}</dd>
                   </div>
@@ -3059,6 +4503,29 @@ export default function GiftCardVerificationPage() {
                   <div>
                     <dt className="font-medium text-slate-500">OCR Source Used</dt>
                     <dd>{selectedOcrImageSource ?? "Not recorded"}</dd>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <dt className="font-medium text-slate-500">
+                      Image Routing
+                    </dt>
+                    <dd className="break-all">
+                      display: {debugDisplayImageUsed ?? primaryImage?.processed_image_url ?? "not recorded"}
+                      <br />
+                      OCR: {debugOcrImageUsed ?? primaryImage?.processed_image_url ?? "not recorded"}
+                      <br />
+                      barcode: {debugBarcodeImageUsed ?? "not recorded"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="font-medium text-slate-500">
+                      Saved Image Dimensions
+                    </dt>
+                    <dd>
+                      {debugSavedReviewImageDimensions ??
+                        (canonicalImageSize
+                          ? `${canonicalImageSize.width}x${canonicalImageSize.height}`
+                          : "Not recorded")}
+                    </dd>
                   </div>
                   <div>
                     <dt className="font-medium text-slate-500">Template/Layout</dt>
@@ -3091,6 +4558,41 @@ export default function GiftCardVerificationPage() {
                   <div className="sm:col-span-2">
                     <dt className="font-medium text-slate-500">Created</dt>
                     <dd>{formatDate(latestExtractionAttempt.created_at)}</dd>
+                  </div>
+                  <div className="sm:col-span-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <dt className="font-medium text-slate-500">
+                      Confirmed / Exported Credential Audit
+                    </dt>
+                    <dd className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <span>
+                        Confirmed:{" "}
+                        <span className="font-mono">
+                          {maskSensitiveValue(lockedPrimaryValue)}
+                        </span>
+                      </span>
+                      <span>
+                        Exported:{" "}
+                        <span className="font-mono">
+                          {maskSensitiveValue(lockedPrimaryValue)}
+                        </span>
+                      </span>
+                      <span>
+                        Last OCR:{" "}
+                        <span className="font-mono">
+                          {maskSensitiveValue(
+                            latestExtractionAttempt.extracted_card_number,
+                          )}
+                        </span>
+                      </span>
+                      <span>
+                        Mismatch:{" "}
+                        <span className="font-semibold">
+                          {cardSuggestionMismatch || pinSuggestionMismatch
+                            ? "Yes"
+                            : "No"}
+                        </span>
+                      </span>
+                    </dd>
                   </div>
                 </dl>
               ) : (
@@ -3135,6 +4637,22 @@ export default function GiftCardVerificationPage() {
                           ? `${selectedOcrRotation}°`
                           : "Not recorded"}
                       </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-500">
+                        Canonical orientation
+                      </dt>
+                      <dd>
+                        {canonicalRotation
+                          ? `${canonicalRotation}° (${canonicalOrientationSource ?? "auto"})`
+                          : "Not recorded"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-500">
+                        Orientation score
+                      </dt>
+                      <dd>{canonicalOrientationScore ?? "Not recorded"}</dd>
                     </div>
                     <div>
                       <dt className="font-semibold text-slate-500">Preprocessing</dt>
@@ -3183,6 +4701,26 @@ export default function GiftCardVerificationPage() {
                       </pre>
                     </div>
                   ) : null}
+                  {canonicalReasonSelected ? (
+                    <div className="mt-3 rounded-md border border-slate-200 bg-white p-2">
+                      <p className="text-xs font-semibold text-slate-600">
+                        Orientation Reason
+                      </p>
+                      <p className="mt-2 text-xs text-slate-700">
+                        {canonicalReasonSelected}
+                      </p>
+                    </div>
+                  ) : null}
+                  {canonicalOrientationTrials ? (
+                    <div className="mt-3 rounded-md border border-slate-200 bg-white p-2">
+                      <p className="text-xs font-semibold text-slate-600">
+                        Canonical Orientation Trials
+                      </p>
+                      <pre className="mt-2 overflow-auto rounded bg-slate-950 p-2 text-xs text-slate-100">
+                        {canonicalOrientationTrials}
+                      </pre>
+                    </div>
+                  ) : null}
                   <p className="mt-2 text-xs text-slate-500">
                     Developer view with selected profile, credential type,
                     OCR bounding-box token data, candidates, and rejected values.
@@ -3198,9 +4736,127 @@ export default function GiftCardVerificationPage() {
                   Improve recognition / set OCR zone
                 </summary>
                 <p className="mt-2 text-xs text-slate-300">
-                  Drag directly on the canonical OCR image to label credential
-                  zones. Zones are saved relative to that normalized card crop.
+                  Drag directly on the saved Review/OCR Image to label credential
+                  zones. With a card boundary, credential zones are saved relative
+                  to the physical card boundary.
                 </p>
+                {isBestBuyCard ? (
+                  <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                    <label className="block text-xs font-medium text-slate-200">
+                      Best Buy layout
+                      <select
+                        className="mt-1 h-10 w-full rounded-md border border-slate-600 bg-slate-900 px-2 text-slate-100"
+                        onChange={(event) => applyBestBuyLayout(event.target.value)}
+                        value={selectedBestBuyLayout}
+                      >
+                        {bestBuyLayoutOptions.map(([value, label]) => (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      className="h-10 rounded-md border border-slate-600 bg-slate-900 px-3 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                      onClick={useCurrentCardAsNewBestBuyLayout}
+                      type="button"
+                    >
+                      Use this card as new Best Buy layout
+                    </button>
+                    <span className="text-xs text-slate-400 sm:col-span-2">
+                      Layouts describe the printed card design. Barcode
+                      card-number detection still runs independently of the
+                      selected layout.
+                    </span>
+                    <details className="rounded-md border border-slate-700 bg-slate-900 p-3 sm:col-span-2">
+                      <summary className="cursor-pointer text-xs font-semibold text-cyan-200">
+                        Manage Best Buy layout templates
+                      </summary>
+                      <div className="mt-3 space-y-2">
+                        {normalizeBestBuyLayouts(ocrLayouts).map((layout) => {
+                          const isStandardLayout = BEST_BUY_LAYOUT_OPTIONS.some(
+                            ([layoutName]) => layoutName === layout.layout_name,
+                          );
+                          return (
+                            <div
+                              className="grid gap-2 rounded-md border border-slate-700 bg-slate-950 p-2 text-xs text-slate-200 sm:grid-cols-[minmax(0,1fr)_auto]"
+                              key={layout.layout_name}
+                            >
+                              <div>
+                                <p className="font-semibold">{layout.label}</p>
+                                <p className="mt-1 text-slate-400">
+                                  {layout.active ? "Active" : "Inactive"} ·{" "}
+                                  {layout.zones.length} zones
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  className="h-8 rounded border border-slate-600 px-2 font-semibold text-slate-100 hover:border-cyan-300"
+                                  onClick={() =>
+                                    setBestBuyLayoutActive(
+                                      layout.layout_name,
+                                      !layout.active,
+                                    )
+                                  }
+                                  type="button"
+                                >
+                                  {layout.active ? "Deactivate" : "Activate"}
+                                </button>
+                                {!isStandardLayout ? (
+                                  <button
+                                    className="h-8 rounded border border-red-400/60 px-2 font-semibold text-red-200 hover:bg-red-950"
+                                    onClick={() =>
+                                      deleteBestBuyLayout(layout.layout_name)
+                                    }
+                                    type="button"
+                                  >
+                                    Delete
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="mt-3 text-xs text-slate-400">
+                        Save template after changing layout visibility. Inactive
+                        templates are recoverable here but hidden from the normal
+                        verification dropdown.
+                      </p>
+                    </details>
+                  </div>
+                ) : null}
+                <dl className="mt-3 grid gap-2 rounded-md border border-slate-800 bg-slate-900 p-3 text-xs text-slate-300 sm:grid-cols-3">
+                  <div>
+                    <dt className="font-semibold text-slate-100">
+                      Coordinate mode
+                    </dt>
+                    <dd>{coordinateMode}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-slate-100">
+                      Selected layout
+                    </dt>
+                    <dd>
+                      {selectedTemplateLayout
+                        ? bestBuyLayoutLabel(selectedTemplateLayout)
+                        : selectedBestBuyLayout === "auto"
+                          ? "Auto"
+                          : bestBuyLayoutLabel(selectedBestBuyLayout)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-slate-100">
+                      Layout confidence
+                    </dt>
+                    <dd>{selectedTemplateConfidence ?? "Not scored yet"}</dd>
+                  </div>
+                </dl>
+                {templateMismatch === "yes" ? (
+                  <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                    Template mismatch — choose another layout or redraw zones.
+                  </p>
+                ) : null}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   <button
                     className={`h-10 rounded-md border px-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
@@ -3247,8 +4903,8 @@ export default function GiftCardVerificationPage() {
                 </div>
                 {!canonicalReady ? (
                   <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
-                    Canonical OCR image unavailable. Zone training and template
-                    OCR stay locked until preprocessing reaches canonical ready.
+                    Saved Review/OCR Image unavailable. Zone training and template
+                    OCR stay locked until an OCR orientation is saved.
                   </p>
                 ) : null}
                 <div className="mt-3 grid gap-2 text-xs sm:grid-cols-5">
@@ -3365,6 +5021,78 @@ export default function GiftCardVerificationPage() {
                       </label>
                     ),
                   )}
+                </div>
+                <div className="mt-3 rounded-md border border-slate-700 bg-slate-900 p-2 text-xs text-slate-200">
+                  <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-100">
+                        Selected zone alignment
+                      </p>
+                      <p className="mt-1 text-slate-400">
+                        Basis: {coordinateMode}
+                        {boundaryZone ? (
+                          <>
+                            {" "}· boundary x {boundaryZone.x_pct.toFixed(2)}, y{" "}
+                            {boundaryZone.y_pct.toFixed(2)}, w{" "}
+                            {boundaryZone.width_pct.toFixed(2)}, h{" "}
+                            {boundaryZone.height_pct.toFixed(2)}
+                          </>
+                        ) : (
+                          " · no card boundary"
+                        )}
+                      </p>
+                      <p className="mt-1 font-mono text-[11px] text-slate-300">
+                        zone pct x {currentZone.x_pct.toFixed(2)}, y{" "}
+                        {currentZone.y_pct.toFixed(2)}, w{" "}
+                        {currentZone.width_pct.toFixed(2)}, h{" "}
+                        {currentZone.height_pct.toFixed(2)}
+                      </p>
+                      <p className="mt-1 font-mono text-[11px] text-slate-300">
+                        image pct x {currentZoneImageBox.x_pct.toFixed(2)}, y{" "}
+                        {currentZoneImageBox.y_pct.toFixed(2)}, w{" "}
+                        {currentZoneImageBox.width_pct.toFixed(2)}, h{" "}
+                        {currentZoneImageBox.height_pct.toFixed(2)}
+                      </p>
+                      <p className="mt-1 font-mono text-[11px] text-slate-300">
+                        natural px{" "}
+                        {selectedZonePixelBox
+                          ? `x ${selectedZonePixelBox.x}, y ${selectedZonePixelBox.y}, w ${selectedZonePixelBox.width}, h ${selectedZonePixelBox.height}`
+                          : "not measured"}
+                      </p>
+                      <p className="mt-1 font-mono text-[11px] text-slate-300">
+                        rendered px{" "}
+                        {selectedZoneRenderedBox
+                          ? `x ${selectedZoneRenderedBox.x}, y ${selectedZoneRenderedBox.y}, w ${selectedZoneRenderedBox.width}, h ${selectedZoneRenderedBox.height}`
+                          : "not measured"}
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1 sm:min-w-[20rem]">
+                      {[
+                        ["Left", "x_pct", -0.5],
+                        ["Right", "x_pct", 0.5],
+                        ["Up", "y_pct", -0.5],
+                        ["Down", "y_pct", 0.5],
+                        ["Narrow", "width_pct", -0.5],
+                        ["Widen", "width_pct", 0.5],
+                        ["Shorter", "height_pct", -0.5],
+                        ["Taller", "height_pct", 0.5],
+                      ].map(([label, field, delta]) => (
+                        <button
+                          className="h-8 rounded border border-slate-600 bg-slate-950 px-2 text-[11px] font-semibold text-slate-100 transition hover:border-cyan-300 hover:text-cyan-200"
+                          key={`${field}-${delta}`}
+                          onClick={() =>
+                            adjustCurrentZone(
+                              field as "x_pct" | "y_pct" | "width_pct" | "height_pct",
+                              delta as number,
+                            )
+                          }
+                          type="button"
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
                 {savedOcrZones.length > 0 ? (
                   <div className="mt-3 rounded-md border border-slate-700 bg-slate-900 p-2">
@@ -3485,7 +5213,9 @@ export default function GiftCardVerificationPage() {
                         </div>
                         <div className="rounded-md border border-slate-700 bg-slate-950 p-2">
                           <p className="mb-2 text-xs font-semibold text-slate-100">
-                            Padded crop sent to OCR
+                            {currentZone.zone_type === "barcode"
+                              ? "Padded crop sent to barcode decoder"
+                              : "Padded crop sent to OCR"}
                           </p>
                           <img
                             alt="Padded OCR crop"
@@ -3501,13 +5231,17 @@ export default function GiftCardVerificationPage() {
                       </p>
                     ) : (
                       <p className="mb-3 rounded-md border border-emerald-400/40 bg-emerald-950/30 px-3 py-2 font-semibold text-emerald-100">
-                        Selected preview matches the backend zone. OCR uses the
-                        padded crop for extra context.
+                        Selected preview matches the backend zone.{" "}
+                        {currentZone.zone_type === "barcode"
+                          ? "Barcode decoding tests the exact and padded crops across rotations."
+                          : "OCR uses the padded crop for extra context."}
                       </p>
                     )}
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                       <p className="font-semibold text-slate-100">
-                        Zone OCR Result
+                        {currentZone.zone_type === "barcode"
+                          ? "Zone Barcode Result"
+                          : "Zone OCR Result"}
                       </p>
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="text-slate-300">
@@ -3610,6 +5344,38 @@ export default function GiftCardVerificationPage() {
                     <pre className="mt-2 max-h-28 overflow-auto rounded bg-slate-950 p-2 text-slate-100">
                       {zoneTestResult.raw_text || "No text detected."}
                     </pre>
+                    {zoneTestResult.barcode_attempts.length > 0 ? (
+                      <div className="mt-3 rounded-md border border-slate-700 bg-slate-950 p-2">
+                        <p className="font-semibold text-slate-100">
+                          Barcode decode attempts
+                        </p>
+                        <div className="mt-2 space-y-2">
+                          {zoneTestResult.barcode_attempts.map((attempt, index) => (
+                            <div
+                              className={`rounded border px-2 py-1 ${
+                                attempt.accepted
+                                  ? "border-emerald-500/40 bg-emerald-950/30"
+                                  : "border-slate-800 bg-slate-900"
+                              }`}
+                              key={`${attempt.source}-${attempt.zone_name ?? ""}-${attempt.crop ?? ""}-${attempt.rotation}-${index}`}
+                            >
+                              <p className="font-mono text-xs text-slate-100">
+                                {attempt.decoded_value || "No barcode decoded"}
+                              </p>
+                              <p className="mt-1 text-[11px] text-slate-300">
+                                {attempt.source}
+                                {attempt.zone_name ? ` · ${attempt.zone_name}` : ""} ·{" "}
+                                {attempt.crop ?? "crop"} · rotation {attempt.rotation}
+                                ° · {attempt.barcode_type || "none"} ·{" "}
+                                {attempt.accepted
+                                  ? "accepted"
+                                  : attempt.rejected_reason || "rejected"}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                     {zonePromotedCandidates.length > 0 ? (
                       <div className="mt-3 rounded-md border border-cyan-400/30 bg-cyan-950/20 p-2">
                         <p className="text-xs font-semibold uppercase tracking-wide text-cyan-100">
@@ -3755,6 +5521,11 @@ export default function GiftCardVerificationPage() {
                             </details>
                           ))}
                         </div>
+                      </div>
+                    ) : currentZone.zone_type === "barcode" ? (
+                      <div className="mt-3 rounded-md border border-slate-700 bg-slate-950 p-2 text-slate-300">
+                        Barcode zones use the barcode decoder instead of
+                        Tesseract OCR passes.
                       </div>
                     ) : null}
                     {zoneTestResult.best_candidate ? (
@@ -4014,6 +5785,7 @@ export default function GiftCardVerificationPage() {
                         ...currentForm,
                         card_number: bestCardNumberCandidate.value,
                         pin: "",
+                        confirmed_source: bestCardNumberCandidate.source || "OCR",
                       }))
                     }
                     type="button"
@@ -4058,6 +5830,10 @@ export default function GiftCardVerificationPage() {
                         ...currentForm,
                         card_number: bestCardNumberCandidate.value,
                         pin: bestPinCandidate.value,
+                        confirmed_source:
+                          bestCardNumberCandidate.source === bestPinCandidate.source
+                            ? bestCardNumberCandidate.source || "suggested_pair"
+                            : "suggested_pair",
                       }))
                     }
                     type="button"
@@ -4108,6 +5884,7 @@ export default function GiftCardVerificationPage() {
                       setForm((currentForm) => ({
                         ...currentForm,
                         card_number: bestCardNumberCandidate.value,
+                        confirmed_source: bestCardNumberCandidate.source || "OCR",
                       }))
                     }
                     type="button"
@@ -4131,6 +5908,7 @@ export default function GiftCardVerificationPage() {
                           setForm((currentForm) => ({
                             ...currentForm,
                             card_number: candidate.value,
+                            confirmed_source: candidate.source || "OCR",
                           }))
                         }
                       />
@@ -4166,6 +5944,7 @@ export default function GiftCardVerificationPage() {
                       setForm((currentForm) => ({
                         ...currentForm,
                         pin: bestPinCandidate.value,
+                        confirmed_source: bestPinCandidate.source || "OCR",
                       }))
                     }
                     type="button"
@@ -4188,6 +5967,7 @@ export default function GiftCardVerificationPage() {
                             setForm((currentForm) => ({
                               ...currentForm,
                               pin: candidate.value,
+                              confirmed_source: candidate.source || "OCR",
                             }))
                           }
                         />
@@ -4206,6 +5986,7 @@ export default function GiftCardVerificationPage() {
                   setForm((currentForm) => ({
                     ...currentForm,
                     card_number: event.target.value,
+                    confirmed_source: "manual",
                   }))
                 }
                 required
@@ -4221,9 +6002,10 @@ export default function GiftCardVerificationPage() {
                   className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                   onChange={(event) =>
                     setForm((currentForm) => ({
-                      ...currentForm,
-                      pin: event.target.value,
-                    }))
+                    ...currentForm,
+                    pin: event.target.value,
+                    confirmed_source: "manual",
+                  }))
                   }
                   type="text"
                   value={form.pin}
@@ -4354,14 +6136,20 @@ export default function GiftCardVerificationPage() {
 
             <button
               className="h-12 w-full rounded-md bg-slate-950 px-4 font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-              disabled={isSubmitting || isSaleLocked || isInactiveCard}
+              disabled={
+                isSubmitting ||
+                (isSaleLocked && !allowLockedCredentialUpdate) ||
+                isInactiveCard
+              }
               type="submit"
             >
-              {isSaleLocked || isInactiveCard
+              {isInactiveCard
                 ? "Inactive Card"
                 : isSubmitting
                   ? "Saving..."
-                  : "Confirm Card Details"}
+                  : isSaleLocked
+                    ? "Update Confirmed Credentials"
+                    : "Confirm Card Details"}
             </button>
           </form>
         </section>

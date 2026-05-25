@@ -1,7 +1,6 @@
 import hashlib
 import json
 import os
-import shutil
 from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
@@ -27,13 +26,18 @@ from app.models.receipt import Receipt
 from app.models.sale import Sale
 from app.models.sale_fuel_account import SaleFuelAccount
 from app.models.sale_gift_card import SaleGiftCard
+from app.services.upload_storage import (
+    physical_upload_path,
+    upload_dir,
+)
+from app.services.storage import normalize_object_key, object_key_for, storage
 
 
 router = APIRouter(prefix="/data-transfer", tags=["data-transfer"])
 
 EXPORT_VERSION = "1.0"
-CARD_IMAGE_DIR = Path("uploads/card-images")
-RECEIPT_DIR = Path("uploads/receipts")
+CARD_IMAGE_DIR = upload_dir("card-images")
+RECEIPT_DIR = upload_dir("receipts")
 
 
 def json_default(value: Any):
@@ -86,7 +90,15 @@ def local_upload_path(path_or_url: str | None) -> Path | None:
         else path_or_url
     )
 
-    for candidate in [Path(parsed_path), Path(parsed_path.lstrip("/"))]:
+    upload_candidate = physical_upload_path(path_or_url)
+    candidates = [
+        upload_candidate,
+        Path(parsed_path),
+        Path(parsed_path.lstrip("/")),
+    ]
+    for candidate in candidates:
+        if candidate is None:
+            continue
         if candidate.exists() and candidate.is_file():
             return candidate
 
@@ -99,15 +111,21 @@ def archive_file(
     prefix: str,
     source_id: int,
 ) -> str | None:
-    source_path = local_upload_path(path_or_url)
-
-    if source_path is None:
+    if not path_or_url:
         return None
 
-    extension = source_path.suffix or ".jpg"
+    object_key = normalize_object_key(path_or_url)
+    extension = Path(object_key).suffix or ".jpg"
     archive_name = f"{prefix}/{source_id}{extension}"
-    zip_file.write(source_path, archive_name)
-    return archive_name
+    try:
+        zip_file.writestr(archive_name, storage.read(object_key))
+        return archive_name
+    except Exception:
+        source_path = local_upload_path(path_or_url)
+        if source_path is None:
+            return None
+        zip_file.write(source_path, archive_name)
+        return archive_name
 
 
 def package_json(payload: dict) -> bytes:
@@ -393,12 +411,15 @@ def copy_archive_file(zip_file: ZipFile, archive_name: str, destination_dir: Pat
     if archive_name not in zip_file.namelist():
         return None
 
-    destination_dir.mkdir(parents=True, exist_ok=True)
     extension = Path(archive_name).suffix or ".jpg"
-    destination = destination_dir / f"{uuid4()}{extension}"
-    with zip_file.open(archive_name) as source, open(destination, "wb") as target:
-        shutil.copyfileobj(source, target)
-    return str(destination)
+    filename = f"{uuid4()}{extension}"
+    with zip_file.open(archive_name) as source:
+        stored = storage.save(
+            object_key=object_key_for(destination_dir.name, filename),
+            data=source.read(),
+            original_filename=Path(archive_name).name,
+        )
+    return storage.generate_view_url(stored.object_key)
 
 
 def find_duplicate_purchase(db: Session, purchase: dict) -> PurchaseBatch | None:
@@ -491,6 +512,12 @@ async def apply_transfer(file: UploadFile = File(...), allow_duplicates: bool = 
                 status=source.get("status") or "NEEDS_VERIFICATION",
                 card_number_encrypted=source.get("card_number_encrypted"),
                 pin_encrypted=source.get("pin_encrypted"),
+                confirmed_card_number=source.get("confirmed_card_number")
+                or source.get("card_number_encrypted"),
+                confirmed_pin=source.get("confirmed_pin") or source.get("pin_encrypted"),
+                confirmed_redemption_code=source.get("confirmed_redemption_code"),
+                confirmed_at=parse_datetime(source.get("confirmed_at")),
+                confirmed_source=source.get("confirmed_source"),
                 sold_to=source.get("sold_to"),
                 sold_date=parse_date(source.get("sold_date")),
                 sale_price=source.get("sale_price"),

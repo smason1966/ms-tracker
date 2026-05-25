@@ -212,7 +212,7 @@ export default function PurchaseDetailPage() {
 
     const purchaseTotalPaid =
       purchase?.purchase_total_paid === null ||
-      purchase?.purchase_total_paid === undefined
+        purchase?.purchase_total_paid === undefined
         ? null
         : Number(purchase.purchase_total_paid);
 
@@ -1159,11 +1159,10 @@ export default function PurchaseDetailPage() {
               </div>
 
               <label
-                className={`inline-flex h-10 cursor-pointer items-center rounded-md border border-slate-300 px-4 text-sm font-medium transition ${
-                  isUploadingReceipt
+                className={`inline-flex h-10 cursor-pointer items-center rounded-md border border-slate-300 px-4 text-sm font-medium transition ${isUploadingReceipt
                     ? "cursor-not-allowed bg-slate-100 text-slate-400"
                     : "text-slate-700 hover:bg-slate-100"
-                }`}
+                  }`}
               >
                 <span>
                   {isUploadingReceipt ? "Uploading..." : "Upload Receipt"}
@@ -1371,11 +1370,10 @@ export default function PurchaseDetailPage() {
                       </td>
                       <td className="whitespace-nowrap px-6 py-4">
                         <Link
-                          className={`inline-flex h-9 items-center rounded-md px-4 text-xs font-semibold text-white transition ${
-                            giftCard.status === "VERIFIED_AVAILABLE"
+                          className={`inline-flex h-9 items-center rounded-md px-4 text-xs font-semibold text-white transition ${giftCard.status === "VERIFIED_AVAILABLE"
                               ? "bg-emerald-700 hover:bg-emerald-800"
                               : "bg-red-700 hover:bg-red-800"
-                          }`}
+                            }`}
                           href={`/gift-cards/${giftCard.id}/verify?returnTo=/purchases/${purchaseId}`}
                         >
                           {giftCard.status === "VERIFIED_AVAILABLE"

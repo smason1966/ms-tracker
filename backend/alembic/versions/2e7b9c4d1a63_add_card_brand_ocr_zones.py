@@ -8,7 +8,6 @@ Create Date: 2026-05-23 00:00:00.000000
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 
 revision: str = "2e7b9c4d1a63"
@@ -18,15 +17,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "card_brands",
-        sa.Column("ocr_orientation_preference", sa.String(length=30), nullable=True),
+    op.execute(
+        "ALTER TABLE card_brands "
+        "ADD COLUMN IF NOT EXISTS ocr_orientation_preference VARCHAR(30)"
     )
-    op.add_column(
-        "card_brands",
-        sa.Column("credential_type", sa.String(length=80), nullable=True),
+    op.execute(
+        "ALTER TABLE card_brands "
+        "ADD COLUMN IF NOT EXISTS credential_type VARCHAR(80)"
     )
-    op.add_column("card_brands", sa.Column("ocr_zones", sa.Text(), nullable=True))
+    op.execute("ALTER TABLE card_brands ADD COLUMN IF NOT EXISTS ocr_zones TEXT")
 
 
 def downgrade() -> None:

@@ -13,12 +13,18 @@ class GiftCard(Base):
     purchase_batch_id: Mapped[int] = mapped_column(ForeignKey("purchase_batches.id"), nullable=False)
 
     brand: Mapped[str] = mapped_column(String(100), nullable=False)
+    card_source: Mapped[str] = mapped_column(String(50), default="physical", nullable=False)
     face_value: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     acquisition_cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="NEEDS_VERIFICATION", nullable=False)
 
     card_number_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     pin_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confirmed_card_number: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confirmed_pin: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confirmed_redemption_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    confirmed_source: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     verified_balance: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2),
@@ -45,6 +51,7 @@ class GiftCard(Base):
     detected_pin: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    digital_source_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     sold_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sold_date: Mapped[date | None] = mapped_column(Date, nullable=True)

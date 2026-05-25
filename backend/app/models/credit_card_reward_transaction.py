@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -36,10 +36,21 @@ class CreditCardRewardTransaction(Base):
         index=True,
         nullable=True,
     )
+    matched_rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("credit_card_reward_rules.id"),
+        nullable=True,
+    )
     purchase_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
     qualifying_spend: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     multiplier: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
     rewards_earned: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    reward_type: Mapped[str] = mapped_column(String(50), default="points", nullable=False)
+    points_earned: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=0, nullable=False)
+    cashback_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    statement_credit_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    purchase_discount_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    effective_savings_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    priority: Mapped[int | None] = mapped_column(Integer, nullable=True)
     calculation_source: Mapped[str] = mapped_column(String(80), nullable=False)
     credit_card_product_snapshot: Mapped[str | None] = mapped_column(String(160), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

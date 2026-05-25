@@ -338,12 +338,12 @@ export default function DashboardPage() {
                 value={formatCurrency(summary.range_total_purchases)}
               />
               <MetricCard
-                href="/sales"
-                label="Sales in Range"
+                href="/sales?date_range=active"
+                label="Gross Sales in Range"
                 value={formatCurrency(summary.range_total_sales)}
               />
               <MetricCard
-                href="/sales"
+                href="/sales?focus=profit"
                 label="Profit in Range"
                 tone={Number(summary.range_profit) >= 0 ? "green" : "red"}
                 value={formatCurrency(summary.range_profit)}
@@ -358,42 +358,42 @@ export default function DashboardPage() {
                 )}
               />
               <MetricCard
-                href="/inventory"
+                href="/inventory?status=available"
                 label="Available Inventory Face Value"
                 value={formatCurrency(
                   summary.total_available_inventory_face_value,
                 )}
               />
               <MetricCard
-                href="/inventory"
+                href="/inventory?status=available"
                 label="Total Card Acquisition Cost"
                 value={formatCurrency(summary.total_card_acquisition_cost)}
               />
               <MetricCard
-                href="/inventory"
+                href="/inventory?status=available"
                 label="Available Acquisition Cost"
                 value={formatCurrency(summary.available_acquisition_cost)}
               />
               <MetricCard
-                href="/inventory"
+                href="/inventory?status=needs_verification"
                 label="Pending Verification Face Value"
                 tone={summary.pending_verification_count > 0 ? "yellow" : "default"}
                 value={formatCurrency(summary.pending_verification_face_value)}
               />
               <MetricCard
-                href="/inventory"
+                href="/inventory?status=needs_verification"
                 label="Pending Verification Count"
                 tone={summary.pending_verification_count > 0 ? "yellow" : "default"}
                 value={formatNumber(summary.pending_verification_count)}
               />
               <MetricCard
-                href="/inventory"
+                href="/sales?status=awaiting_payment"
                 label="Awaiting Payment Total"
                 tone={summary.overdue_payment_count > 0 ? "red" : "yellow"}
                 value={formatCurrency(summary.awaiting_payment_total)}
               />
               <MetricCard
-                href="/inventory"
+                href="/sales?status=awaiting_payment&focus=profit"
                 label="Awaiting Payment Expected Profit"
                 tone={
                   Number(summary.awaiting_payment_expected_profit) >= 0
@@ -403,51 +403,51 @@ export default function DashboardPage() {
                 value={formatCurrency(summary.awaiting_payment_expected_profit)}
               />
               <MetricCard
-                href="/inventory"
+                href="/sales?status=settled"
                 label="Settled Revenue"
                 tone="green"
                 value={formatCurrency(summary.settled_revenue)}
               />
               <MetricCard
-                href="/inventory"
+                href="/sales?status=settled&focus=profit"
                 label="Realized Profit"
                 tone={Number(summary.realized_profit) >= 0 ? "green" : "red"}
                 value={formatCurrency(summary.realized_profit)}
               />
               <MetricCard
-                href="/inventory"
+                href="/inventory?status=available"
                 label="Unsold Inventory Count"
                 value={formatNumber(summary.unsold_inventory_count)}
               />
               <MetricCard
-                href="/inventory"
+                href="/sales?status=awaiting_payment"
                 label="Awaiting Payment Count"
                 value={formatNumber(summary.awaiting_payment_count)}
               />
               <MetricCard
-                href="/inventory"
+                href="/sales?status=awaiting_payment"
                 label="Overdue Payment Count"
                 tone={summary.overdue_payment_count > 0 ? "red" : "default"}
                 value={formatNumber(summary.overdue_payment_count)}
               />
               <MetricCard
-                href="/fuel-accounts"
+                href="/fuel-accounts?status=available"
                 label="Fuel Points Available"
                 value={formatNumber(summary.fuel_points_available)}
               />
               <MetricCard
-                href="/fuel-accounts"
+                href="/fuel-accounts?filter=near_target"
                 label="Fuel Accounts Near Target"
                 tone={summary.fuel_accounts_near_target > 0 ? "green" : "default"}
                 value={formatNumber(summary.fuel_accounts_near_target)}
               />
               <MetricCard
-                href="/credit-cards"
+                href="/credit-cards?focus=utilization"
                 label="Credit Card Estimated Balances"
                 value={formatCurrency(summary.credit_card_estimated_balances)}
               />
               <MetricCard
-                href="/credit-cards"
+                href="/credit-cards?filter=utilization_warning"
                 label="Credit Card Utilization Warnings"
                 tone={
                   summary.credit_card_utilization_warnings > 0
@@ -565,7 +565,7 @@ export default function DashboardPage() {
             <section className="grid gap-4 lg:grid-cols-3">
               <WarningPanel
                 emptyText="No overdue payouts."
-                href="/inventory"
+                href="/sales?status=awaiting_payment"
                 title="Overdue Payouts"
                 tone={summary.warnings.overdue_payments.length > 0 ? "red" : "default"}
               >
@@ -585,7 +585,7 @@ export default function DashboardPage() {
 
               <WarningPanel
                 emptyText="No fuel expiration warnings."
-                href="/fuel-accounts"
+                href="/fuel-accounts?filter=expiring"
                 title="Fuel Expiration"
                 tone={
                   summary.warnings.fuel_accounts_near_expiration.length > 0
@@ -608,7 +608,7 @@ export default function DashboardPage() {
 
               <WarningPanel
                 emptyText="No high utilization cards."
-                href="/credit-cards"
+                href="/credit-cards?filter=utilization_warning"
                 title="Credit Exposure"
                 tone={
                   summary.warnings.high_utilization_credit_cards.length > 0

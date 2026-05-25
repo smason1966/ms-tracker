@@ -10,6 +10,7 @@ type Buyer = {
   name: string;
   active: boolean;
   default_payout_rate: string | number | null;
+  default_payout_days?: number | null;
   default_payment_account_id: number | null;
   card_export_format: string | null;
   fuel_export_format: string | null;
@@ -37,6 +38,11 @@ type GiftCard = {
   status: string;
   card_number_encrypted: string | null;
   pin_encrypted: string | null;
+  confirmed_card_number?: string | null;
+  confirmed_pin?: string | null;
+  confirmed_redemption_code?: string | null;
+  confirmed_source?: string | null;
+  export_value_source?: string | null;
 };
 
 type FuelAccount = {
@@ -60,12 +66,33 @@ type CreatedSale = {
   id: number;
   buyer_name: string | null;
   expected_payout: string | number;
+  expected_payment_date?: string | null;
   gift_cards: GiftCard[];
   fuel_accounts: FuelAccount[];
 };
 
 function todayString() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function datePlusDays(dateString: string, days: number) {
+  const date = new Date(`${dateString}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function buyerDefaultExpectedPaymentDate(buyer: Buyer | null, soldDate: string) {
+  if (!buyer || buyer.default_payout_days === null || buyer.default_payout_days === undefined) {
+    return "";
+  }
+
+  const defaultDays = Number(buyer?.default_payout_days);
+
+  if (!Number.isFinite(defaultDays)) {
+    return "";
+  }
+
+  return datePlusDays(soldDate, defaultDays);
 }
 
 function formatCurrency(value: string | number | null) {
@@ -207,6 +234,9 @@ function cardExportValues(card: GiftCard) {
     face_value: String(card.face_value),
     card_number: cardNumber,
     pin,
+    redemption_code: card.confirmed_redemption_code ?? "",
+    confirmed_source: card.confirmed_source ?? "",
+    export_value_source: card.export_value_source ?? "confirmed_credentials",
     card_id: String(card.id),
     gift_card_id: String(card.id),
     card_number_last4: cardNumber.slice(-4),
@@ -364,6 +394,7 @@ export default function NewSalePage() {
   const [buyerId, setBuyerId] = useState("");
   const [paymentAccountId, setPaymentAccountId] = useState("");
   const [soldDate, setSoldDate] = useState(todayString());
+  const [expectedPaymentDate, setExpectedPaymentDate] = useState("");
   const [cardPayoutRate, setCardPayoutRate] = useState("100");
   const [fuelRatePer1000, setFuelRatePer1000] = useState("");
   const [notes, setNotes] = useState("");
@@ -516,6 +547,21 @@ export default function NewSalePage() {
         ? ""
         : String(nextBuyer.default_payment_account_id),
     );
+    setExpectedPaymentDate(
+      buyerDefaultExpectedPaymentDate(nextBuyer, soldDate),
+    );
+  }
+
+  function handleSoldDateChange(nextSoldDate: string) {
+    setSoldDate(nextSoldDate);
+    if (
+      selectedBuyer?.default_payout_days !== null &&
+      selectedBuyer?.default_payout_days !== undefined
+    ) {
+      setExpectedPaymentDate(
+        buyerDefaultExpectedPaymentDate(selectedBuyer, nextSoldDate),
+      );
+    }
   }
 
   function toggleCard(cardId: number) {
@@ -599,6 +645,7 @@ export default function NewSalePage() {
       const payload = {
         buyer_id: Number(buyerId),
         sold_date: soldDate,
+        expected_payment_date: expectedPaymentDate || null,
         payment_account_id:
           paymentAccountId === "" ? null : Number(paymentAccountId),
         card_payout_rate: cardPayoutRate,
@@ -639,6 +686,7 @@ export default function NewSalePage() {
       setSelectedCardIds([]);
       setFuelSelections([]);
       setPaymentAccountId("");
+      setExpectedPaymentDate("");
       setNotes("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create sale.");
@@ -703,6 +751,9 @@ export default function NewSalePage() {
             <p className="mt-1 text-sm text-emerald-900">
               {createdSale.buyer_name} ·{" "}
               {formatCurrency(createdSale.expected_payout)}
+              {createdSale.expected_payment_date
+                ? ` · Expected payment ${createdSale.expected_payment_date}`
+                : ""}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <a
@@ -750,11 +801,25 @@ export default function NewSalePage() {
                     <span>Sold Date</span>
                     <input
                       className="h-11 w-full rounded-md border border-slate-300 px-3"
-                      onChange={(event) => setSoldDate(event.target.value)}
+                      onChange={(event) => handleSoldDateChange(event.target.value)}
                       required
                       type="date"
                       value={soldDate}
                     />
+                  </label>
+                  <label className="block space-y-2 text-sm font-medium text-slate-700">
+                    <span>Expected Payment Date</span>
+                    <input
+                      className="h-11 w-full rounded-md border border-slate-300 px-3"
+                      onChange={(event) =>
+                        setExpectedPaymentDate(event.target.value)
+                      }
+                      type="date"
+                      value={expectedPaymentDate}
+                    />
+                    <p className="text-xs text-slate-500">
+                      Leave blank to use the buyer default.
+                    </p>
                   </label>
                   <label className="block space-y-2 text-sm font-medium text-slate-700">
                     <span>Expected Payment Account</span>
@@ -863,6 +928,10 @@ export default function NewSalePage() {
                     <SummaryRow label="Fuel payout" value="Included in bundle" />
                   ) : null}
                   <SummaryRow label="Total expected payout" value={formatCurrency(totalExpectedPayout)} />
+                  <SummaryRow
+                    label="Expected payment"
+                    value={expectedPaymentDate || "Buyer default"}
+                  />
                 </dl>
                 <button
                   className="mt-4 h-11 w-full rounded-md bg-slate-950 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"

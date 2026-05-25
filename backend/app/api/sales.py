@@ -26,6 +26,8 @@ from app.models.sale_event import SaleEvent
 from app.models.sale_fuel_account import SaleFuelAccount
 from app.models.sale_gift_card import SaleGiftCard
 from app.services.operational_queues import get_awaiting_payment_sales
+from app.services.upload_storage import physical_upload_path
+from app.services.storage import normalize_object_key, storage
 
 
 router = APIRouter(prefix="/sales", tags=["sales"])
@@ -172,11 +174,14 @@ def local_upload_path(path_or_url: str | None) -> Path | None:
         else path_or_url
     )
     candidates = [
+        physical_upload_path(path_or_url),
         Path(parsed_path),
         Path(parsed_path.lstrip("/")),
     ]
 
     for candidate in candidates:
+        if candidate is None:
+            continue
         if candidate.exists() and candidate.is_file():
             return candidate
 
@@ -240,7 +245,7 @@ def grouped_cards_by_brand(cards: list[GiftCard]) -> dict[str, list[GiftCard]]:
 
 
 def card_image_archive_stem(card: GiftCard) -> str:
-    card_last4 = ending(card.card_number_encrypted)
+    card_last4 = ending(locked_card_number(card))
     parts = [
         clean_filename_part(card.brand),
         clean_filename_part(card.face_value),
@@ -312,7 +317,7 @@ def archive_text(
 def archive_file(
     archive: ZipFile,
     used_archive_names: set[str],
-    source_path: Path,
+    source_path: Path | str,
     base_path: str,
     stem: str,
     extension: str,
@@ -322,7 +327,10 @@ def archive_file(
         f"{base_path}/{stem}" if base_path else stem,
         extension,
     )
-    archive.write(source_path, archive_name)
+    try:
+        archive.writestr(archive_name, storage.read(normalize_object_key(str(source_path))))
+    except Exception:
+        archive.write(source_path, archive_name)
     return archive_name
 
 
@@ -360,17 +368,22 @@ def render_asset_export(
 
 
 def card_export_values(card: GiftCard) -> dict[str, str]:
+    card_number = locked_card_number(card)
+    pin = locked_pin(card)
     return {
         "brand": card.brand,
         "face_value": str(card.face_value),
-        "card_number": card.card_number_encrypted or "",
-        "pin": card.pin_encrypted or "",
+        "card_number": card_number,
+        "pin": pin,
+        "redemption_code": card.confirmed_redemption_code or "",
+        "confirmed_source": card.confirmed_source or "",
+        "export_value_source": "confirmed_credentials" if card_number else "unconfirmed",
         "card_id": str(card.id),
         "gift_card_id": str(card.id),
         "purchase_id": str(card.purchase_batch_id),
         "purchase_batch_id": str(card.purchase_batch_id),
-        "card_number_last4": ending(card.card_number_encrypted) or "",
-        "pin_last4": ending(card.pin_encrypted) or "",
+        "card_number_last4": ending(card_number) or "",
+        "pin_last4": ending(pin) or "",
     }
 
 
@@ -378,7 +391,7 @@ def card_export_sort_key(card: GiftCard) -> tuple[str, Decimal, str]:
     return (
         (card.brand or "Unknown Brand").lower(),
         -to_decimal(card.face_value),
-        card.card_number_encrypted or "",
+        locked_card_number(card),
     )
 
 
@@ -633,6 +646,19 @@ def serialize_payment_account_summary(account: PaymentAccount | None) -> dict | 
     }
 
 
+def status_label(status: str) -> str:
+    labels = {
+        "DRAFT": "Draft",
+        "ACTIVE": "Awaiting Payment",
+        "SOLD_PENDING_PAYMENT": "Awaiting Payment",
+        "PARTIALLY_SETTLED": "Partially Paid",
+        "COMPLETED": "Settled",
+        "SETTLED": "Settled",
+        "VOIDED": "Voided",
+    }
+    return labels.get(status, status.replace("_", " ").title())
+
+
 def get_setting(db: Session, key: str, default: str) -> str:
     setting = db.query(AppSetting).filter(AppSetting.key == key).first()
     return setting.value if setting and setting.value is not None else default
@@ -711,7 +737,22 @@ def ending(value: str | None, length: int = 4) -> str | None:
     return normalized[-length:] if normalized else None
 
 
+def locked_card_number(card: GiftCard) -> str:
+    return (
+        card.confirmed_redemption_code
+        or card.confirmed_card_number
+        or card.card_number_encrypted
+        or ""
+    )
+
+
+def locked_pin(card: GiftCard) -> str:
+    return card.confirmed_pin or card.pin_encrypted or ""
+
+
 def serialize_card(card: GiftCard, include_secret: bool = False) -> dict:
+    card_number = locked_card_number(card)
+    pin = locked_pin(card)
     data = {
         "id": card.id,
         "purchase_batch_id": card.purchase_batch_id,
@@ -719,8 +760,11 @@ def serialize_card(card: GiftCard, include_secret: bool = False) -> dict:
         "face_value": card.face_value,
         "acquisition_cost": card.acquisition_cost,
         "status": card.status,
-        "card_number_ending": ending(card.card_number_encrypted),
-        "pin_ending": ending(card.pin_encrypted),
+        "card_number_ending": ending(card_number),
+        "pin_ending": ending(pin),
+        "confirmed_at": card.confirmed_at,
+        "confirmed_source": card.confirmed_source,
+        "export_value_source": "confirmed_credentials" if card_number else "unconfirmed",
         "expected_payout": card.expected_payout,
         "payout_received": card.payout_received,
         "buyer_id": card.buyer_id,
@@ -732,8 +776,11 @@ def serialize_card(card: GiftCard, include_secret: bool = False) -> dict:
     }
 
     if include_secret:
-        data["card_number_encrypted"] = card.card_number_encrypted
-        data["pin_encrypted"] = card.pin_encrypted
+        data["card_number_encrypted"] = card_number
+        data["pin_encrypted"] = pin
+        data["confirmed_card_number"] = card.confirmed_card_number
+        data["confirmed_pin"] = card.confirmed_pin
+        data["confirmed_redemption_code"] = card.confirmed_redemption_code
 
     return data
 
@@ -1104,6 +1151,108 @@ def list_awaiting_payment_sales():
             )
         )
         return [serialize_sale(db, sale) for sale in sales]
+    finally:
+        db.close()
+
+
+@router.get("/payment-history")
+def list_payment_history():
+    db: Session = SessionLocal()
+
+    try:
+        sales = (
+            db.query(Sale)
+            .filter(Sale.status != "VOIDED")
+            .order_by(Sale.updated_at.desc(), Sale.sold_at.desc(), Sale.id.desc())
+            .all()
+        )
+        ledger_rows = []
+
+        for sale in sales:
+            serialized_sale = serialize_sale(db, sale)
+            sale_card_rows = (
+                db.query(SaleGiftCard)
+                .filter(SaleGiftCard.sale_id == sale.id)
+                .filter(SaleGiftCard.settlement_received_at.isnot(None))
+                .all()
+            )
+            sale_fuel_rows = (
+                db.query(SaleFuelAccount)
+                .filter(SaleFuelAccount.sale_id == sale.id)
+                .filter(SaleFuelAccount.settlement_received_at.isnot(None))
+                .all()
+            )
+            settled_rows = [*sale_card_rows, *sale_fuel_rows]
+
+            if not settled_rows:
+                continue
+
+            payment_account_ids = {
+                row.payment_account_id for row in settled_rows if row.payment_account_id
+            }
+            payment_account_id = (
+                next(iter(payment_account_ids))
+                if len(payment_account_ids) == 1
+                else sale.payment_account_id
+            )
+            payment_account = (
+                db.query(PaymentAccount)
+                .filter(PaymentAccount.id == payment_account_id)
+                .first()
+                if payment_account_id is not None
+                else None
+            )
+            amount_received = sum(
+                to_decimal(row.payout_received) for row in settled_rows
+            )
+            expected_amount = sum(
+                to_decimal(
+                    row.expected_payout
+                    if isinstance(row, SaleGiftCard)
+                    else row.expected_value
+                )
+                for row in settled_rows
+            )
+            received_dates = [
+                row.settlement_received_at
+                for row in settled_rows
+                if row.settlement_received_at is not None
+            ]
+            notes = [
+                row.settlement_notes
+                for row in settled_rows
+                if row.settlement_notes
+            ]
+
+            ledger_rows.append(
+                {
+                    "id": sale.id,
+                    "sale_id": sale.id,
+                    "received_date": max(received_dates) if received_dates else None,
+                    "buyer": serialized_sale["buyer_name"],
+                    "buyer_id": sale.buyer_id,
+                    "payment_account": serialize_payment_account_summary(payment_account),
+                    "amount_received": amount_received,
+                    "expected_amount": expected_amount,
+                    "difference": amount_received - expected_amount,
+                    "linked_sales": [
+                        {
+                            "id": sale.id,
+                            "status": sale.status,
+                            "asset_count": serialized_sale["asset_count"],
+                        }
+                    ],
+                    "settlement_reference": sale.buyer_reference,
+                    "settlement_notes": sale.settlement_status_notes
+                    or "; ".join(notes)
+                    or sale.notes,
+                    "status": sale.status,
+                    "status_label": serialized_sale["status_label"]
+                    or status_label(sale.status),
+                }
+            )
+
+        return ledger_rows
     finally:
         db.close()
 
@@ -2212,6 +2361,7 @@ def download_sale_package(sale_id: int):
                             for image in (
                                 db.query(CardImage)
                                 .filter(CardImage.gift_card_id == card.id)
+                                .filter(CardImage.retention_status == "active")
                                 .order_by(CardImage.created_at.desc())
                                 .all()
                             ):
@@ -2245,6 +2395,7 @@ def download_sale_package(sale_id: int):
                                 for image in (
                                     db.query(CardImage)
                                     .filter(CardImage.gift_card_id == card.id)
+                                    .filter(CardImage.retention_status == "active")
                                     .order_by(CardImage.created_at.desc())
                                     .all()
                                 ):
@@ -2264,6 +2415,7 @@ def download_sale_package(sale_id: int):
                     receipts = (
                         db.query(Receipt)
                         .filter(Receipt.purchase_batch_id == purchase_id)
+                        .filter(Receipt.retention_status == "active")
                         .order_by(Receipt.created_at.desc(), Receipt.id.desc())
                         .all()
                     )

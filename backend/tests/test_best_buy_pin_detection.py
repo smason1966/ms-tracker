@@ -235,7 +235,7 @@ BARCODE_CANDIDATES:
 
         self.assertEqual(pin_candidates[0].value, "562132")
 
-    def test_nike_five_digit_pin_candidate_stays_pin_with_warning(self) -> None:
+    def test_nike_five_digit_pin_candidate_is_rejected(self) -> None:
         raw_text = "NIKE boxed scratch area 44889"
 
         pin_candidates = [
@@ -249,8 +249,7 @@ BARCODE_CANDIDATES:
             if candidate.candidate_type == "card_number"
         ]
 
-        self.assertEqual(pin_candidates[0].value, "44889")
-        self.assertIn("possible Nike PIN", pin_candidates[0].notes)
+        self.assertEqual(pin_candidates, [])
         self.assertEqual(card_candidates, [])
 
     def test_nike_redeem_barcode_zone_beats_activation_barcode_zone(self) -> None:

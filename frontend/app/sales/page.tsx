@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, Suspense, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { API_BASE_URL } from "@/lib/api";
 
@@ -48,6 +49,9 @@ type Sale = {
     face_value: string | number;
     card_number_ending: string | null;
     pin_ending: string | null;
+    confirmed_at: string | null;
+    confirmed_source: string | null;
+    export_value_source: string | null;
     status: string;
     expected_payout: string | number | null;
     notes: string | null;
@@ -238,7 +242,107 @@ function paymentAccountLabel(account: Sale["payment_account"]) {
     .join(" · ");
 }
 
+const saleStatusLabels: Record<string, string> = {
+  draft: "Draft / Created",
+  created: "Draft / Created",
+  awaiting_payment: "Awaiting Payment",
+  partially_paid: "Partially Paid",
+  settled: "Settled",
+  voided: "Voided",
+};
+
+function matchesStatusFilter(sale: Sale, statusFilter: string | null) {
+  if (!statusFilter) {
+    return true;
+  }
+
+  if (statusFilter === "draft" || statusFilter === "created") {
+    return sale.status === "DRAFT" || sale.status === "ACTIVE";
+  }
+  if (statusFilter === "awaiting_payment" || statusFilter === "awaiting") {
+    return (
+      ["ACTIVE", "SOLD_PENDING_PAYMENT"].includes(sale.status) &&
+      Number(sale.payout_received ?? 0) === 0
+    );
+  }
+  if (statusFilter === "partially_paid") {
+    return (
+      sale.status === "PARTIALLY_SETTLED" ||
+      (["ACTIVE", "SOLD_PENDING_PAYMENT"].includes(sale.status) &&
+        Number(sale.payout_received ?? 0) > 0)
+    );
+  }
+  if (statusFilter === "settled") {
+    return sale.status === "COMPLETED" || sale.status === "SETTLED";
+  }
+  if (statusFilter === "voided") {
+    return sale.status === "VOIDED";
+  }
+  return true;
+}
+
+function focusLabel(focus: string | null) {
+  if (focus === "profit") {
+    return "Profit";
+  }
+  return null;
+}
+
+function dateRangeLabel(dateRange: string | null) {
+  if (dateRange === "ytd") {
+    return "Year to date";
+  }
+  if (dateRange === "mtd") {
+    return "Month to date";
+  }
+  return null;
+}
+
+function matchesDateRange(sale: Sale, dateRange: string | null) {
+  if (!dateRange) {
+    return true;
+  }
+
+  const soldAt = new Date(sale.sold_at);
+  if (Number.isNaN(soldAt.getTime())) {
+    return true;
+  }
+
+  const now = new Date();
+  if (dateRange === "ytd") {
+    return soldAt.getFullYear() === now.getFullYear();
+  }
+  if (dateRange === "mtd") {
+    return (
+      soldAt.getFullYear() === now.getFullYear() &&
+      soldAt.getMonth() === now.getMonth()
+    );
+  }
+  return true;
+}
+
 export default function SalesPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-950 sm:px-6 lg:px-8">
+          <div className="mx-auto max-w-7xl rounded-lg border border-slate-200 bg-white p-8 text-sm text-slate-500">
+            Loading sales...
+          </div>
+        </main>
+      }
+    >
+      <SalesContent />
+    </Suspense>
+  );
+}
+
+function SalesContent() {
+  const searchParams = useSearchParams();
+  const statusFilter = searchParams.get("status");
+  const focus = searchParams.get("focus");
+  const dateRange = searchParams.get("date_range");
+  const saleIdFilter = searchParams.get("sale");
   const [sales, setSales] = useState<Sale[]>([]);
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>([]);
@@ -256,6 +360,12 @@ export default function SalesPage() {
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const activeFilterParts = [
+    statusFilter ? saleStatusLabels[statusFilter] ?? statusFilter : null,
+    focusLabel(focus),
+    dateRangeLabel(dateRange),
+    saleIdFilter ? `Sale #${saleIdFilter}` : null,
+  ].filter(Boolean);
 
   async function loadSales() {
     setIsLoading(true);
@@ -298,6 +408,36 @@ export default function SalesPage() {
 
     return () => window.clearTimeout(timeoutId);
   }, [search]);
+
+  const visibleSales = useMemo(
+    () => {
+      const filteredSales = sales.filter((sale) => {
+        if (dateRange && sale.status === "VOIDED") {
+          return false;
+        }
+        if (!matchesStatusFilter(sale, statusFilter)) {
+          return false;
+        }
+        if (!matchesDateRange(sale, dateRange)) {
+          return false;
+        }
+        if (saleIdFilter && String(sale.id) !== saleIdFilter) {
+          return false;
+        }
+        return true;
+      });
+
+      if (focus === "profit") {
+        return filteredSales.sort(
+          (first, second) =>
+            Number(second.expected_payout ?? 0) - Number(first.expected_payout ?? 0),
+        );
+      }
+
+      return filteredSales;
+    },
+    [dateRange, focus, sales, saleIdFilter, statusFilter],
+  );
 
   useEffect(() => {
     async function loadEditReferences() {
@@ -570,6 +710,17 @@ export default function SalesPage() {
           </div>
         ) : null}
 
+        {activeFilterParts.length > 0 ? (
+          <div className="flex flex-col gap-3 rounded-md border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-950 sm:flex-row sm:items-center sm:justify-between">
+            <p className="font-semibold">
+              Showing: {activeFilterParts.join(" · ")}
+            </p>
+            <Link className="font-semibold hover:underline" href="/sales">
+              Clear filter
+            </Link>
+          </div>
+        ) : null}
+
         <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
           <label className="block space-y-2 text-sm font-medium text-slate-700">
             <span>Search Sales History</span>
@@ -594,11 +745,13 @@ export default function SalesPage() {
           </section>
         ) : null}
 
-        {!isLoading && sales.length === 0 ? (
+        {!isLoading && visibleSales.length === 0 ? (
           <section className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
-            <h2 className="text-lg font-semibold">No sales yet</h2>
+            <h2 className="text-lg font-semibold">No sales found</h2>
             <p className="mt-2 text-sm text-slate-500">
-              Create a sale to bundle cards and fuel accounts for one buyer.
+              {activeFilterParts.length > 0
+                ? "No sales match the active filter."
+                : "Create a sale to bundle cards and fuel accounts for one buyer."}
             </p>
             <Link
               className="mt-4 inline-flex h-11 items-center rounded-md bg-slate-950 px-4 text-sm font-semibold text-white"
@@ -609,7 +762,7 @@ export default function SalesPage() {
           </section>
         ) : null}
 
-        {sales.length > 0 ? (
+        {visibleSales.length > 0 ? (
           <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
             <div className="flex flex-col gap-2 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -641,8 +794,10 @@ export default function SalesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {sales.map((sale) => {
-                  const isExpanded = Boolean(expandedSaleIds[sale.id]);
+                {visibleSales.map((sale) => {
+                  const isExpanded =
+                    Boolean(expandedSaleIds[sale.id]) ||
+                    String(sale.id) === saleIdFilter;
                   const voidLocked = isVoidLocked(sale);
 
                   return (
@@ -943,6 +1098,16 @@ export default function SalesPage() {
                                                 : card.pin_ending
                                                 ? `PIN ending ${card.pin_ending}`
                                                 : "-"}
+                                              {!sale.sensitive_details_revoked &&
+                                              card.export_value_source ? (
+                                                <p className="mt-1 text-[11px] font-medium text-slate-500">
+                                                  Source:{" "}
+                                                  {card.export_value_source.replaceAll(
+                                                    "_",
+                                                    " ",
+                                                  )}
+                                                </p>
+                                              ) : null}
                                             </td>
                                             <td className="px-3 py-2">
                                               #{card.purchase_batch_id}

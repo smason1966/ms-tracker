@@ -37,6 +37,7 @@ from app.models.fuel_reward_account import FuelRewardAccount
 from app.models.fuel_point_entry import FuelPointEntry
 from app.models.credit_card import CreditCard
 from app.models.purchase_payment import PurchasePayment
+from app.models.attachment import Attachment
 
 target_metadata = Base.metadata
 

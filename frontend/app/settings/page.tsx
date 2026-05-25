@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+import { Component, ErrorInfo, ReactNode, useEffect, useRef, useState } from "react";
 
 import { API_BASE_URL } from "@/lib/api";
 
@@ -88,15 +89,102 @@ const settingsCards = [
       "Preview and import curated transfer ZIPs from test into production.",
     href: "/settings/data-import",
   },
+  {
+    id: "retention",
+    title: "Retention",
+    description:
+      "Preview and purge old card images, receipts, and digital PDFs after retention expires.",
+    href: "/settings/retention",
+  },
+  {
+    id: "upload-health",
+    title: "Upload Health",
+    description:
+      "Audit upload storage, missing file references, orphaned files, and OCR debug size.",
+    href: "/settings/upload-health",
+  },
 ];
 
-export default function SettingsPage() {
+class SettingsRenderBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("[Settings] caught render error", error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
+          <section className="mx-auto max-w-4xl rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">
+            <p>Settings failed to render: {this.state.error.message}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link
+                className="inline-flex h-9 items-center rounded-md border border-red-200 bg-white px-3 text-xs font-semibold text-red-700"
+                href="/"
+              >
+                Back Home
+              </Link>
+              <button
+                className="h-9 rounded-md bg-red-700 px-3 text-xs font-semibold text-white"
+                onClick={() => window.location.reload()}
+                type="button"
+              >
+                Reload
+              </button>
+            </div>
+          </section>
+        </main>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+function useRenderLoopDiagnostics(name: string, extra?: Record<string, unknown>) {
+  const countRef = useRef(0);
+  const windowStartRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const now = Date.now();
+    if (windowStartRef.current === null || now - windowStartRef.current > 2000) {
+      windowStartRef.current = now;
+      countRef.current = 1;
+      return;
+    }
+
+    countRef.current += 1;
+    if (countRef.current > 25) {
+      console.warn(`[${name}] high render count`, {
+        renders: countRef.current,
+        windowMs: now - windowStartRef.current,
+        ...extra,
+      });
+    }
+  });
+}
+
+function SettingsContent() {
+  const pathname = usePathname();
   const [settings, setSettings] = useState<AppSettings>({
     multi_player_mode_enabled: false,
     voided_sale_sensitive_export_retention: "never",
   });
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  const hasLoadedRef = useRef(false);
+  useRenderLoopDiagnostics("Settings", {
+    isLoadingSettings,
+    hasError: Boolean(settingsError),
+  });
 
   useEffect(() => {
     async function loadSettings() {
@@ -120,7 +208,14 @@ export default function SettingsPage() {
       }
     }
 
-    void loadSettings();
+    console.log("SettingsPage mount", { pathname });
+    if (!hasLoadedRef.current) {
+      hasLoadedRef.current = true;
+      void loadSettings();
+    }
+    return () => {
+      console.log("SettingsPage unmount", { pathname });
+    };
   }, []);
 
   async function toggleMultiPlayerMode(enabled: boolean) {
@@ -274,5 +369,13 @@ export default function SettingsPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <SettingsRenderBoundary>
+      <SettingsContent />
+    </SettingsRenderBoundary>
   );
 }

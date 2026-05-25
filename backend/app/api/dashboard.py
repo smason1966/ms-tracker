@@ -14,6 +14,7 @@ from app.models.gift_card import GiftCard
 from app.models.player import Player
 from app.models.purchase_batch import PurchaseBatch
 from app.models.reward_program import RewardProgram
+from app.models.sale import Sale
 from app.models.spending_category import SpendingCategory
 from app.services.operational_queues import (
     get_awaiting_payment_sales,
@@ -94,6 +95,90 @@ def in_range(value: datetime | date | None, start: date | None, end: date | None
     return True
 
 
+def sale_received_amount(sale: Sale) -> Decimal:
+    return to_decimal(sale.payout_received)
+
+
+def sale_in_reporting_range(sale: Sale, start: date | None, end: date | None) -> bool:
+    return in_range(sale.sold_at, start, end)
+
+
+def sale_financial_debug_row(
+    sale: Sale,
+    start: date | None,
+    end: date | None,
+) -> dict:
+    is_voided = sale.status == "VOIDED"
+    is_in_range = sale_in_reporting_range(sale, start, end)
+    expected_payout = to_decimal(sale.expected_payout)
+    received_amount = sale_received_amount(sale)
+    included_in_gross_sales = not is_voided and is_in_range
+    included_in_settled_revenue = (
+        not is_voided
+        and is_in_range
+        and sale.status in {"COMPLETED", "SETTLED"}
+        and received_amount > 0
+    )
+    included_in_receivables = (
+        not is_voided
+        and sale.status in {"ACTIVE", "SOLD_PENDING_PAYMENT", "PARTIALLY_SETTLED"}
+        and expected_payout - received_amount > 0
+    )
+
+    if is_voided:
+        reason = "excluded: voided"
+    elif not is_in_range:
+        reason = "excluded: outside reporting range"
+    else:
+        reason = "included: non-voided sale in reporting range"
+
+    return {
+        "sale_id": sale.id,
+        "status": sale.status,
+        "expected_payout": expected_payout,
+        "received_amount": received_amount,
+        "sold_date": sale.sold_at.date() if sale.sold_at else None,
+        "included_in_gross_sales": included_in_gross_sales,
+        "included_in_settled_revenue": included_in_settled_revenue,
+        "included_in_outstanding_receivables": included_in_receivables,
+        "included_excluded_reason": reason,
+    }
+
+
+def sale_financial_kpis(
+    sales: list[Sale],
+    start: date | None,
+    end: date | None,
+) -> dict:
+    rows = [sale_financial_debug_row(sale, start, end) for sale in sales]
+
+    gross_sales = sum(
+        to_decimal(row["expected_payout"])
+        for row in rows
+        if row["included_in_gross_sales"]
+    )
+    settled_revenue = sum(
+        to_decimal(row["received_amount"])
+        for row in rows
+        if row["included_in_settled_revenue"]
+    )
+    outstanding_receivables = sum(
+        max(
+            Decimal("0"),
+            to_decimal(row["expected_payout"]) - to_decimal(row["received_amount"]),
+        )
+        for row in rows
+        if row["included_in_outstanding_receivables"]
+    )
+
+    return {
+        "gross_sales": gross_sales,
+        "settled_revenue": settled_revenue,
+        "outstanding_receivables": outstanding_receivables,
+        "rows": rows,
+    }
+
+
 @router.get("/summary")
 def dashboard_summary(range: str = "this_month", player_id: int | None = None):
     db: Session = SessionLocal()
@@ -122,6 +207,8 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
             )
 
         gift_cards = gift_cards_query.all()
+        sales = db.query(Sale).order_by(Sale.sold_at.desc(), Sale.id.desc()).all()
+        range_sale_kpis = sale_financial_kpis(sales, range_start, range_end)
         fuel_accounts = db.query(FuelRewardAccount).all()
         credit_cards = credit_cards_query.all()
         purchase_count = len(purchases)
@@ -251,9 +338,7 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
                     }
                 )
 
-        settled_revenue = sum(
-            to_decimal(card.payout_received) for card in settled_cards
-        )
+        settled_revenue = range_sale_kpis["settled_revenue"]
         realized_profit = sum(
             to_decimal(card.payout_received) - to_decimal(card.acquisition_cost)
             for card in settled_cards
@@ -322,8 +407,22 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
         rewards_by_month: dict[str, dict] = {}
         reward_program_drilldowns: dict[str, dict] = {}
         fuel_points_earned = Decimal("0")
+        cashback_earned = Decimal("0")
+        statement_credits_earned = Decimal("0")
+        purchase_discounts_earned = Decimal("0")
+        effective_reward_savings = Decimal("0")
 
         for transaction in ranged_reward_transactions:
+            cashback_earned += to_decimal(getattr(transaction, "cashback_amount", None))
+            statement_credits_earned += to_decimal(
+                getattr(transaction, "statement_credit_amount", None)
+            )
+            purchase_discounts_earned += to_decimal(
+                getattr(transaction, "purchase_discount_amount", None)
+            )
+            effective_reward_savings += to_decimal(
+                getattr(transaction, "effective_savings_amount", None)
+            )
             program = reward_programs.get(transaction.reward_program_id)
             rewards_type = program.short_code if program else "OTHER"
             rewards_by_type[rewards_type] = (
@@ -783,9 +882,9 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
                 for purchase in ranged_purchases
             ),
             "range_total_sales": sum(
-                to_decimal(card.payout_received)
-                for card in ranged_settled_cards
-                if card.payout_received is not None
+                to_decimal(row["expected_payout"])
+                for row in range_sale_kpis["rows"]
+                if row["included_in_gross_sales"]
             ),
             "range_profit": sum(
                 to_decimal(card.payout_received) - to_decimal(card.acquisition_cost)
@@ -845,6 +944,11 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
             ),
             "pending_rewards": Decimal("0"),
             "fuel_points_earned": fuel_points_earned,
+            "cashback_earned": cashback_earned,
+            "statement_credits_earned": statement_credits_earned,
+            "purchase_discounts_earned": purchase_discounts_earned,
+            "purchase_time_discounts_earned": purchase_discounts_earned,
+            "effective_reward_savings": effective_reward_savings,
             "signup_bonuses_earned": signup_bonuses_earned,
             "active_signup_bonuses": sorted(
                 active_signup_bonuses,
@@ -873,9 +977,11 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
             ),
             "pending_verification_count": len(pending_verification_cards),
             "awaiting_payment_total": sum(
-                sale_unpaid_expected_total(db, sale)
-                for sale in awaiting_payment_sales
+                to_decimal(row["expected_payout"]) - to_decimal(row["received_amount"])
+                for row in range_sale_kpis["rows"]
+                if row["included_in_outstanding_receivables"]
             ),
+            "outstanding_receivables": range_sale_kpis["outstanding_receivables"],
             "awaiting_payment_expected_profit": sum(
                 to_decimal(card.expected_payout) - to_decimal(card.acquisition_cost)
                 for card in awaiting_payment_cards
@@ -921,6 +1027,30 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
                 "fuel_accounts_near_expiration": fuel_accounts_near_expiration[:10],
                 "high_utilization_credit_cards": high_utilization_cards[:10],
             },
+        }
+    finally:
+        db.close()
+
+
+@router.get("/financial-debug")
+def dashboard_financial_debug(range: str = "ytd"):
+    db: Session = SessionLocal()
+    today = date.today()
+    range_start = get_range_start(range, today)
+    range_end = get_range_end(range, today)
+
+    try:
+        sales = db.query(Sale).order_by(Sale.sold_at.desc(), Sale.id.desc()).all()
+        kpis = sale_financial_kpis(sales, range_start, range_end)
+
+        return {
+            "reporting_range": range,
+            "reporting_range_start": range_start,
+            "reporting_range_end": range_end,
+            "ytd_gross_sales": kpis["gross_sales"],
+            "settled_revenue": kpis["settled_revenue"],
+            "outstanding_receivables": kpis["outstanding_receivables"],
+            "sales": kpis["rows"],
         }
     finally:
         db.close()

@@ -307,7 +307,7 @@ export default function PurchaseIntakePage() {
 
       const [storesResult, accountsResult, cardsResult] = await Promise.allSettled([
         fetch(`${API_BASE_URL}/stores/`),
-        fetch(`${API_BASE_URL}/fuel-accounts/active`),
+        fetch(`${API_BASE_URL}/fuel-accounts/intake-eligible`),
         fetch(`${API_BASE_URL}/credit-cards`),
       ]);
 
@@ -325,6 +325,16 @@ export default function PurchaseIntakePage() {
       if (accountsResult.status === "fulfilled" && accountsResult.value.ok) {
         const data = (await accountsResult.value.json()) as FuelAccount[];
         setFuelAccounts(data);
+        setForm((currentForm) =>
+          data.some(
+            (account) => String(account.id) === currentForm.fuel_reward_account_id,
+          )
+            ? currentForm
+            : {
+                ...currentForm,
+                fuel_reward_account_id: data[0] ? String(data[0].id) : "",
+              },
+        );
       } else {
         setFuelAccountsError("Failed to load fuel accounts.");
       }
@@ -372,7 +382,8 @@ export default function PurchaseIntakePage() {
       ...currentForm,
       store_name: storeName,
       fuel_reward_account_id: store?.earns_fuel_points
-        ? currentForm.fuel_reward_account_id
+        ? currentForm.fuel_reward_account_id ||
+          (fuelAccounts[0] ? String(fuelAccounts[0].id) : "")
         : "",
       fuel_multiplier_mode: ["2", "4", "6"].includes(defaultMultiplier)
         ? defaultMultiplier
@@ -958,13 +969,19 @@ export default function PurchaseIntakePage() {
                       {isLoadingFuelAccounts
                         ? "Loading accounts..."
                         : fuelAccounts.length === 0
-                          ? "No active fuel accounts available."
+                          ? "No eligible fuel accounts available."
                           : "Select account"}
                     </option>
                     {fuelAccounts.map((account) => (
                       <option key={account.id} value={account.id}>
                         {account.retailer}
                         {account.email ? ` - ${account.email}` : ""}
+                        {account.expiration_cycle
+                          ? ` - expires ${formatShortDate(account.expiration_cycle)}`
+                          : ""}
+                        {account.target_points
+                          ? ` - ${account.current_points.toLocaleString()}/${account.target_points.toLocaleString()} pts`
+                          : ""}
                       </option>
                     ))}
                   </select>
@@ -977,12 +994,13 @@ export default function PurchaseIntakePage() {
                   !fuelAccountsError &&
                   fuelAccounts.length === 0 ? (
                     <p className="text-sm font-medium text-amber-700">
-                      No active fuel accounts available.
+                      No eligible fuel accounts available.
                     </p>
                   ) : null}
                   <p className="text-sm text-slate-500">
                     Fuel accounts should only contain points with the same
-                    expiration month.
+                    expiration month. Accounts at or above target are hidden
+                    from intake and available for sale only.
                   </p>
                   <p className="text-sm text-slate-500">
                     Expiration is based on the purchase date.

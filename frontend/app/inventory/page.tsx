@@ -125,6 +125,19 @@ const sections = [
   { title: "Settled/Sold", statuses: ["SETTLED"] },
 ];
 
+const inventoryFilterLabels: Record<string, string> = {
+  available: "Available Inventory",
+  needs_verification: "Needs Verification",
+  awaiting_verification: "Needs Verification",
+  awaiting_payment: "Awaiting Payment",
+  settled: "Settled/Sold",
+  duplicate_review: "Possible Duplicate Review",
+};
+
+const inventoryMetricLabels: Record<string, string> = {
+  turnover: "Inventory Turnover",
+};
+
 function todayString() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -669,13 +682,31 @@ function InventoryContent() {
   const filteredCards = useMemo(() => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
     const statusFilter = searchParams.get("status");
+    const metricFilter = searchParams.get("metric");
 
-    return giftCards.filter(
-      (card) => {
+    const cards = giftCards.filter((card) => {
         if (
-          statusFilter === "awaiting_verification" &&
+          (statusFilter === "awaiting_verification" ||
+            statusFilter === "needs_verification") &&
           card.status !== "NEEDS_VERIFICATION"
         ) {
+          return false;
+        }
+
+        if (statusFilter === "available" && card.status !== "VERIFIED_AVAILABLE") {
+          return false;
+        }
+
+        if (
+          statusFilter === "awaiting_payment" &&
+          !["SOLD_PENDING_PAYMENT", "PARTIALLY_SETTLED", "SOLD"].includes(
+            card.status,
+          )
+        ) {
+          return false;
+        }
+
+        if (statusFilter === "settled" && card.status !== "SETTLED") {
           return false;
         }
 
@@ -694,6 +725,10 @@ function InventoryContent() {
           return false;
         }
 
+        if (metricFilter === "turnover" && card.sold_at === null) {
+          return false;
+        }
+
         return (
           !normalizedSearch ||
           [
@@ -706,10 +741,22 @@ function InventoryContent() {
             card.notes ?? "",
           ].some((value) => value.toLowerCase().includes(normalizedSearch))
         );
-      },
-    );
+      });
+
+    if (metricFilter === "turnover") {
+      return cards.sort(
+        (first, second) =>
+          (second.inventory_aging_days ?? 0) - (first.inventory_aging_days ?? 0),
+      );
+    }
+
+    return cards;
   }, [giftCards, searchParams, searchQuery]);
   const statusFilter = searchParams.get("status");
+  const metricFilter = searchParams.get("metric");
+  const activeInventoryFilterLabel =
+    (statusFilter ? inventoryFilterLabels[statusFilter] : null) ??
+    (metricFilter ? inventoryMetricLabels[metricFilter] : null);
 
   function openSellSelected() {
     setSaleCardIds(selectedIds);
@@ -954,13 +1001,14 @@ function InventoryContent() {
           </section>
         ) : null}
 
-        {statusFilter === "awaiting_verification" ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
-            Showing cards awaiting verification.
-          </div>
-        ) : statusFilter === "duplicate_review" ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
-            Showing possible duplicate review items.
+        {activeInventoryFilterLabel ? (
+          <div className="flex flex-col gap-3 rounded-md border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-950 sm:flex-row sm:items-center sm:justify-between">
+            <p className="font-semibold">
+              Showing: {activeInventoryFilterLabel}
+            </p>
+            <Link className="font-semibold hover:underline" href="/inventory">
+              Clear filter
+            </Link>
           </div>
         ) : null}
 

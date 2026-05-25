@@ -517,7 +517,7 @@ export default function HomePage() {
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <MetricCard
             detail={`Cost ${formatCurrency(summary?.available_acquisition_cost ?? 0)}`}
-            href="/inventory"
+            href="/inventory?status=available"
             isLoading={isLoading}
             label="Inventory Total"
             value={formatCurrency(summary?.total_available_inventory_face_value ?? 0)}
@@ -526,7 +526,7 @@ export default function HomePage() {
             detail={`${summary?.awaiting_payment_count ?? 0} awaiting · ${
               summary?.overdue_payment_count ?? 0
             } overdue`}
-            href="/inventory"
+            href="/sales?status=awaiting_payment"
             isLoading={isLoading}
             label="Awaiting Payouts"
             tone={(summary?.overdue_payment_count ?? 0) > 0 ? "danger" : "warning"}
@@ -534,7 +534,7 @@ export default function HomePage() {
           />
           <MetricCard
             detail={`${creditUtilizationExposure.toFixed(1)}% aggregate utilization`}
-            href="/credit-cards"
+            href="/credit-cards?focus=utilization"
             isLoading={isLoading}
             label="Credit Utilization Exposure"
             tone={creditUtilizationExposure > 30 ? "warning" : "normal"}
@@ -542,7 +542,7 @@ export default function HomePage() {
           />
           <MetricCard
             detail={`${paymentsDueSoon.length} payment alerts`}
-            href="/credit-cards"
+            href="/credit-cards?focus=statement_balances"
             isLoading={isLoading}
             label="Outstanding Statement Balances"
             tone={outstandingStatementBalances > 0 ? "danger" : "normal"}
@@ -556,7 +556,7 @@ export default function HomePage() {
               <QueueCard
                 count={paymentsDueSoon.length}
                 detail="Cards with payment due soon"
-                href="/credit-cards?queue=payments_due"
+                href="/credit-cards?focus=statement_balances"
                 isLoading={isLoading}
                 severity={paymentsDueSoon.length > 0 ? "danger" : "normal"}
                 title="Credit Card Payments Due"
@@ -565,7 +565,7 @@ export default function HomePage() {
                 count={summary?.credit_card_utilization_warnings ?? 0}
                 detail="Above utilization threshold"
                 exposure={formatCurrency(summary?.credit_card_estimated_balances ?? 0)}
-                href="/credit-cards?filter=high_utilization"
+                href="/credit-cards?filter=utilization_warning"
                 isLoading={isLoading}
                 severity={
                   (summary?.credit_card_utilization_warnings ?? 0) > 0
@@ -598,7 +598,7 @@ export default function HomePage() {
               <QueueCard
                 count={summary?.pending_verification_count ?? 0}
                 detail="Missing details or manual verification"
-                href="/inventory?status=awaiting_verification"
+                href="/inventory?status=needs_verification"
                 isLoading={isLoading}
                 severity={
                   (summary?.pending_verification_count ?? 0) > 0
@@ -665,7 +665,7 @@ export default function HomePage() {
           <Panel title="Operational Queues">
             <div className="grid gap-2 sm:grid-cols-2">
               <QueueRow
-                href="/payments/awaiting"
+                href="/sales?status=awaiting_payment"
                 label="Sales awaiting payment"
                 tone={(summary?.awaiting_payment_count ?? 0) > 0 ? "warning" : "normal"}
                 value={formatNumber(summary?.awaiting_payment_count ?? 0)}
@@ -688,11 +688,13 @@ export default function HomePage() {
           <Panel title="Performance Snapshot">
             <div className="grid gap-2 sm:grid-cols-2">
               <MiniMetric
+                href="/sales?date_range=mtd&focus=profit"
                 label="Monthly Profit"
                 value={formatCurrency(summary?.range_profit ?? 0)}
               />
               <MiniMetric
-                label="YTD Sales"
+                href="/sales?date_range=ytd"
+                label="YTD Gross Sales"
                 value={formatCurrency(ytdSummary?.range_total_sales ?? 0)}
               />
               <MiniMetric
@@ -706,10 +708,12 @@ export default function HomePage() {
                 value={formatNumber(summary?.fuel_points_earned ?? 0)}
               />
               <MiniMetric
+                href="/inventory?metric=turnover"
                 label="Inventory Turnover"
                 value={`${turnoverRate.toFixed(1)}%`}
               />
               <MiniMetric
+                href="/sales?status=awaiting_payment&focus=profit"
                 label="Awaiting Profit"
                 value={formatCurrency(summary?.awaiting_payment_expected_profit ?? 0)}
               />

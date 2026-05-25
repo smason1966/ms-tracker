@@ -9,6 +9,7 @@ type SpendingCategory = {
   id: number;
   key: string;
   name: string;
+  active: boolean;
   notes: string | null;
 };
 
@@ -16,12 +17,14 @@ type CategoryForm = {
   key: string;
   name: string;
   notes: string;
+  active: boolean;
 };
 
 const emptyForm: CategoryForm = {
   key: "",
   name: "",
   notes: "",
+  active: true,
 };
 
 function categoryToForm(category: SpendingCategory): CategoryForm {
@@ -29,6 +32,7 @@ function categoryToForm(category: SpendingCategory): CategoryForm {
     key: category.key,
     name: category.name,
     notes: category.notes ?? "",
+    active: category.active,
   };
 }
 
@@ -99,6 +103,7 @@ export default function SpendingCategoriesSettingsPage() {
           body: JSON.stringify({
             key: form.key.trim(),
             name: form.name.trim(),
+            active: form.active,
             notes: form.notes.trim() || null,
           }),
         },
@@ -112,6 +117,37 @@ export default function SpendingCategoriesSettingsPage() {
       await loadCategories();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save category.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function deleteOrDeactivateCategory(category: SpendingCategory) {
+    setIsSaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/spending-categories/${category.id}`,
+        { method: "DELETE" },
+      );
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(
+          `Failed to delete or deactivate category (${response.status})${
+            body ? `: ${body}` : ""
+          }`,
+        );
+      }
+
+      await loadCategories();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to delete or deactivate category.",
+      );
     } finally {
       setIsSaving(false);
     }
@@ -159,6 +195,7 @@ export default function SpendingCategoriesSettingsPage() {
                 <tr>
                   <th className="px-4 py-3">Name</th>
                   <th className="px-4 py-3">Key</th>
+                  <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Notes</th>
                   <th className="px-4 py-3 text-right">Action</th>
                 </tr>
@@ -170,16 +207,27 @@ export default function SpendingCategoriesSettingsPage() {
                     <td className="px-4 py-3 font-mono text-xs text-slate-600">
                       {category.key}
                     </td>
+                    <td className="px-4 py-3">
+                      {category.active ? "Active" : "Inactive"}
+                    </td>
                     <td className="px-4 py-3 text-slate-600">
                       {category.notes || "-"}
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="space-x-2 px-4 py-3 text-right">
                       <button
                         className="h-8 cursor-pointer rounded-md border border-slate-300 px-3 text-xs font-semibold hover:bg-slate-100"
                         onClick={() => openEdit(category)}
                         type="button"
                       >
                         Edit
+                      </button>
+                      <button
+                        className="h-8 cursor-pointer rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={isSaving}
+                        onClick={() => void deleteOrDeactivateCategory(category)}
+                        type="button"
+                      >
+                        Delete / Deactivate
                       </button>
                     </td>
                   </tr>
@@ -247,6 +295,20 @@ export default function SpendingCategoriesSettingsPage() {
                   }
                   value={form.notes}
                 />
+              </label>
+              <label className="flex h-10 items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                  checked={form.active}
+                  className="h-4 w-4 rounded border-slate-300"
+                  onChange={(event) =>
+                    setForm((currentForm) => ({
+                      ...currentForm,
+                      active: event.target.checked,
+                    }))
+                  }
+                  type="checkbox"
+                />
+                <span>Active</span>
               </label>
               <div className="flex justify-end gap-2">
                 <button

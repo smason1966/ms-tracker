@@ -14,6 +14,7 @@ class Store(Base):
     store_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     retailer_group: Mapped[str | None] = mapped_column(String(100), nullable=True)
     merchant_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    merchant_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
     spending_category_id: Mapped[int | None] = mapped_column(
         ForeignKey("spending_categories.id"),
         nullable=True,

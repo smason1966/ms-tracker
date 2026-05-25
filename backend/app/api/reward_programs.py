@@ -228,6 +228,7 @@ def serialize_program(program: RewardProgram, db: Session | None = None) -> dict
 def list_reward_programs(
     active_only: bool = False,
     eligible_for_credit_cards: bool | None = None,
+    include_protection: bool = False,
 ):
     db: Session = SessionLocal()
 
@@ -244,7 +245,24 @@ def list_reward_programs(
                 )
             )
         programs = query.order_by(RewardProgram.category.asc(), RewardProgram.name.asc()).all()
-        return [serialize_program(program, db) for program in programs]
+        return [
+            serialize_program(program, db if include_protection else None)
+            for program in programs
+        ]
+    finally:
+        db.close()
+
+
+@router.get("/{program_id}/protection")
+def get_reward_program_protection(program_id: int):
+    db: Session = SessionLocal()
+
+    try:
+        program = db.query(RewardProgram).filter(RewardProgram.id == program_id).first()
+        if not program:
+            raise HTTPException(status_code=404, detail="Reward program not found")
+
+        return program_protection(db, program)
     finally:
         db.close()
 

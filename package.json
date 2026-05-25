@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "scripts": {
+    "cleanup:ocr-debug": "backend/.venv/bin/python backend/scripts/cleanup_ocr_debug.py"
+  }
+}

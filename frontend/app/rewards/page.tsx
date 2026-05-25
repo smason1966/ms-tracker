@@ -445,6 +445,19 @@ export default function RewardsPage() {
     (total, reward) => total + numericValue(reward.estimated_value),
     0,
   );
+  const activeFilterLabels = [
+    selectedCategory !== "ALL" ? `Reward category: ${selectedCategory}` : null,
+    selectedProgram !== "ALL" ? `Program: ${selectedProgram}` : null,
+    selectedCard !== "ALL"
+      ? `Credit card: ${
+          creditCards.find(([cardId]) => String(cardId) === selectedCard)?.[1] ??
+          selectedCard
+        }`
+      : null,
+    selectedStoreCategory !== "ALL"
+      ? `Store/category: ${selectedStoreCategory}`
+      : null,
+  ].filter(Boolean);
 
   function toggleProgram(program: RewardProgramMetric) {
     const key = programKey(program);
@@ -548,6 +561,17 @@ export default function RewardsPage() {
         {error ? (
           <div className="rounded-lg border border-red-400/35 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-100">
             {error}
+          </div>
+        ) : null}
+
+        {activeFilterLabels.length > 0 ? (
+          <div className="flex flex-col gap-3 rounded-lg border border-cyan-300/25 bg-cyan-300/10 px-4 py-3 text-sm text-cyan-50 sm:flex-row sm:items-center sm:justify-between">
+            <p className="font-semibold">
+              Showing: {activeFilterLabels.join(" · ")}
+            </p>
+            <Link className="font-semibold hover:underline" href="/rewards">
+              Clear filter
+            </Link>
           </div>
         ) : null}
 
