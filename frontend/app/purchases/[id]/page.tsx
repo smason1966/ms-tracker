@@ -2169,18 +2169,6 @@ function MoveGiftCardModal({
           </select>
         </label>
 
-        {selectedDestination ? (
-          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-            <p className="font-semibold text-slate-900">Selected destination</p>
-            <p className="mt-1">{purchaseOptionLabel(selectedDestination)}</p>
-            {selectedDestination.credit_card_id ? (
-              <p className="mt-1 text-xs text-slate-500">
-                Funding card #{selectedDestination.credit_card_id}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-
         {selectedDestination && moveWarnings.length > 0 ? (
           <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <p className="font-semibold">
