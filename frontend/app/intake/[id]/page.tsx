@@ -12,6 +12,7 @@ type PurchaseBatch = {
   purchase_date: string;
   total_amount: string | number;
   purchase_total_paid: string | number | null;
+  credit_card_id: number | null;
   notes: string | null;
 };
 
@@ -36,6 +37,7 @@ type GiftCardForm = {
   card_source: "physical" | "digital";
   brand: string;
   face_value: string;
+  acquisition_cost: string;
   card_number: string;
   pin: string;
   redemption_code: string;
@@ -47,11 +49,43 @@ const initialForm: GiftCardForm = {
   card_source: "physical",
   brand: "",
   face_value: "",
+  acquisition_cost: "",
   card_number: "",
   pin: "",
   redemption_code: "",
   notes: "",
   digital_source_notes: "",
+};
+
+type Store = {
+  id: number;
+  name: string;
+  active: boolean;
+};
+
+type RewardRule = {
+  id: number;
+  store_id: number | null;
+  reward_type: string;
+  value: string | number | null;
+  priority: number | null;
+  active: boolean;
+  effective_start_date: string | null;
+  effective_end_date: string | null;
+};
+
+type CreditCard = {
+  id: number;
+  nickname: string;
+  last_four: string | null;
+  is_active: boolean;
+  reward_rules?: RewardRule[];
+};
+
+type InstantDiscountPreview = {
+  percent: number;
+  discountAmount: number;
+  allocatedCost: number;
 };
 
 const cardImageAccept =
@@ -72,6 +106,36 @@ function shouldUseEnvironmentCapture() {
   );
 }
 
+function roundCurrency(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function formatCurrencyInput(value: number) {
+  return roundCurrency(value).toFixed(2);
+}
+
+function isInstantDiscountRule(rule: RewardRule) {
+  return (
+    rule.active &&
+    (rule.reward_type === "instant_discount_percent" ||
+      rule.reward_type === "purchase_discount")
+  );
+}
+
+function isRuleEffective(rule: RewardRule, purchaseDate: string) {
+  const purchaseDay = purchaseDate.slice(0, 10);
+
+  if (rule.effective_start_date && rule.effective_start_date.slice(0, 10) > purchaseDay) {
+    return false;
+  }
+
+  if (rule.effective_end_date && rule.effective_end_date.slice(0, 10) < purchaseDay) {
+    return false;
+  }
+
+  return true;
+}
+
 export default function RapidCardIntakePage() {
   const params = useParams<{ id: string | string[] }>();
   const purchaseId = Array.isArray(params.id) ? params.id[0] : params.id;
@@ -79,6 +143,8 @@ export default function RapidCardIntakePage() {
   const [purchase, setPurchase] = useState<PurchaseBatch | null>(null);
   const [cardBrands, setCardBrands] = useState<CardBrand[]>([]);
   const [giftCards, setGiftCards] = useState<GiftCard[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [creditCards, setCreditCards] = useState<CreditCard[]>([]);
   const [form, setForm] = useState<GiftCardForm>(initialForm);
   const [cardImageFile, setCardImageFile] = useState<File | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -89,8 +155,10 @@ export default function RapidCardIntakePage() {
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
   const [brandsError, setBrandsError] = useState<string | null>(null);
   const [giftCardsError, setGiftCardsError] = useState<string | null>(null);
+  const [lookupsError, setLookupsError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [lastSavedGiftCardId, setLastSavedGiftCardId] = useState<number | null>(null);
   const [cardUploadStatuses, setCardUploadStatuses] = useState<
     Record<number, string>
   >({});
@@ -139,8 +207,9 @@ export default function RapidCardIntakePage() {
       setPurchaseError(null);
       setBrandsError(null);
       setGiftCardsError(null);
+      setLookupsError(null);
 
-      const [purchaseResult, brandsResult, giftCardsResult] =
+      const [purchaseResult, brandsResult, giftCardsResult, storesResult, cardsResult] =
         await Promise.allSettled([
           (async () => {
             const response = await fetch(
@@ -175,6 +244,24 @@ export default function RapidCardIntakePage() {
 
             return (await response.json()) as GiftCard[];
           })(),
+          (async () => {
+            const response = await fetch(`${API_BASE_URL}/stores/`);
+
+            if (!response.ok) {
+              throw new Error(`Failed to load stores (${response.status})`);
+            }
+
+            return (await response.json()) as Store[];
+          })(),
+          (async () => {
+            const response = await fetch(`${API_BASE_URL}/credit-cards`);
+
+            if (!response.ok) {
+              throw new Error(`Failed to load funding cards (${response.status})`);
+            }
+
+            return (await response.json()) as CreditCard[];
+          })(),
         ]);
 
       if (purchaseResult.status === "fulfilled") {
@@ -207,6 +294,26 @@ export default function RapidCardIntakePage() {
         );
       }
 
+      if (storesResult.status === "fulfilled") {
+        setStores(storesResult.value);
+      } else {
+        setLookupsError(
+          storesResult.reason instanceof Error
+            ? storesResult.reason.message
+            : "Failed to load store lookup data.",
+        );
+      }
+
+      if (cardsResult.status === "fulfilled") {
+        setCreditCards(cardsResult.value.filter((card) => card.is_active));
+      } else {
+        setLookupsError(
+          cardsResult.reason instanceof Error
+            ? cardsResult.reason.message
+            : "Failed to load funding card lookup data.",
+        );
+      }
+
       setIsLoadingPurchase(false);
       setIsLoadingBrands(false);
       setIsLoadingGiftCards(false);
@@ -216,14 +323,88 @@ export default function RapidCardIntakePage() {
   }, [purchaseId]);
 
   function updateFormField(field: keyof GiftCardForm, value: string) {
+    setLastSavedGiftCardId(null);
     setForm((currentForm) => ({
       ...currentForm,
       [field]: value,
     }));
   }
 
+  function getInstantDiscountPreview(faceValue: string): InstantDiscountPreview | null {
+    const amount = Number(faceValue);
+
+    if (!purchase || Number.isNaN(amount) || amount <= 0) {
+      return null;
+    }
+
+    const selectedStore = stores.find(
+      (store) => store.name.toLowerCase() === purchase.store_name.toLowerCase(),
+    );
+    const selectedCard = creditCards.find(
+      (card) => card.id === purchase.credit_card_id,
+    );
+
+    if (!selectedStore || !selectedCard) {
+      return null;
+    }
+
+    const matchingRule = (selectedCard.reward_rules ?? [])
+      .filter(
+        (rule) =>
+          isInstantDiscountRule(rule) &&
+          rule.store_id === selectedStore.id &&
+          isRuleEffective(rule, purchase.purchase_date),
+      )
+      .sort((left, right) => (left.priority ?? 100) - (right.priority ?? 100))[0];
+    const percent = Number(matchingRule?.value);
+
+    if (!matchingRule || Number.isNaN(percent) || percent <= 0 || percent >= 100) {
+      return null;
+    }
+
+    const discountAmount = roundCurrency((amount * percent) / 100);
+
+    return {
+      percent,
+      discountAmount,
+      allocatedCost: roundCurrency(amount - discountAmount),
+    };
+  }
+
+  function handleFaceValueChange(value: string) {
+    setLastSavedGiftCardId(null);
+    setForm((currentForm) => {
+      const preview = getInstantDiscountPreview(value);
+
+      return {
+        ...currentForm,
+        face_value: value,
+        acquisition_cost: preview
+          ? formatCurrencyInput(preview.allocatedCost)
+          : currentForm.acquisition_cost.trim() === "" ||
+              currentForm.acquisition_cost === currentForm.face_value
+            ? value
+          : currentForm.acquisition_cost,
+      };
+    });
+  }
+
   function handleCardImageChange(event: ChangeEvent<HTMLInputElement>) {
+    setLastSavedGiftCardId(null);
     setCardImageFile(event.target.files?.[0] ?? null);
+  }
+
+  function startNextGiftCard() {
+    setForm((currentForm) => ({
+      ...initialForm,
+      card_source: currentForm.card_source,
+      brand: currentForm.brand,
+    }));
+    setCardImageFile(null);
+    setFileInputKey((currentKey) => currentKey + 1);
+    setSubmitError(null);
+    setSuccessMessage(null);
+    setLastSavedGiftCardId(null);
   }
 
   async function uploadCardImage(
@@ -259,6 +440,10 @@ export default function RapidCardIntakePage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (lastSavedGiftCardId !== null) {
+      return;
+    }
+
     setSubmitError(null);
     setSuccessMessage(null);
     setIsSubmitting(true);
@@ -286,7 +471,7 @@ export default function RapidCardIntakePage() {
           brand: form.brand.trim(),
           card_source: form.card_source,
           face_value: form.face_value,
-          acquisition_cost: form.face_value,
+          acquisition_cost: form.acquisition_cost || form.face_value,
           confirmed_card_number:
             form.card_source === "digital" && form.redemption_code.trim() === ""
               ? form.card_number.trim() || null
@@ -319,6 +504,7 @@ export default function RapidCardIntakePage() {
       }
 
       const giftCard = (await response.json()) as GiftCard;
+      setLastSavedGiftCardId(giftCard.id);
 
       setForm((currentForm) => ({
         ...currentForm,
@@ -410,12 +596,15 @@ export default function RapidCardIntakePage() {
     (total, giftCard) => total + (Number(giftCard.acquisition_cost) || 0),
     0,
   );
+  const instantDiscountPreview = getInstantDiscountPreview(form.face_value);
 
   const isSubmitDisabled =
     isSubmitting ||
+    lastSavedGiftCardId !== null ||
     isLoadingBrands ||
     Boolean(brandsError) ||
-    cardBrands.length === 0;
+    cardBrands.length === 0 ||
+    !form.acquisition_cost.trim();
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950">
@@ -433,12 +622,14 @@ export default function RapidCardIntakePage() {
             >
               Back to Purchase
             </Link>
-            <Link
-              className="flex h-11 items-center justify-center rounded-md bg-slate-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
-              href={`/purchases/${purchaseId}`}
-            >
-              Finish Intake
-            </Link>
+            {giftCards.length > 0 ? (
+              <Link
+                className="flex h-11 items-center justify-center rounded-md bg-slate-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
+                href={`/purchases/${purchaseId}`}
+              >
+                Finish Intake
+              </Link>
+            ) : null}
           </div>
 
         </header>
@@ -518,12 +709,40 @@ export default function RapidCardIntakePage() {
                 min="0"
                 step="0.01"
                 value={form.face_value}
+                onChange={(event) => handleFaceValueChange(event.target.value)}
+                placeholder="25.00"
+                required
+              />
+            </label>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Gift Card Cost / Allocated Cost</span>
+              <input
+                className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.acquisition_cost}
                 onChange={(event) =>
-                  updateFormField("face_value", event.target.value)
+                  updateFormField("acquisition_cost", event.target.value)
                 }
                 placeholder="25.00"
                 required
               />
+              {instantDiscountPreview ? (
+                <span className="block rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+                  Instant discount: {instantDiscountPreview.percent}% ={" "}
+                  {formatAmount(instantDiscountPreview.discountAmount)}
+                  <br />
+                  Allocated cost:{" "}
+                  {formatAmount(instantDiscountPreview.allocatedCost)}
+                </span>
+              ) : (
+                <span className="block text-sm text-slate-500">
+                  Editable for store sale prices, such as a $100 card sold for
+                  $79.99.
+                </span>
+              )}
             </label>
 
             {form.card_source === "digital" ? (
@@ -649,9 +868,16 @@ export default function RapidCardIntakePage() {
               <div className="space-y-1 text-sm">
                 <p className="font-semibold">{purchase.store_name}</p>
                 <p className="text-slate-600">
-                  Purchase #{purchase.id} · Face value{" "}
-                  {formatAmount(purchase.total_amount)}
+                  Purchase #{purchase.id}
+                  {Number(purchase.total_amount) > 0
+                    ? ` · Receipt total ${formatAmount(purchase.total_amount)}`
+                    : ""}
                 </p>
+                {lookupsError ? (
+                  <p className="text-sm font-medium text-amber-700">
+                    {lookupsError} Instant discount matching may be unavailable.
+                  </p>
+                ) : null}
               </div>
             ) : (
               <p className="text-sm text-slate-500">Purchase not found.</p>
@@ -694,7 +920,22 @@ export default function RapidCardIntakePage() {
 
           {successMessage ? (
             <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
-              {successMessage}
+              <p>{successMessage}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  className="h-9 rounded-md border border-emerald-300 bg-white px-3 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100"
+                  onClick={startNextGiftCard}
+                  type="button"
+                >
+                  Add Another Card
+                </button>
+                <Link
+                  className="flex h-9 items-center rounded-md bg-emerald-700 px-3 text-xs font-semibold text-white transition hover:bg-emerald-800"
+                  href={`/purchases/${purchaseId}`}
+                >
+                  Finish Intake
+                </Link>
+              </div>
             </div>
           ) : null}
 
@@ -771,7 +1012,11 @@ export default function RapidCardIntakePage() {
               type="submit"
               disabled={isSubmitDisabled}
             >
-              {isSubmitting ? "Saving..." : "Save Gift Card"}
+              {lastSavedGiftCardId !== null
+                ? "Saved"
+                : isSubmitting
+                  ? "Saving..."
+                  : "Save Gift Card"}
             </button>
           </div>
         </form>
