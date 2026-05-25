@@ -8,6 +8,7 @@ import {
   FormEvent,
   ReactNode,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -50,7 +51,6 @@ type StoreForm = {
   name: string;
   store_type: string;
   retailer_group: string;
-  merchant_type: string;
   spending_category_id: string;
   reward_program_id: string;
   earns_fuel_points: boolean;
@@ -70,7 +70,6 @@ const emptyForm: StoreForm = {
   name: "",
   store_type: "",
   retailer_group: "",
-  merchant_type: "",
   spending_category_id: "",
   reward_program_id: "",
   earns_fuel_points: false,
@@ -78,6 +77,38 @@ const emptyForm: StoreForm = {
   notes: "",
   active: true,
 };
+
+const DEFAULT_STORE_TYPES = [
+  "grocery",
+  "gas",
+  "restaurant",
+  "warehouse_club",
+  "home_improvement",
+  "retail",
+  "online_retail",
+  "pharmacy",
+  "travel",
+  "general",
+];
+
+function normalizeStoreType(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase().replaceAll(" ", "_").replaceAll("-", "_");
+}
+
+function storeTypeLabel(value: string) {
+  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function mergeStoreTypeOptions(stores: Store[]) {
+  const options = new Set(DEFAULT_STORE_TYPES);
+  stores.forEach((store) => {
+    const storeType = normalizeStoreType(store.store_type);
+    if (storeType) {
+      options.add(storeType);
+    }
+  });
+  return Array.from(options);
+}
 
 class StoresRenderBoundary extends Component<
   { children: ReactNode },
@@ -304,9 +335,8 @@ function useRenderLoopDiagnostics(name: string, extra?: Record<string, unknown>)
 function storeToForm(store: Store): StoreForm {
   return {
     name: store.name,
-    store_type: store.store_type ?? "",
+    store_type: normalizeStoreType(store.store_type),
     retailer_group: store.retailer_group ?? "",
-    merchant_type: store.merchant_type ?? "",
     spending_category_id:
       store.spending_category_id === null ? "" : String(store.spending_category_id),
     reward_program_id:
@@ -339,6 +369,7 @@ function StoresSettingsContent() {
   const stopFetchRef = useRef(false);
   const rewardProgramsLoadedRef = useRef(false);
   const routeMountIdRef = useRef("pending");
+  const storeTypeOptions = useMemo(() => mergeStoreTypeOptions(stores), [stores]);
   useRenderLoopDiagnostics("Stores", {
     isLoading,
     storeCount: stores.length,
@@ -662,6 +693,23 @@ function StoresSettingsContent() {
     }));
   }
 
+  function updateEarnsFuelPoints(earnsFuelPoints: boolean) {
+    setForm((currentForm) => ({
+      ...currentForm,
+      earns_fuel_points: earnsFuelPoints,
+      default_fuel_multiplier: earnsFuelPoints
+        ? currentForm.default_fuel_multiplier || "4"
+        : "",
+      reward_program_id: earnsFuelPoints
+        ? currentForm.reward_program_id ||
+          String(
+            rewardPrograms.find((program) => program.short_code === "KROGER_FUEL")
+              ?.id ?? "",
+          )
+        : "",
+    }));
+  }
+
   async function saveStore(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsSaving(true);
@@ -682,16 +730,16 @@ function StoresSettingsContent() {
             spending_category_id: form.spending_category_id
               ? Number(form.spending_category_id)
               : null,
-            reward_program_id: form.reward_program_id
+            reward_program_id: form.earns_fuel_points && form.reward_program_id
               ? Number(form.reward_program_id)
               : null,
             merchant_category:
               categories.find(
                 (category) => String(category.id) === form.spending_category_id,
               )?.key ?? null,
-            merchant_type: form.merchant_type.trim() || null,
+            merchant_type: null,
             earns_fuel_points: form.earns_fuel_points,
-            default_fuel_multiplier: form.default_fuel_multiplier
+            default_fuel_multiplier: form.earns_fuel_points && form.default_fuel_multiplier
               ? Number(form.default_fuel_multiplier)
               : null,
             notes: form.notes.trim() || null,
@@ -825,14 +873,11 @@ function StoresSettingsContent() {
                           {store.retailer_group || "-"}
                         </td>
                         <td className="px-4 py-3">
-                          {store.spending_category?.name ??
-                            store.merchant_category ??
-                            "-"}
-                          {store.merchant_type ? (
-                            <p className="mt-1 text-xs text-slate-500">
-                              Type: {store.merchant_type.replaceAll("_", " ")}
-                            </p>
-                          ) : null}
+                          {store.store_type
+                            ? storeTypeLabel(normalizeStoreType(store.store_type))
+                            : store.spending_category?.name ??
+                              store.merchant_category ??
+                              "-"}
                         </td>
                         <td className="px-4 py-3">
                           {store.earns_fuel_points ? (
@@ -908,32 +953,20 @@ function StoresSettingsContent() {
               </label>
               <label className="space-y-2 text-sm font-medium text-slate-700">
                 <span>Store Type</span>
-                <input
+                <select
                   className="h-11 w-full rounded-md border border-slate-300 px-3"
                   onChange={(event) =>
                     updateFormField("store_type", event.target.value)
                   }
                   value={form.store_type}
-                />
-              </label>
-              <label className="space-y-2 text-sm font-medium text-slate-700">
-                <span>Merchant Type</span>
-                <input
-                  className="h-11 w-full rounded-md border border-slate-300 px-3"
-                  list="merchant-type-options"
-                  onChange={(event) =>
-                    updateFormField("merchant_type", event.target.value)
-                  }
-                  placeholder="target, costco, kroger, speedway"
-                  value={form.merchant_type}
-                />
-                <datalist id="merchant-type-options">
-                  {["target", "costco", "kroger", "speedway", "wholesale", "grocery", "fuel", "retail"].map(
-                    (merchantType) => (
-                      <option key={merchantType} value={merchantType} />
-                    ),
-                  )}
-                </datalist>
+                >
+                  <option value="">No store type</option>
+                  {storeTypeOptions.map((storeType) => (
+                    <option key={storeType} value={storeType}>
+                      {storeTypeLabel(storeType)}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="space-y-2 text-sm font-medium text-slate-700">
                 <span>Spending Category</span>
@@ -963,60 +996,46 @@ function StoresSettingsContent() {
                 <input
                   checked={form.earns_fuel_points}
                   className="h-4 w-4"
-                  onChange={(event) =>
-                    setForm((currentForm) => ({
-                      ...currentForm,
-                      earns_fuel_points: event.target.checked,
-                      default_fuel_multiplier: event.target.checked
-                        ? currentForm.default_fuel_multiplier || "4"
-                        : "",
-                      reward_program_id: event.target.checked
-                        ? currentForm.reward_program_id ||
-                          String(
-                            rewardPrograms.find(
-                              (program) => program.short_code === "KROGER_FUEL",
-                            )?.id ?? "",
-                          )
-                        : "",
-                    }))
-                  }
+                  onChange={(event) => updateEarnsFuelPoints(event.target.checked)}
                   type="checkbox"
                 />
                 <span>Earns Fuel Points</span>
               </label>
-              <label className="space-y-2 text-sm font-medium text-slate-700">
-                <span>Default Fuel Multiplier</span>
-                <input
-                  className="h-11 w-full rounded-md border border-slate-300 px-3"
-                  disabled={!form.earns_fuel_points}
-                  min="1"
-                  onChange={(event) =>
-                    updateFormField("default_fuel_multiplier", event.target.value)
-                  }
-                  type="number"
-                  value={form.default_fuel_multiplier}
-                />
-              </label>
-              <label className="space-y-2 text-sm font-medium text-slate-700">
-                <span>Fuel Reward Program</span>
-                <select
-                  className="h-11 w-full rounded-md border border-slate-300 px-3"
-                  disabled={!form.earns_fuel_points}
-                  onChange={(event) =>
-                    updateFormField("reward_program_id", event.target.value)
-                  }
-                  value={form.reward_program_id}
-                >
-                  <option value="">No program</option>
-                  {rewardPrograms
-                    .filter((program) => program.category === "Fuel Rewards")
-                    .map((program) => (
-                      <option key={program.id} value={program.id}>
-                        {program.short_code} · {program.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
+              {form.earns_fuel_points ? (
+                <>
+                  <label className="space-y-2 text-sm font-medium text-slate-700">
+                    <span>Default Fuel Multiplier</span>
+                    <input
+                      className="h-11 w-full rounded-md border border-slate-300 px-3"
+                      min="1"
+                      onChange={(event) =>
+                        updateFormField("default_fuel_multiplier", event.target.value)
+                      }
+                      type="number"
+                      value={form.default_fuel_multiplier}
+                    />
+                  </label>
+                  <label className="space-y-2 text-sm font-medium text-slate-700">
+                    <span>Fuel Reward Program</span>
+                    <select
+                      className="h-11 w-full rounded-md border border-slate-300 px-3"
+                      onChange={(event) =>
+                        updateFormField("reward_program_id", event.target.value)
+                      }
+                      value={form.reward_program_id}
+                    >
+                      <option value="">No program</option>
+                      {rewardPrograms
+                        .filter((program) => program.category === "Fuel Rewards")
+                        .map((program) => (
+                          <option key={program.id} value={program.id}>
+                            {program.short_code} · {program.name}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                </>
+              ) : null}
               <label className="flex h-11 items-center gap-2 text-sm font-medium text-slate-700">
                 <input
                   checked={form.active}

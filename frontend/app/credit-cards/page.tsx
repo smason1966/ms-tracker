@@ -175,18 +175,6 @@ const REWARD_TYPE_OPTIONS = [
   { value: "none", label: "None" },
 ];
 
-const MERCHANT_TYPE_OPTIONS = [
-  "target",
-  "lowes",
-  "costco",
-  "kroger",
-  "speedway",
-  "wholesale",
-  "grocery",
-  "fuel",
-  "retail",
-];
-
 class CreditCardsRenderBoundary extends Component<
   { children: ReactNode },
   { error: Error | null }
@@ -512,7 +500,7 @@ function rewardRulePayload(
         : rewardType === "none"
           ? "0"
           : rule.value,
-    merchant_type: rule.merchant_type.trim() || null,
+    merchant_type: null,
     store_id: rule.store_id ? Number(rule.store_id) : null,
     reward_program_id:
       rewardType === "points"
@@ -527,13 +515,6 @@ function rewardRulePayload(
     active: rule.active,
     notes: rule.notes.trim() || null,
   };
-}
-
-function rewardTypeLabel(value: string) {
-  return (
-    REWARD_TYPE_OPTIONS.find((option) => option.value === normalizeRewardRuleType(value))
-      ?.label ?? value.replaceAll("_", " ")
-  );
 }
 
 function isAdvancedRewardRule(rule: RewardRuleDraft) {
@@ -557,15 +538,17 @@ function rewardRuleSummary(card: CreditCard) {
   const baseRules = activeRules.filter(
     (rule) =>
       rule.spending_category.key === "general" &&
-      !rule.merchant_type,
+      !rule.merchant_type &&
+      !rule.store_id,
   );
   const categoryRules = activeRules.filter(
     (rule) =>
       rule.spending_category.key !== "general" &&
       !rule.merchant_type &&
+      !rule.store_id &&
       rule.reward_type === "points",
   );
-  const merchantRules = activeRules.filter((rule) => rule.merchant_type);
+  const merchantRules = activeRules.filter((rule) => rule.merchant_type || rule.store_id);
   const parts: string[] = [];
 
   if (baseRules[0]) {
@@ -585,7 +568,8 @@ function rewardRuleSummary(card: CreditCard) {
   }
 
   for (const rule of merchantRules.slice(0, 3)) {
-    const merchant = rule.merchant_type?.replaceAll("_", " ") ?? "merchant";
+    const merchant =
+      rule.store?.name ?? rule.merchant_type?.replaceAll("_", " ") ?? "store";
     const label =
       rule.reward_type === "instant_discount_percent" ||
       rule.reward_type === "purchase_discount"
@@ -593,7 +577,7 @@ function rewardRuleSummary(card: CreditCard) {
         : rule.reward_type === "none"
           ? "no rewards"
           : rule.reward_type.replaceAll("_", " ");
-    parts.push(`${formatRuleValue(rule)} ${merchant} ${label}`);
+    parts.push(`${formatRuleValue(rule)} ${label} at ${merchant}`);
   }
 
   return parts.length > 0 ? parts.join(", ") : `${activeRules.length} reward rules`;
@@ -678,15 +662,6 @@ function CreditCardsContent() {
   const advancedRewardRules = useMemo(
     () => rewardRuleDrafts.filter(isAdvancedRewardRule),
     [rewardRuleDrafts],
-  );
-  const activeMerchantTypes = useMemo(
-    () =>
-      new Set(
-        stores
-          .filter((store) => store.active && store.merchant_type)
-          .map((store) => store.merchant_type?.toLowerCase()),
-      ),
-    [stores],
   );
 
   const loadCards = useCallback(async () => {
@@ -911,6 +886,14 @@ function CreditCardsContent() {
           nextRule.value = "0";
         }
 
+        if (field === "reward_type" && value !== "points_multiplier") {
+          nextRule.reward_program_id = "";
+        }
+
+        if (field === "reward_type" && value === "points_multiplier") {
+          nextRule.reward_program_id = nextRule.reward_program_id || form.reward_program_id;
+        }
+
         return nextRule;
       }),
     );
@@ -956,12 +939,17 @@ function CreditCardsContent() {
   function validateRewardRuleDrafts() {
     for (const rule of rewardRuleDrafts) {
       const hasMerchantOverride = Boolean(rule.merchant_type.trim() || rule.store_id);
+      const requiresSpecificStore = Boolean(
+        rule.merchant_type.trim() ||
+          rule.store_id ||
+          (rule.reward_type !== "points_multiplier" && rule.reward_type !== "none"),
+      );
       if (!rule.spending_category_id && !hasMerchantOverride) {
         return "Select a category for every reward rule.";
       }
 
-      if (!rule.spending_category_id && !generalCategoryId) {
-        return "Create a General spending category before saving merchant-only reward rules.";
+      if (requiresSpecificStore && !rule.store_id) {
+        return "Select a specific store for every advanced merchant rule.";
       }
 
       const rewardType = apiRewardRuleType(rule.reward_type);
@@ -1645,7 +1633,7 @@ function CreditCardsContent() {
                           onClick={() => addAdvancedRuleDraft("points_multiplier")}
                           type="button"
                         >
-                          Add Merchant Override Rule
+                          Add Store Override Rule
                         </button>
                       </div>
 
@@ -1680,36 +1668,6 @@ function CreditCardsContent() {
                                   ))}
                                 </select>
                               </label>
-
-                              <label className="space-y-1 text-sm font-medium text-slate-700">
-                                <span>Merchant Type Override</span>
-                                <input
-                                  className="relative z-50 h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                                  list="credit-card-merchant-type-options"
-                                  onChange={(event) =>
-                                    updateRewardRuleDraft(
-                                      rule.local_id,
-                                      "merchant_type",
-                                      event.target.value,
-                                    )
-                                  }
-                                  placeholder="target, lowes, grocery..."
-                                  value={rule.merchant_type}
-                                />
-                                <p className="text-xs text-slate-500">
-                                  Matches any store with this merchant type.
-                                </p>
-                              </label>
-
-                              {rule.merchant_type.trim() &&
-                              !activeMerchantTypes.has(
-                                rule.merchant_type.trim().toLowerCase(),
-                              ) ? (
-                                <p className="self-end rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-                                  Merchant type exists, but no active store currently
-                                  uses {rule.merchant_type.trim()}.
-                                </p>
-                              ) : null}
 
                               <label className="space-y-1 text-sm font-medium text-slate-700">
                                 <span>Value / Rate</span>
@@ -1777,7 +1735,7 @@ function CreditCardsContent() {
                                   }
                                   value={rule.store_id}
                                 >
-                                  <option value="">Any store with merchant type</option>
+                                  <option value="">Select store</option>
                                   {stores
                                     .filter(
                                       (store) =>
@@ -1791,34 +1749,36 @@ function CreditCardsContent() {
                                 </select>
                               </label>
 
-                              <label className="space-y-1 text-sm font-medium text-slate-700">
-                                <span>Fallback Category</span>
-                                <select
-                                  className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                                  onChange={(event) =>
-                                    updateRewardRuleDraft(
-                                      rule.local_id,
-                                      "spending_category_id",
-                                      event.target.value,
-                                    )
-                                  }
-                                  value={rule.spending_category_id}
-                                >
-                                  <option value="">General/default</option>
-                                  {spendingCategories
-                                    .filter(
-                                      (category) =>
-                                        category.active !== false ||
-                                        String(category.id) === rule.spending_category_id,
-                                    )
-                                    .map((category) => (
-                                      <option key={category.id} value={category.id}>
-                                        {category.name}
-                                        {category.active === false ? " (inactive)" : ""}
-                                      </option>
-                                    ))}
-                                </select>
-                              </label>
+                              {rule.reward_type === "instant_discount_percent" ? null : (
+                                <label className="space-y-1 text-sm font-medium text-slate-700">
+                                  <span>Fallback Category</span>
+                                  <select
+                                    className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                                    onChange={(event) =>
+                                      updateRewardRuleDraft(
+                                        rule.local_id,
+                                        "spending_category_id",
+                                        event.target.value,
+                                      )
+                                    }
+                                    value={rule.spending_category_id}
+                                  >
+                                    <option value="">General/default</option>
+                                    {spendingCategories
+                                      .filter(
+                                        (category) =>
+                                          category.active !== false ||
+                                          String(category.id) === rule.spending_category_id,
+                                      )
+                                      .map((category) => (
+                                        <option key={category.id} value={category.id}>
+                                          {category.name}
+                                          {category.active === false ? " (inactive)" : ""}
+                                        </option>
+                                      ))}
+                                  </select>
+                                </label>
+                              )}
 
                               <label className="space-y-1 text-sm font-medium text-slate-700">
                                 <span>Priority</span>
@@ -1900,11 +1860,6 @@ function CreditCardsContent() {
                     </div>
                   ) : null}
                 </div>
-                <datalist id="credit-card-merchant-type-options">
-                  {MERCHANT_TYPE_OPTIONS.map((merchantType) => (
-                    <option key={merchantType} value={merchantType} />
-                  ))}
-                </datalist>
               </section>
 
               <label className="space-y-2 text-sm font-medium text-slate-700 sm:col-span-2">

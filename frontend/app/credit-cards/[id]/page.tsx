@@ -235,17 +235,6 @@ const REWARD_TYPE_OPTIONS = [
 
 const NETWORK_CODES = new Set(["VISA", "MASTERCARD", "AMEX", "DISCOVER", "OTHER"]);
 
-const MERCHANT_TYPE_OPTIONS = [
-  "target",
-  "costco",
-  "kroger",
-  "speedway",
-  "wholesale",
-  "grocery",
-  "fuel",
-  "retail",
-];
-
 function rewardTypeLabel(value: string) {
   if (value === "purchase_discount") {
     return "Instant Discount %";
@@ -255,6 +244,10 @@ function rewardTypeLabel(value: string) {
     REWARD_TYPE_OPTIONS.find((option) => option.value === value)?.label ??
     value.replaceAll("_", " ")
   );
+}
+
+function isInstantDiscountRuleType(value: string) {
+  return value === "instant_discount_percent" || value === "purchase_discount";
 }
 
 function optionalString(value: string | number | null | undefined) {
@@ -517,6 +510,14 @@ export default function CreditCardDetailPage() {
   const [cardIssuers, setCardIssuers] = useState<CardIssuer[]>([]);
   const [cardNetworks, setCardNetworks] = useState<CardNetwork[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
+  const generalCategoryId = useMemo(() => {
+    const generalCategory = categories.find(
+      (category) =>
+        category.key.toLowerCase() === "general" ||
+        category.name.toLowerCase() === "general",
+    );
+    return generalCategory ? String(generalCategory.id) : "";
+  }, [categories]);
   const [rewardPrograms, setRewardPrograms] = useState<RewardProgram[]>([]);
   const [isMultiPlayerModeEnabled, setIsMultiPlayerModeEnabled] = useState(false);
   const [rewardRuleCategoryId, setRewardRuleCategoryId] = useState("");
@@ -524,7 +525,6 @@ export default function CreditCardDetailPage() {
   const [rewardRuleMultiplier, setRewardRuleMultiplier] = useState("");
   const [rewardRuleValue, setRewardRuleValue] = useState("");
   const [rewardRuleProgramId, setRewardRuleProgramId] = useState("");
-  const [rewardRuleMerchantType, setRewardRuleMerchantType] = useState("");
   const [rewardRuleStoreId, setRewardRuleStoreId] = useState("");
   const [rewardRulePriority, setRewardRulePriority] = useState("100");
   const [rewardRuleActive, setRewardRuleActive] = useState(true);
@@ -835,9 +835,11 @@ export default function CreditCardDetailPage() {
 
     if (
       !card ||
-      !rewardRuleCategoryId ||
+      (!rewardRuleCategoryId && !isInstantDiscountRuleType(rewardRuleType)) ||
+      (isInstantDiscountRuleType(rewardRuleType) && !generalCategoryId) ||
       (rewardRuleType === "points" && !rewardRuleMultiplier) ||
-      (rewardRuleType !== "points" && rewardRuleType !== "none" && !rewardRuleValue)
+      (rewardRuleType !== "points" && rewardRuleType !== "none" && !rewardRuleValue) ||
+      (isInstantDiscountRuleType(rewardRuleType) && !rewardRuleStoreId)
     ) {
       return;
     }
@@ -858,7 +860,11 @@ export default function CreditCardDetailPage() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            spending_category_id: Number(rewardRuleCategoryId),
+            spending_category_id: Number(
+              isInstantDiscountRuleType(rewardRuleType)
+                ? generalCategoryId
+                : rewardRuleCategoryId,
+            ),
             reward_type: rewardRuleType,
             multiplier:
               rewardRuleType === "points"
@@ -872,12 +878,13 @@ export default function CreditCardDetailPage() {
                 : rewardRuleType === "none"
                   ? "0"
                   : rewardRuleValue,
-            reward_program_id: rewardRuleProgramId
-              ? Number(rewardRuleProgramId)
-              : rewardRuleType === "points"
-                ? card.reward_program_id
+            reward_program_id:
+              rewardRuleType === "points"
+                ? rewardRuleProgramId
+                  ? Number(rewardRuleProgramId)
+                  : card.reward_program_id
                 : null,
-            merchant_type: rewardRuleMerchantType.trim() || null,
+            merchant_type: null,
             store_id: rewardRuleStoreId ? Number(rewardRuleStoreId) : null,
             priority: rewardRulePriority ? Number(rewardRulePriority) : 100,
             active: rewardRuleActive,
@@ -898,7 +905,6 @@ export default function CreditCardDetailPage() {
       setRewardRuleMultiplier("");
       setRewardRuleValue("");
       setRewardRuleProgramId(card.reward_program_id ? String(card.reward_program_id) : "");
-      setRewardRuleMerchantType("");
       setRewardRuleStoreId("");
       setRewardRulePriority("100");
       setRewardRuleActive(true);
@@ -930,13 +936,14 @@ export default function CreditCardDetailPage() {
     setRewardRuleMultiplier(String(rule.multiplier));
     setRewardRuleValue(rule.value === null ? "" : String(rule.value));
     setRewardRuleProgramId(
-      rule.reward_program_id
+      isInstantDiscountRuleType(rule.reward_type)
+        ? ""
+        : rule.reward_program_id
         ? String(rule.reward_program_id)
         : card?.reward_program_id
           ? String(card.reward_program_id)
           : "",
     );
-    setRewardRuleMerchantType(rule.merchant_type ?? "");
     setRewardRuleStoreId(rule.store_id === null ? "" : String(rule.store_id));
     setRewardRulePriority(String(rule.priority ?? 100));
     setRewardRuleActive(rule.active);
@@ -951,7 +958,6 @@ export default function CreditCardDetailPage() {
     setRewardRuleMultiplier("");
     setRewardRuleValue("");
     setRewardRuleProgramId(card?.reward_program_id ? String(card.reward_program_id) : "");
-    setRewardRuleMerchantType("");
     setRewardRuleStoreId("");
     setRewardRulePriority("100");
     setRewardRuleActive(true);
@@ -1545,12 +1551,12 @@ export default function CreditCardDetailPage() {
                     Reward Rules
                   </h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    Merchant overrides apply first, then category rules, then General fallback.
+                    Store overrides apply first, then category rules, then General fallback.
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
                     Use General as the base/default earning rule. For Target Circle
-                    Mastercard, add General 1x, Fuel 2x, Dining 2x, and a target
-                    merchant instant discount at 5% with higher priority.
+                    Mastercard, add General 1x, Fuel 2x, Dining 2x, and a Target
+                    store instant discount at 5% with higher priority.
                   </p>
                 </div>
                 <button
@@ -1583,7 +1589,7 @@ export default function CreditCardDetailPage() {
                         </p>
                         {rule.merchant_type || rule.store ? (
                           <p className="text-xs text-slate-500">
-                            Merchant override:{" "}
+                            Store rule:{" "}
                             {rule.store
                               ? rule.store.name
                               : rule.merchant_type?.replaceAll("_", " ")}
@@ -1602,12 +1608,11 @@ export default function CreditCardDetailPage() {
                           ? `${Number(rule.multiplier).toFixed(1)}x`
                           : rule.reward_type === "none"
                             ? "No rewards"
-                            : `${Number(rule.value ?? 0).toFixed(2)}${
-                                rule.reward_type.includes("percent") ||
-                                rule.reward_type === "purchase_discount"
-                                  ? "%"
-                                  : ""
-                              }`}
+                            : isInstantDiscountRuleType(rule.reward_type)
+                              ? `${Number(rule.value ?? 0).toFixed(2)}% instant discount`
+                              : `${Number(rule.value ?? 0).toFixed(2)}${
+                                  rule.reward_type.includes("percent") ? "%" : ""
+                                }`}
                       </p>
                       <div className="flex flex-wrap gap-2 sm:justify-end">
                         <button
@@ -1687,31 +1692,37 @@ export default function CreditCardDetailPage() {
                 className="mt-4 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-4"
                 onSubmit={handleRewardRuleSubmit}
               >
-                <label className="space-y-1 text-sm font-medium text-slate-700">
-                  <span>Category</span>
-                  <select
-                    className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
-                    onChange={(event) =>
-                      setRewardRuleCategoryId(event.target.value)
-                    }
-                    required
-                    value={rewardRuleCategoryId}
-                  >
-                    <option value="">Select category</option>
-                    {categories.map((category) => (
-                      <option key={category.id} value={category.id}>
-                        {category.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                {isInstantDiscountRuleType(rewardRuleType) ? null : (
+                  <label className="space-y-1 text-sm font-medium text-slate-700">
+                    <span>Category</span>
+                    <select
+                      className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
+                      onChange={(event) =>
+                        setRewardRuleCategoryId(event.target.value)
+                      }
+                      required
+                      value={rewardRuleCategoryId}
+                    >
+                      <option value="">Select category</option>
+                      {categories.map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <label className="space-y-1 text-sm font-medium text-slate-700">
                   <span>Reward Type</span>
                   <select
                     className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
                     onChange={(event) => {
-                      setRewardRuleType(event.target.value);
-                      if (event.target.value === "none") {
+                      const nextType = event.target.value;
+                      setRewardRuleType(nextType);
+                      if (nextType !== "points") {
+                        setRewardRuleProgramId("");
+                      }
+                      if (nextType === "none") {
                         setRewardRuleValue("0");
                         setRewardRuleMultiplier("0");
                       }
@@ -1748,47 +1759,43 @@ export default function CreditCardDetailPage() {
                     Use 5 for a 5% cashback or instant discount rule.
                   </p>
                 </label>
-                <label className="space-y-1 text-sm font-medium text-slate-700">
-                  <span>Program</span>
-                  <select
-                    className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
-                    disabled={rewardRuleType !== "points"}
-                    onChange={(event) =>
-                      setRewardRuleProgramId(event.target.value)
-                    }
-                    value={rewardRuleProgramId}
-                  >
-                    <option value="">Card default</option>
-                    {rewardPrograms.map((program) => (
-                      <option key={program.id} value={program.id}>
-                        {program.short_code} · {program.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-1 text-sm font-medium text-slate-700">
-                  <span>Merchant Override</span>
-                  <input
-                    className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
-                    list="merchant-type-options"
-                    onChange={(event) => setRewardRuleMerchantType(event.target.value)}
-                    placeholder="target, costco, kroger..."
-                    value={rewardRuleMerchantType}
-                  />
-                  <datalist id="merchant-type-options">
-                    {MERCHANT_TYPE_OPTIONS.map((merchantType) => (
-                      <option key={merchantType} value={merchantType} />
-                    ))}
-                  </datalist>
-                </label>
+                {isInstantDiscountRuleType(rewardRuleType) ? (
+                  <p className="self-end rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500">
+                    Program not applicable.
+                  </p>
+                ) : (
+                  <label className="space-y-1 text-sm font-medium text-slate-700">
+                    <span>Program</span>
+                    <select
+                      className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
+                      disabled={rewardRuleType !== "points"}
+                      onChange={(event) =>
+                        setRewardRuleProgramId(event.target.value)
+                      }
+                      value={rewardRuleProgramId}
+                    >
+                      <option value="">Card default</option>
+                      {rewardPrograms.map((program) => (
+                        <option key={program.id} value={program.id}>
+                          {program.short_code} · {program.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <label className="space-y-1 text-sm font-medium text-slate-700">
                   <span>Specific Store</span>
                   <select
                     className="h-10 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-950"
                     onChange={(event) => setRewardRuleStoreId(event.target.value)}
+                    required={isInstantDiscountRuleType(rewardRuleType)}
                     value={rewardRuleStoreId}
                   >
-                    <option value="">Any matching merchant</option>
+                    <option value="">
+                      {isInstantDiscountRuleType(rewardRuleType)
+                        ? "Select store"
+                        : "No specific store"}
+                    </option>
                     {stores
                       .filter((store) => store.active || String(store.id) === rewardRuleStoreId)
                       .map((store) => (
