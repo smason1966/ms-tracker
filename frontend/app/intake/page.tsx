@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { API_BASE_URL } from "@/lib/api";
@@ -224,6 +224,8 @@ function getUploadUrl(path: string | null) {
 
 export default function PurchaseIntakePage() {
   const router = useRouter();
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const touchSubmitRequestedRef = useRef(false);
   const [stores, setStores] = useState<Store[]>([]);
   const [fuelAccounts, setFuelAccounts] = useState<FuelAccount[]>([]);
   const [creditCards, setCreditCards] = useState<CreditCard[]>([]);
@@ -682,8 +684,20 @@ export default function PurchaseIntakePage() {
     hasMissingCreditCardPayment ||
     hasBlankPaymentRows;
 
+  function submitFromMobileCta() {
+    if (isSubmitDisabled || touchSubmitRequestedRef.current) {
+      return;
+    }
+
+    touchSubmitRequestedRef.current = true;
+    formRef.current?.requestSubmit();
+    window.setTimeout(() => {
+      touchSubmitRequestedRef.current = false;
+    }, 700);
+  }
+
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-6 pb-28 text-slate-950 sm:pb-6">
+    <main className="min-h-screen bg-slate-50 px-4 py-6 pb-36 text-slate-950 sm:pb-6">
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col sm:max-w-2xl">
         <header className="pb-5">
           <p className="text-sm font-medium text-slate-500">Purchase Intake</p>
@@ -692,7 +706,7 @@ export default function PurchaseIntakePage() {
           </h1>
         </header>
 
-        <form className="flex flex-1 flex-col" onSubmit={handleSubmit}>
+        <form className="flex flex-1 flex-col" onSubmit={handleSubmit} ref={formRef}>
           <section className="space-y-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <label className="block space-y-2 text-sm font-medium text-slate-700">
               <span>Store</span>
@@ -1275,14 +1289,29 @@ export default function PurchaseIntakePage() {
             </div>
           ) : null}
 
-          <div className="sticky bottom-0 mt-auto bg-slate-50 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4">
-            <button
-              className="h-12 w-full rounded-md bg-slate-900 px-5 text-base font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-              type="submit"
-              disabled={isSubmitDisabled}
-            >
-              {isSubmitting ? "Saving..." : "Continue to Card Intake"}
-            </button>
+          <div className="fixed inset-x-0 bottom-0 z-20 mt-auto border-t border-slate-200 bg-slate-50/95 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur sm:sticky sm:border-t-0 sm:bg-slate-50 sm:px-0 sm:pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pt-4 sm:backdrop-blur-none">
+            <div className="mx-auto max-w-md sm:max-w-none">
+              <button
+                className="h-12 w-full rounded-md bg-slate-900 px-5 text-base font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                disabled={isSubmitDisabled}
+                onClick={(event) => {
+                  if (touchSubmitRequestedRef.current) {
+                    event.preventDefault();
+                  }
+                }}
+                onPointerDown={(event) => {
+                  if (event.pointerType !== "touch") {
+                    return;
+                  }
+
+                  event.preventDefault();
+                  submitFromMobileCta();
+                }}
+                type="submit"
+              >
+                {isSubmitting ? "Saving..." : "Continue to Card Intake"}
+              </button>
+            </div>
           </div>
         </form>
       </div>
