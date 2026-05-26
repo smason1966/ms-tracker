@@ -412,6 +412,13 @@ function formatRuleValue(rule: RewardRule) {
   return `${Number(rule.value ?? 0).toFixed(Number(rule.value ?? 0) % 1 === 0 ? 0 : 2)}${suffix}`;
 }
 
+function isInstantDiscountRule(rule: Pick<RewardRule, "reward_type">) {
+  return (
+    rule.reward_type === "instant_discount_percent" ||
+    rule.reward_type === "purchase_discount"
+  );
+}
+
 function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -571,8 +578,7 @@ function rewardRuleSummary(card: CreditCard) {
     const merchant =
       rule.store?.name ?? rule.merchant_type?.replaceAll("_", " ") ?? "store";
     const label =
-      rule.reward_type === "instant_discount_percent" ||
-      rule.reward_type === "purchase_discount"
+      isInstantDiscountRule(rule)
         ? "instant discount"
         : rule.reward_type === "none"
           ? "no rewards"
@@ -1487,8 +1493,7 @@ function CreditCardsContent() {
                   ))}
                 </select>
                 <p className="text-xs text-slate-500">
-                  Legacy default. Use Manage Rules for base, category, and merchant
-                  earning behavior.
+                  Default reward program used by this card unless a rule overrides it.
                 </p>
               </label>
 
@@ -1612,7 +1617,7 @@ function CreditCardsContent() {
                     onClick={() => setIsAdvancedRulesOpen((isOpen) => !isOpen)}
                     type="button"
                   >
-                    <span>Advanced merchant rules</span>
+                    <span>Advanced store rules</span>
                     <span className="text-xs text-slate-500">
                       {advancedRewardRules.length} configured
                     </span>

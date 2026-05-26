@@ -250,6 +250,50 @@ function isInstantDiscountRuleType(value: string) {
   return value === "instant_discount_percent" || value === "purchase_discount";
 }
 
+function formatRuleRate(rule: RewardRule) {
+  if (rule.reward_type === "points") {
+    return `${Number(rule.multiplier).toFixed(1)}x`;
+  }
+
+  if (rule.reward_type === "none") {
+    return "No rewards";
+  }
+
+  if (isInstantDiscountRuleType(rule.reward_type)) {
+    return `${Number(rule.value ?? 0).toFixed(
+      Number(rule.value ?? 0) % 1 === 0 ? 0 : 2,
+    )}% instant discount`;
+  }
+
+  return `${Number(rule.value ?? 0).toFixed(2)}${
+    rule.reward_type.includes("percent") ? "%" : ""
+  }`;
+}
+
+function rewardRulePrimaryLabel(rule: RewardRule) {
+  if (isInstantDiscountRuleType(rule.reward_type) && rule.store) {
+    return `${rule.store.name} · ${formatRuleRate(rule)}`;
+  }
+
+  return rule.spending_category.name;
+}
+
+function rewardRuleSecondaryLabel(rule: RewardRule, card: CreditCard) {
+  if (isInstantDiscountRuleType(rule.reward_type)) {
+    return rule.store ? "Store rule · Program not applicable" : "Program not applicable";
+  }
+
+  if (rule.reward_type === "points" && rule.reward_program) {
+    return `${rewardTypeLabel(rule.reward_type)} · ${rule.reward_program.short_code} · ${rule.reward_program.name}`;
+  }
+
+  if (rule.reward_type === "points" && card.reward_program) {
+    return `${rewardTypeLabel(rule.reward_type)} · ${card.reward_program.short_code} · ${card.reward_program.name}`;
+  }
+
+  return rewardTypeLabel(rule.reward_type);
+}
+
 function optionalString(value: string | number | null | undefined) {
   return value === null || value === undefined ? "" : String(value);
 }
@@ -1551,12 +1595,12 @@ export default function CreditCardDetailPage() {
                     Reward Rules
                   </h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    Store overrides apply first, then category rules, then General fallback.
+                    Store rules apply first, then category rules, then General fallback.
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
-                    Use General as the base/default earning rule. For Target Circle
-                    Mastercard, add General 1x, Fuel 2x, Dining 2x, and a Target
-                    store instant discount at 5% with higher priority.
+                    For store-specific discounts, select Rule Type = Instant
+                    Discount %, choose the store, and leave Program as Not
+                    applicable.
                   </p>
                 </div>
                 <button
@@ -1577,17 +1621,13 @@ export default function CreditCardDetailPage() {
                     >
                       <div>
                         <p className="font-semibold text-slate-950">
-                          {rule.spending_category.name}
+                          {rewardRulePrimaryLabel(rule)}
                         </p>
                         <p className="text-xs font-semibold text-slate-500">
-                          {rewardTypeLabel(rule.reward_type)}
-                          {rule.reward_type === "points" && rule.reward_program
-                            ? ` · ${rule.reward_program.short_code} · ${rule.reward_program.name}`
-                            : rule.reward_type === "points" && card.reward_program
-                              ? ` · ${card.reward_program.short_code} · ${card.reward_program.name}`
-                              : ""}
+                          {rewardRuleSecondaryLabel(rule, card)}
                         </p>
-                        {rule.merchant_type || rule.store ? (
+                        {(rule.merchant_type || rule.store) &&
+                        !isInstantDiscountRuleType(rule.reward_type) ? (
                           <p className="text-xs text-slate-500">
                             Store rule:{" "}
                             {rule.store
@@ -1604,15 +1644,7 @@ export default function CreditCardDetailPage() {
                         </p>
                       </div>
                       <p className="font-semibold text-slate-950">
-                        {rule.reward_type === "points"
-                          ? `${Number(rule.multiplier).toFixed(1)}x`
-                          : rule.reward_type === "none"
-                            ? "No rewards"
-                            : isInstantDiscountRuleType(rule.reward_type)
-                              ? `${Number(rule.value ?? 0).toFixed(2)}% instant discount`
-                              : `${Number(rule.value ?? 0).toFixed(2)}${
-                                  rule.reward_type.includes("percent") ? "%" : ""
-                                }`}
+                        {formatRuleRate(rule)}
                       </p>
                       <div className="flex flex-wrap gap-2 sm:justify-end">
                         <button
@@ -1756,7 +1788,7 @@ export default function CreditCardDetailPage() {
                     }
                   />
                   <p className="text-xs text-slate-500">
-                    Use 5 for a 5% cashback or instant discount rule.
+                    Use 5 for a 5% rate.
                   </p>
                 </label>
                 {isInstantDiscountRuleType(rewardRuleType) ? (
