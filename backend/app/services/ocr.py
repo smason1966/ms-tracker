@@ -148,6 +148,11 @@ def extract_region_ocr_result(
     horizontal_padding_pct: float = 0,
     vertical_padding_pct: float = 0,
     debug_run: OCRDebugRun | None = None,
+    character_whitelist: str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    selected_baseline_only: bool = True,
+    include_padded_passes: bool = True,
+    ocr_modes: list[tuple[str, str]] | None = None,
+    digit_band_detection: bool = False,
 ) -> OCRRegionResult:
     path = Path(image_path)
 
@@ -246,16 +251,38 @@ def extract_region_ocr_result(
             debug_prefix=debug_prefix,
             debug_run=effective_debug_run,
             total_timeout_seconds=3.0,
-            baseline_only=True,
+            baseline_only=selected_baseline_only,
+            character_whitelist=character_whitelist,
+            ocr_modes=ocr_modes,
         )
-        padded_results, padded_timed_out, padded_timings = run_region_ocr_passes(
-            cropped,
-            crop_label="padded",
-            debug_prefix=debug_prefix,
-            debug_run=effective_debug_run,
-            total_timeout_seconds=6.5,
-        )
+        if include_padded_passes:
+            padded_results, padded_timed_out, padded_timings = run_region_ocr_passes(
+                cropped,
+                crop_label="padded",
+                debug_prefix=debug_prefix,
+                debug_run=effective_debug_run,
+                total_timeout_seconds=6.5,
+                character_whitelist=character_whitelist,
+                ocr_modes=ocr_modes,
+            )
+        else:
+            padded_results = []
+            padded_timed_out = False
+            padded_timings = []
+
         pass_results = [*selected_results, *padded_results]
+        if digit_band_detection:
+            digit_candidate = detect_seven_segment_digits(selected_crop)
+            if digit_candidate:
+                pass_results.insert(
+                    0,
+                    image_analysis_ocr_pass(
+                        digit_candidate,
+                        crop_label="selected_baseline",
+                        pass_name="digit_band_detector",
+                        mode_name="image_analysis",
+                    ),
+                )
         stage_timings.extend(selected_timings)
         stage_timings.extend(padded_timings)
         timed_out = selected_timed_out or padded_timed_out
@@ -385,6 +412,217 @@ def region_ocr_variants(image: Image.Image) -> list[tuple[str, Image.Image]]:
     ]
 
 
+def image_analysis_ocr_pass(
+    text: str,
+    *,
+    crop_label: str,
+    pass_name: str,
+    mode_name: str,
+) -> dict:
+    return {
+        "pass_name": f"{crop_label}:{pass_name}:{mode_name}",
+        "text": text,
+        "data": {
+            "text": [text],
+            "conf": ["85"],
+            "left": [0],
+            "top": [0],
+            "width": [0],
+            "height": [0],
+            "line_num": [1],
+        },
+        "score": len(text) + 12,
+        "engine_called": False,
+        "error": None,
+        "timed_out": False,
+        "duration_ms": 0,
+        "language": "image-analysis",
+        "config": "seven_segment_digit_band",
+        "psm": "image_analysis",
+        "oem": "image_analysis",
+        "image_mode": "L",
+        "image_width": 0,
+        "image_height": 0,
+        "debug_image_path": "",
+        "raw_tokens": [
+            {
+                "text": text,
+                "conf": "85",
+                "left": 0,
+                "top": 0,
+                "width": 0,
+                "height": 0,
+            }
+        ],
+    }
+
+
+def detect_seven_segment_digits(image: Image.Image) -> str | None:
+    grayscale = np.array(ImageOps.grayscale(image.convert("RGB")))
+    if grayscale.size == 0:
+        return None
+
+    blurred = cv2.GaussianBlur(grayscale, (3, 3), 0)
+    _, foreground = cv2.threshold(
+        blurred,
+        0,
+        255,
+        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU,
+    )
+    foreground = cv2.morphologyEx(
+        foreground,
+        cv2.MORPH_CLOSE,
+        np.ones((3, 3), dtype=np.uint8),
+        iterations=1,
+    )
+
+    height, width = foreground.shape
+    if height <= 0 or width <= 0:
+        return None
+
+    row_counts = (foreground > 0).sum(axis=1)
+    # Scratch-off bars are usually long horizontal bands. Find the densest
+    # non-bar row run so the digit classifier sees the PIN baseline, not the
+    # black scratch bars above/below it.
+    digit_rows = np.where(
+        (row_counts > width * 0.02) & (row_counts < width * 0.35)
+    )[0]
+    if digit_rows.size == 0:
+        return None
+
+    row_runs: list[tuple[int, int]] = []
+    row_start = int(digit_rows[0])
+    previous_row = int(digit_rows[0])
+    for row in digit_rows[1:]:
+        row = int(row)
+        if row - previous_row > 3:
+            row_runs.append((row_start, previous_row))
+            row_start = row
+        previous_row = row
+    row_runs.append((row_start, previous_row))
+    band_top, band_bottom = max(row_runs, key=lambda row_run: row_run[1] - row_run[0])
+    digit_band = foreground[band_top : band_bottom + 1, :]
+
+    column_counts = (digit_band > 0).sum(axis=0)
+    active_columns = np.where(column_counts > max(2, digit_band.shape[0] * 0.04))[0]
+    if active_columns.size == 0:
+        return None
+
+    runs: list[tuple[int, int]] = []
+    run_start = int(active_columns[0])
+    previous = int(active_columns[0])
+    max_gap = max(8, width // 50)
+    for column in active_columns[1:]:
+        column = int(column)
+        if column - previous > max_gap:
+            runs.append((run_start, previous))
+            run_start = column
+        previous = column
+    runs.append((run_start, previous))
+
+    digit_boxes: list[tuple[int, int, int, int]] = []
+    for left, right in runs:
+        if left <= 2 or right >= width - 2:
+            continue
+
+        run_width = right - left + 1
+        if run_width < max(8, width * 0.035) or run_width > width * 0.24:
+            continue
+
+        run_mask = digit_band[:, left : right + 1] > 0
+        active_rows = np.where(run_mask.sum(axis=1) > 0)[0]
+        if active_rows.size == 0:
+            continue
+
+        top = band_top + int(active_rows.min())
+        bottom = band_top + int(active_rows.max())
+        run_height = bottom - top + 1
+        if run_height < height * 0.18 or run_height > height * 0.70:
+            continue
+
+        digit_boxes.append((left, top, right, bottom))
+
+    if len(digit_boxes) < 4:
+        return None
+
+    digit_boxes = sorted(digit_boxes, key=lambda box: box[0])[:4]
+    digits = [classify_seven_segment_digit(foreground, box) for box in digit_boxes]
+    if any(digit is None for digit in digits):
+        return None
+
+    value = "".join(str(digit) for digit in digits if digit is not None)
+    return value if len(value) == 4 else None
+
+
+def classify_seven_segment_digit(
+    foreground: np.ndarray,
+    box: tuple[int, int, int, int],
+) -> int | None:
+    left, top, right, bottom = box
+    digit = foreground[top : bottom + 1, left : right + 1] > 0
+    if digit.size == 0:
+        return None
+
+    h, w = digit.shape
+    if h < 5 or w < 3:
+        return None
+
+    def fill(x0: float, y0: float, x1: float, y1: float) -> float:
+        x_start = max(0, min(w - 1, int(w * x0)))
+        x_end = max(x_start + 1, min(w, int(w * x1)))
+        y_start = max(0, min(h - 1, int(h * y0)))
+        y_end = max(y_start + 1, min(h, int(h * y1)))
+        region = digit[y_start:y_end, x_start:x_end]
+        return float(region.mean()) if region.size else 0.0
+
+    segments = {
+        "a": fill(0.20, 0.00, 0.82, 0.22) > 0.12,
+        "b": fill(0.00, 0.12, 0.35, 0.48) > 0.12,
+        "c": fill(0.62, 0.12, 1.00, 0.48) > 0.12,
+        "g": fill(0.18, 0.38, 0.84, 0.62) > 0.12,
+        "e": fill(0.00, 0.52, 0.35, 0.90) > 0.12,
+        "f": fill(0.62, 0.52, 1.00, 0.90) > 0.12,
+        "d": fill(0.18, 0.76, 0.84, 1.00) > 0.12,
+    }
+    active = {segment for segment, present in segments.items() if present}
+    patterns = {
+        0: {"a", "b", "c", "d", "e", "f"},
+        1: {"c", "f"},
+        2: {"a", "c", "d", "e", "g"},
+        3: {"a", "c", "d", "f", "g"},
+        4: {"b", "c", "f", "g"},
+        5: {"a", "b", "d", "f", "g"},
+        6: {"a", "b", "d", "e", "f", "g"},
+        7: {"a", "c", "f"},
+        8: {"a", "b", "c", "d", "e", "f", "g"},
+        9: {"a", "b", "c", "d", "f", "g"},
+    }
+    best_digit = None
+    best_distance = 99
+    for number, pattern in patterns.items():
+        distance = len(active.symmetric_difference(pattern))
+        if distance < best_distance:
+            best_digit = number
+            best_distance = distance
+
+    aspect_ratio = w / h
+    if {"a", "b", "c", "f", "g"}.issubset(active) and "e" not in active:
+        return 9
+    if (
+        {"a", "c", "d", "e", "g"}.issubset(active)
+        and "b" not in active
+        and "f" not in active
+        and aspect_ratio < 0.5
+    ):
+        return 7
+    if {"a", "c", "d", "g"}.issubset(active) and not (
+        {"b", "e", "f"} & active
+    ):
+        return 7
+
+    return best_digit if best_distance <= 2 else None
+
+
 def run_region_ocr_passes(
     image: Image.Image,
     *,
@@ -393,10 +631,16 @@ def run_region_ocr_passes(
     debug_run: OCRDebugRun,
     total_timeout_seconds: float,
     baseline_only: bool = False,
+    character_whitelist: str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    ocr_modes: list[tuple[str, str]] | None = None,
 ) -> tuple[list[dict], bool, list[dict]]:
     batch_started_at = time.monotonic()
-    base_config = "--oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    ocr_modes = [("single_line", "--psm 7"), ("block", "--psm 6"), ("raw_line", "--psm 13")]
+    base_config = f"--oem 3 -c tessedit_char_whitelist={character_whitelist}"
+    effective_ocr_modes = ocr_modes or [
+        ("single_line", "--psm 7"),
+        ("block", "--psm 6"),
+        ("raw_line", "--psm 13"),
+    ]
     results: list[dict] = []
     stage_timings: list[dict] = []
     timed_out = False
@@ -410,13 +654,13 @@ def run_region_ocr_passes(
         {
             "stage": f"{crop_label}_preprocessing",
             "duration_ms": round((time.monotonic() - preprocessing_started_at) * 1000),
-            "pass_count": len(variants) * len(ocr_modes),
+            "pass_count": len(variants) * len(effective_ocr_modes),
         }
     )
     tasks = []
 
     for pass_name, variant in variants:
-        for mode_name, mode_config in ocr_modes:
+        for mode_name, mode_config in effective_ocr_modes:
             tasks.append((pass_name, variant, mode_name, mode_config))
 
     executor = ThreadPoolExecutor(max_workers=min(4, max(1, len(tasks))))

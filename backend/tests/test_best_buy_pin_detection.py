@@ -1,9 +1,12 @@
 import unittest
 
+from PIL import Image, ImageDraw
+
 from app.services.extraction_candidates import (
     BrandParsingRules,
     build_extraction_candidates,
 )
+from app.services.ocr import detect_seven_segment_digits
 
 
 BEST_BUY_RULES = BrandParsingRules(
@@ -108,6 +111,149 @@ BARCODE_CANDIDATES:
         self.assertEqual(useful_candidates[0].source, "barcode")
         self.assertTrue(any(candidate.value == "18981240" for candidate in rejected_candidates))
         self.assertTrue(any(candidate.value == "431443228" for candidate in rejected_candidates))
+
+    def test_best_buy_pin_zone_ignores_internal_metadata_numbers(self) -> None:
+        raw_text = """
+BEST BUY
+
+OCR_ZONE_CROPS:
+OCR_ZONE_LAYOUT: best_buy_barcode_above_number
+OCR_ZONE_COORDINATE_MODE: card_boundary_relative
+OCR_ZONE_IMAGE_NATURAL_SIZE: 4032x3024
+OCR_CARD_BOUNDARY: 10.1200|10.3800|86.2600|73.4400|408|314|3478|2221
+ZONE|best_buy_pin|pin|2|||50.44|54.0|14.44|16.66
+ZONE_IMAGE_SPACE|53.6295|50.0376|12.4559|12.2351
+ZONE_FINAL_PIXEL_CROP|2162|1513|502|370
+OCR_PASS|padded:original_2x:block
+NO_TEXT
+ENDZONE
+"""
+
+        pin_candidates = [
+            candidate
+            for candidate in build_extraction_candidates(
+                raw_text,
+                brand="Best Buy",
+                rules=BEST_BUY_RULES,
+            )
+            if candidate.candidate_type == "pin"
+        ]
+
+        self.assertNotIn("6295", [candidate.value for candidate in pin_candidates])
+        self.assertNotIn("0376", [candidate.value for candidate in pin_candidates])
+        self.assertNotIn("4559", [candidate.value for candidate in pin_candidates])
+        self.assertNotIn("2351", [candidate.value for candidate in pin_candidates])
+        self.assertNotIn("2162", [candidate.value for candidate in pin_candidates])
+        self.assertNotIn("1513", [candidate.value for candidate in pin_candidates])
+
+    def test_best_buy_pin_zone_preserves_real_pin_text(self) -> None:
+        raw_text = """
+BEST BUY
+
+OCR_ZONE_CROPS:
+OCR_ZONE_LAYOUT: best_buy_barcode_above_number
+OCR_ZONE_COORDINATE_MODE: card_boundary_relative
+OCR_ZONE_IMAGE_NATURAL_SIZE: 4032x3024
+OCR_CARD_BOUNDARY: 10.1200|10.3800|86.2600|73.4400|408|314|3478|2221
+ZONE|best_buy_pin|pin|2|||50.44|54.0|14.44|16.66
+ZONE_IMAGE_SPACE|53.6295|50.0376|12.4559|12.2351
+ZONE_FINAL_PIXEL_CROP|2162|1513|502|370
+OCR_PASS|padded:original_2x:block
+PIN 0679
+ENDZONE
+"""
+
+        pin_candidates = [
+            candidate
+            for candidate in build_extraction_candidates(
+                raw_text,
+                brand="Best Buy",
+                rules=BEST_BUY_RULES,
+            )
+            if candidate.candidate_type == "pin"
+        ]
+
+        self.assertIn("0679", [candidate.value for candidate in pin_candidates])
+        self.assertNotIn("6295", [candidate.value for candidate in pin_candidates])
+
+    def test_best_buy_digit_band_detector_reads_segmented_pin_crop(self) -> None:
+        segment_patterns = {
+            2: "acged",
+            6: "abgefd",
+            7: "acgd",
+            9: "abcgfd",
+        }
+        segment_boxes = {
+            "a": (8, 0, 42, 8),
+            "b": (0, 8, 8, 42),
+            "c": (42, 8, 50, 42),
+            "g": (8, 42, 42, 50),
+            "e": (0, 50, 8, 84),
+            "f": (42, 50, 50, 84),
+            "d": (8, 84, 42, 92),
+        }
+        image = Image.new("RGB", (480, 320), "#eee8d8")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, 480, 30), fill="#202020")
+        draw.rectangle((0, 285, 480, 320), fill="#202020")
+        draw.rectangle((-4, 110, 8, 165), fill="#202020")
+
+        x_offset = 55
+        for digit in "9726":
+            for segment in segment_patterns[int(digit)]:
+                x0, y0, x1, y1 = segment_boxes[segment]
+                draw.rounded_rectangle(
+                    (x_offset + x0, 90 + y0, x_offset + x1, 90 + y1),
+                    radius=3,
+                    fill="#222222",
+                )
+            x_offset += 70
+
+        self.assertEqual(detect_seven_segment_digits(image), "9726")
+
+    def test_best_buy_pin_zone_consensus_beats_weaker_repeated_candidate(self) -> None:
+        raw_text = """
+BEST BUY
+
+OCR_ZONE_CROPS:
+ZONE|best_buy_pin|pin|2|||50.44|57.12|14.47|13.54
+ZONE_IMAGE_SPACE|50.3468|55.2083|11.8987|9.4766
+ZONE_FINAL_PIXEL_CROP|2030|1669|480|287
+OCR_PASS|selected_baseline:original_4x:single_line
+1424
+OCR_PASS|selected_baseline:original_4x:single_char
+1424
+OCR_PASS|selected_baseline:saturation_reduced_3x:single_line
+8124
+OCR_PASS|selected_baseline:saturation_reduced_3x:single_char
+8124
+OCR_PASS|selected_baseline:red_channel_3x:single_line
+8124
+OCR_PASS|selected_baseline:red_channel_3x:single_char
+8124
+ENDZONE
+"""
+
+        pin_candidates = [
+            candidate
+            for candidate in build_extraction_candidates(
+                raw_text,
+                brand="Best Buy",
+                rules=BEST_BUY_RULES,
+            )
+            if candidate.candidate_type == "pin"
+        ]
+
+        self.assertGreaterEqual(len(pin_candidates), 2)
+        self.assertEqual(pin_candidates[0].value, "8124")
+        self.assertEqual(pin_candidates[0].source, "zone_consensus")
+        weaker_candidate = next(
+            candidate for candidate in pin_candidates if candidate.value == "1424"
+        )
+        self.assertGreater(
+            pin_candidates[0].confidence_score,
+            weaker_candidate.confidence_score,
+        )
 
 
 class RedemptionCodeDetectionTest(unittest.TestCase):
