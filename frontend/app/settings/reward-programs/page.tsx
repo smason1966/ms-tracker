@@ -169,6 +169,18 @@ function defaultCreditCardEligibility(category: string) {
   ].includes(category);
 }
 
+function protectionSummary(program: RewardProgram) {
+  if (program.system_default) {
+    return "System default programs can be deactivated but not deleted.";
+  }
+
+  if (program.protection_reasons.length > 0) {
+    return program.protection_reasons.join("; ");
+  }
+
+  return "Protected programs can be deactivated but not deleted.";
+}
+
 function formatApiDetail(detail: unknown, fallback: string) {
   if (typeof detail === "string") {
     return detail;
@@ -268,7 +280,7 @@ export default function RewardProgramsPage() {
     setError(null);
 
     try {
-      const programsEndpoint = `${API_BASE_URL}/reward-programs/?include_protection=false`;
+      const programsEndpoint = `${API_BASE_URL}/reward-programs/?include_protection=true`;
       const categoriesEndpoint = `${API_BASE_URL}/reward-program-categories/`;
       const [response, categoriesResponse] = await Promise.all([
         fetch(programsEndpoint),
@@ -932,7 +944,17 @@ export default function RewardProgramsPage() {
                           >
                             {program.active ? "Active" : "Inactive"}
                           </span>
+                          {program.protected ? (
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">
+                              Protected
+                            </span>
+                          ) : null}
                         </div>
+                        {!program.active && program.protected ? (
+                          <p className="mt-1 max-w-xs text-xs font-normal text-slate-500">
+                            {protectionSummary(program)}
+                          </p>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3">{program.short_code}</td>
                       <td className="px-4 py-3">{program.category}</td>
@@ -958,13 +980,23 @@ export default function RewardProgramsPage() {
                           >
                             Edit
                           </button>
-                          {!program.active ? (
+                          {!program.active && program.can_delete ? (
                             <button
                               className="h-9 rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700"
                               onClick={() => void deleteProgramWithProtection(program)}
                               type="button"
                             >
                               Delete
+                            </button>
+                          ) : null}
+                          {!program.active && !program.can_delete && program.protected ? (
+                            <button
+                              className="h-9 cursor-not-allowed rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-400"
+                              disabled
+                              title={protectionSummary(program)}
+                              type="button"
+                            >
+                              Protected
                             </button>
                           ) : null}
                         </div>
