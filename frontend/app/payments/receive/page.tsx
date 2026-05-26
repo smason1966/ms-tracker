@@ -119,6 +119,16 @@ type PayableAsset =
       detail: string;
     };
 
+const receiveQueueFilters = [
+  { value: "awaiting", label: "Awaiting Payment" },
+  { value: "overdue", label: "Overdue" },
+  { value: "partial", label: "Partially Paid" },
+  { value: "legacy", label: "Legacy Unlinked Cards" },
+  { value: "all", label: "All Payable" },
+] as const;
+
+type ReceiveQueueFilter = (typeof receiveQueueFilters)[number]["value"];
+
 function todayString() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -164,6 +174,25 @@ function formatDate(value: string | null) {
     day: "numeric",
     year: "numeric",
   }).format(date);
+}
+
+function dayDifference(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const due = value.includes("T")
+    ? new Date(value)
+    : new Date(`${value}T00:00:00`);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  due.setHours(0, 0, 0, 0);
+
+  if (Number.isNaN(due.getTime())) {
+    return null;
+  }
+
+  return Math.round((due.getTime() - today.getTime()) / 86_400_000);
 }
 
 function paymentAccountLabel(account: PaymentAccount | null | undefined) {
@@ -257,6 +286,24 @@ function salePaymentStatus(sale: Sale) {
     label: "Awaiting Payment",
     className: "border-amber-300/40 bg-amber-400/10 text-amber-100",
   };
+}
+
+function saleMatchesReceiveFilter(sale: Sale, filter: ReceiveQueueFilter) {
+  const dueDiff = dayDifference(sale.expected_payment_date);
+
+  if (filter === "overdue") {
+    return dueDiff !== null && dueDiff < 0;
+  }
+  if (filter === "partial") {
+    return sale.status === "PARTIALLY_SETTLED";
+  }
+  if (filter === "legacy") {
+    return false;
+  }
+  if (filter === "all") {
+    return true;
+  }
+  return true;
 }
 
 function assetExpected(asset: PayableAsset) {
@@ -455,6 +502,8 @@ function ReceivePaymentContent() {
   const [settlementNotes, setSettlementNotes] = useState(
     "Bulk deposit reconciliation",
   );
+  const [queueFilter, setQueueFilter] =
+    useState<ReceiveQueueFilter>("awaiting");
   const [acceptDifference, setAcceptDifference] = useState(false);
   const [adjustmentReason, setAdjustmentReason] = useState("");
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
@@ -567,10 +616,32 @@ function ReceivePaymentContent() {
       }));
   }, [buyerId, legacyCards]);
 
-  const allAssets = useMemo(
-    () => [...payableSales.flatMap(saleAssets), ...legacyPayables],
-    [legacyPayables, payableSales],
+  const visiblePayableSales = useMemo(
+    () =>
+      payableSales.filter((sale) =>
+        saleMatchesReceiveFilter(sale, queueFilter),
+      ),
+    [payableSales, queueFilter],
   );
+
+  const visibleLegacyPayables = useMemo(
+    () =>
+      queueFilter === "legacy" || queueFilter === "all" ? legacyPayables : [],
+    [legacyPayables, queueFilter],
+  );
+
+  const allAssets = useMemo(
+    () => [...visiblePayableSales.flatMap(saleAssets), ...visibleLegacyPayables],
+    [visibleLegacyPayables, visiblePayableSales],
+  );
+  const totalPayableItemCount =
+    payableSales.reduce((total, sale) => total + saleAssets(sale).length, 0) +
+    legacyPayables.length;
+  const visiblePayableItemCount =
+    visiblePayableSales.reduce(
+      (total, sale) => total + saleAssets(sale).length,
+      0,
+    ) + visibleLegacyPayables.length;
   const selectedAssets = allAssets.filter((asset) =>
     selectedAssetIds.includes(asset.id),
   );
@@ -903,26 +974,54 @@ function ReceivePaymentContent() {
               </h2>
               <p className="mt-1 text-sm text-slate-400">
                 {buyerId
-                  ? `${payableSales.length} sale${
-                      payableSales.length === 1 ? "" : "s"
-                    } awaiting reconciliation${
-                      legacyPayables.length
-                        ? ` · ${legacyPayables.length} sold card${
-                            legacyPayables.length === 1 ? "" : "s"
-                          } not linked to sale`
-                        : ""
-                    }`
-                  : "Choose a buyer to see payment reconciliation items."}
+                  ? `Showing payable items for ${
+                      selectedBuyer?.name ?? "selected buyer"
+                    }.`
+                  : "Select a buyer above to load payable items."}
               </p>
             </div>
 
-            {!buyerId || (payableSales.length === 0 && legacyPayables.length === 0) ? (
+            {buyerId ? (
+              <div className="border-b border-white/10 bg-white/[0.025] px-5 py-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <label className="space-y-2 text-sm font-medium text-slate-300">
+                    <span>Status for selected buyer</span>
+                    <select
+                      className="h-10 min-w-56 rounded-md border border-white/10 bg-[#020617] px-3 text-sm text-slate-100"
+                      onChange={(event) =>
+                        setQueueFilter(event.target.value as ReceiveQueueFilter)
+                      }
+                      value={queueFilter}
+                    >
+                      {receiveQueueFilters.map((filter) => (
+                        <option key={filter.value} value={filter.value}>
+                          {filter.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="pb-2 text-sm font-medium text-slate-400">
+                    {visiblePayableItemCount} of {totalPayableItemCount} items
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
+            {!buyerId ? (
+              <p className="px-5 py-8 text-sm text-slate-400">
+                Select a buyer above to load payable items.
+              </p>
+            ) : totalPayableItemCount === 0 ? (
               <p className="px-5 py-8 text-sm text-slate-400">
                 No payment reconciliation items found.
               </p>
+            ) : visiblePayableItemCount === 0 ? (
+              <p className="px-5 py-8 text-sm text-slate-400">
+                No payable items match this status filter.
+              </p>
             ) : (
               <div className="divide-y divide-white/10">
-                {payableSales.map((sale) => {
+                {visiblePayableSales.map((sale) => {
                   const assets = saleAssets(sale);
                   const assetIds = assets.map((asset) => asset.id);
                   const allSelected = assetIds.every((id) =>
@@ -1061,7 +1160,7 @@ function ReceivePaymentContent() {
                   );
                 })}
 
-                {legacyPayables.map((asset) => (
+                {visibleLegacyPayables.map((asset) => (
                   <div className="px-5 py-4" key={asset.id}>
                     <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                       Sold card not linked to sale

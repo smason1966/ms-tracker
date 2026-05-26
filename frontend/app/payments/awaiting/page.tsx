@@ -47,6 +47,18 @@ type Sale = {
   fuel_accounts: SaleFuelAccount[];
 };
 
+const paymentQueueFilters = [
+  { value: "awaiting", label: "Awaiting Payment" },
+  { value: "overdue", label: "Overdue" },
+  { value: "due_soon", label: "Due Soon" },
+  { value: "partial", label: "Partially Paid" },
+  { value: "all", label: "All Open" },
+] as const;
+
+type PaymentQueueFilter = (typeof paymentQueueFilters)[number]["value"];
+
+const PAYMENT_DUE_SOON_DAYS = 14;
+
 function formatCurrency(value: string | number | null) {
   const amount = Number(value ?? 0);
 
@@ -197,8 +209,32 @@ function compareAwaitingSales(saleA: Sale, saleB: Sale) {
   return (saleA.buyer_name ?? "").localeCompare(saleB.buyer_name ?? "");
 }
 
+function matchesPaymentQueueFilter(sale: Sale, filter: PaymentQueueFilter) {
+  const dueDiff = dayDifference(sale.expected_payment_date);
+
+  if (filter === "overdue") {
+    return dueDiff !== null && dueDiff < 0;
+  }
+  if (filter === "due_soon") {
+    return (
+      dueDiff !== null &&
+      dueDiff >= 0 &&
+      dueDiff <= PAYMENT_DUE_SOON_DAYS
+    );
+  }
+  if (filter === "partial") {
+    return sale.status === "PARTIALLY_SETTLED";
+  }
+  if (filter === "all") {
+    return true;
+  }
+  return true;
+}
+
 export default function AwaitingPaymentQueuePage() {
   const [sales, setSales] = useState<Sale[]>([]);
+  const [statusFilter, setStatusFilter] =
+    useState<PaymentQueueFilter>("awaiting");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -235,8 +271,11 @@ export default function AwaitingPaymentQueuePage() {
   }, []);
 
   const awaitingSales = useMemo(
-    () => [...sales].sort(compareAwaitingSales),
-    [sales],
+    () =>
+      sales
+        .filter((sale) => matchesPaymentQueueFilter(sale, statusFilter))
+        .sort(compareAwaitingSales),
+    [sales, statusFilter],
   );
 
   const totalAwaiting = awaitingSales.reduce(
@@ -294,6 +333,28 @@ export default function AwaitingPaymentQueuePage() {
           </div>
         </section>
 
+        <section className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 sm:flex-row sm:items-end sm:justify-between">
+          <label className="space-y-2 text-sm font-medium text-slate-300">
+            <span>Status</span>
+            <select
+              className="h-10 min-w-56 rounded-md border border-white/10 bg-[#020617] px-3 text-sm text-slate-100"
+              onChange={(event) =>
+                setStatusFilter(event.target.value as PaymentQueueFilter)
+              }
+              value={statusFilter}
+            >
+              {paymentQueueFilters.map((filter) => (
+                <option key={filter.value} value={filter.value}>
+                  {filter.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="pb-2 text-sm font-medium text-slate-400">
+            {awaitingSales.length} of {sales.length} sales
+          </p>
+        </section>
+
         {error ? (
           <p className="rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-100">
             {error}
@@ -319,9 +380,11 @@ export default function AwaitingPaymentQueuePage() {
           ) : awaitingSales.length === 0 ? (
             <div className="px-4 py-8 text-sm text-slate-400">
               <p className="font-medium text-slate-100">
-                No unpaid sales in the queue.
+                No sales match this payment filter.
               </p>
-              <p className="mt-1">Nothing needs payment reconciliation right now.</p>
+              <p className="mt-1">
+                Try another status filter or check Sales History.
+              </p>
             </div>
           ) : (
             <div>
