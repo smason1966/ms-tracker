@@ -1015,7 +1015,7 @@ export default function RapidCardIntakePage() {
             )}
           </section>
 
-          <div className="sticky bottom-0 mt-auto bg-slate-50 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4">
+          <div className="sticky bottom-0 mt-auto border-t border-slate-200 bg-slate-50/95 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur sm:border-t-0 sm:bg-slate-50 sm:pt-4 sm:backdrop-blur-none">
             <button
               className="h-12 w-full rounded-md bg-slate-900 px-5 text-base font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
               type="submit"
@@ -1025,7 +1025,7 @@ export default function RapidCardIntakePage() {
             </button>
             {giftCards.length > 0 ? (
               <Link
-                className="mt-2 flex h-10 w-full items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100 hover:text-slate-950"
+                className="mt-2 flex h-11 w-full items-center justify-center rounded-md border border-slate-400 bg-white px-4 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-100 hover:text-slate-950"
                 href={`/purchases/${purchaseId}`}
               >
                 Finish Intake

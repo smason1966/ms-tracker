@@ -4461,11 +4461,11 @@ export default function GiftCardVerificationPage() {
                       <span className="sr-only">Rotate Right</span>
                     </button>
                     <button
-                      className={`h-10 cursor-pointer rounded-md px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:bg-slate-400 ${
-                        hasUnsavedPreviewRotation
-                          ? "border border-amber-300 bg-amber-300 text-slate-950 shadow-[0_0_0_3px_rgba(251,191,36,0.25)] hover:bg-amber-200"
-                          : "bg-slate-950 text-white hover:bg-slate-800"
-                      }`}
+                        className={`h-10 cursor-pointer rounded-md px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:bg-slate-400 ${
+                          hasUnsavedPreviewRotation
+                            ? "border border-amber-400 bg-slate-950 text-amber-200 shadow-[0_0_0_3px_rgba(251,191,36,0.2)] hover:border-amber-300 hover:bg-amber-950/40 hover:text-amber-100"
+                            : "bg-slate-950 text-white hover:bg-slate-800"
+                        }`}
                       disabled={isRescanningImage || isSavingOcrOrientation}
                       onClick={() => {
                         void setSavedOcrOrientation();
@@ -4576,6 +4576,10 @@ export default function GiftCardVerificationPage() {
                         >
                           {savedOcrZones.map((zone) => {
                             const displayBox = zoneImageBox(zone, boundaryZone);
+                            const labelPositionClass =
+                              displayBox.y_pct > 6
+                                ? "bottom-full mb-1"
+                                : "top-full mt-1";
                             return (
                               <div
                                 className={`absolute rounded ${
@@ -4607,7 +4611,9 @@ export default function GiftCardVerificationPage() {
                                   height: `${displayBox.height_pct}%`,
                                 }}
                               >
-                                <span className="absolute left-1 top-1 rounded bg-slate-950 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow">
+                                <span
+                                  className={`pointer-events-none absolute left-0 z-10 max-w-40 truncate rounded bg-slate-950/90 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow ${labelPositionClass}`}
+                                >
                                   {zone.zone_name}
                                 </span>
                               </div>
@@ -4629,7 +4635,13 @@ export default function GiftCardVerificationPage() {
                               height: `${currentZoneImageBox.height_pct}%`,
                             }}
                           >
-                            <span className="absolute left-1 top-1 rounded bg-slate-950 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow">
+                            <span
+                              className={`pointer-events-none absolute left-0 z-10 max-w-40 truncate rounded bg-slate-950/90 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow ${
+                                currentZoneImageBox.y_pct > 6
+                                  ? "bottom-full mb-1"
+                                  : "top-full mt-1"
+                              }`}
+                            >
                               {currentZone.zone_name}
                             </span>
                             {[
@@ -5319,7 +5331,7 @@ export default function GiftCardVerificationPage() {
                   <button
                     className={`h-10 rounded-md border px-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
                       ["new_zone", "edit_zone"].includes(zoneTrainingMode)
-                        ? "border-cyan-300 bg-cyan-300 text-slate-950"
+                        ? "border-cyan-300 bg-slate-950 text-cyan-200"
                         : "border-slate-600 bg-slate-900 text-slate-200"
                     }`}
                     disabled={!canonicalReady || !hasBoundary}
@@ -5342,7 +5354,7 @@ export default function GiftCardVerificationPage() {
                   <button
                     className={`h-10 rounded-md border px-3 text-xs font-semibold ${
                       zoneTrainingMode === "boundary"
-                        ? "border-cyan-300 bg-cyan-300 text-slate-950"
+                        ? "border-cyan-300 bg-slate-950 text-cyan-200"
                         : "border-slate-600 bg-slate-900 text-slate-200"
                     }`}
                     onClick={() => {
@@ -5562,7 +5574,7 @@ export default function GiftCardVerificationPage() {
                         <button
                           className={`rounded-md border px-2 py-1 text-xs font-medium ${
                             zone.zone_name === currentZone.zone_name
-                              ? "border-orange-400 bg-orange-500/20 text-orange-100"
+                              ? "border-amber-400 bg-slate-950 text-amber-200"
                               : "border-slate-600 bg-slate-950 text-slate-200"
                           }`}
                           key={zone.zone_name}
@@ -5590,7 +5602,7 @@ export default function GiftCardVerificationPage() {
                 <div className="mt-3 flex flex-wrap gap-2">
                   {selectedZoneName ? (
                     <button
-                      className="h-10 rounded-md border border-yellow-300 bg-yellow-300 px-3 text-xs font-semibold text-slate-950 transition hover:bg-yellow-200"
+                      className="h-10 rounded-md border border-amber-400 bg-slate-950 px-3 text-xs font-semibold text-amber-200 transition hover:border-amber-300 hover:bg-amber-950/40 hover:text-amber-100"
                       onClick={() => setZoneTrainingMode("edit_zone")}
                       type="button"
                     >
@@ -5638,7 +5650,7 @@ export default function GiftCardVerificationPage() {
                     {isTestingZone ? "Testing..." : "Test OCR Zone"}
                   </button>
                   <button
-                    className="h-10 rounded-md bg-cyan-300 px-3 text-xs font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="h-10 rounded-md border border-cyan-300 bg-slate-950 px-3 text-xs font-semibold text-cyan-200 transition hover:border-cyan-200 hover:bg-cyan-950/40 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={
                       !canonicalReady ||
                       !hasBoundary ||
