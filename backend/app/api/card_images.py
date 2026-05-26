@@ -745,6 +745,7 @@ def append_zone_ocr_text(
     zones: list[dict],
     layout_name: str | None,
     rotation_degrees: int,
+    brand: str | None = None,
 ) -> str:
     if not zones:
         return combined_text
@@ -787,6 +788,10 @@ def append_zone_ocr_text(
         zone = zone_to_image_space(source_zone, boundary)
         if zone["zone_type"] in {"card_boundary", "ignore"}:
             continue
+        is_best_buy_pin_zone = (
+            is_best_buy_brand(brand)
+            and str(zone.get("zone_type") or "").strip().lower() == "pin"
+        )
 
         try:
             region_result = extract_region_ocr_result(
@@ -796,8 +801,26 @@ def append_zone_ocr_text(
                 width_pct=zone["width_pct"],
                 height_pct=zone["height_pct"],
                 rotation_degrees=rotation_degrees,
-                horizontal_padding_pct=0.10,
-                vertical_padding_pct=0.20,
+                horizontal_padding_pct=0 if is_best_buy_pin_zone else 0.10,
+                vertical_padding_pct=0 if is_best_buy_pin_zone else 0.20,
+                character_whitelist=(
+                    "0123456789"
+                    if is_best_buy_pin_zone
+                    else "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                ),
+                selected_baseline_only=not is_best_buy_pin_zone,
+                include_padded_passes=not is_best_buy_pin_zone,
+                digit_band_detection=is_best_buy_pin_zone,
+                ocr_modes=(
+                    [
+                        ("single_line", "--psm 7"),
+                        ("single_word", "--psm 8"),
+                        ("single_char", "--psm 10"),
+                        ("raw_line", "--psm 13"),
+                    ]
+                    if is_best_buy_pin_zone
+                    else None
+                ),
             )
             zone_text = region_result.text
             zone_tokens = region_result.tokens
@@ -1196,6 +1219,7 @@ def run_extraction_trial(
             zones=zones or [],
             layout_name=layout_name,
             rotation_degrees=rotation_degrees,
+            brand=brand,
         )
     combined_text += format_barcode_attempts(barcode_attempts or [])
     combined_text += format_barcode_details(barcode_details)
@@ -1913,6 +1937,75 @@ def queue_card_image_extraction(
     )
 
 
+def run_card_image_extraction_sync(
+    db: Session,
+    image: CardImage,
+    rotation_degrees: int | None = None,
+) -> dict:
+    try:
+        logger.info(
+            "Starting synchronous OCR rescan",
+            extra={
+                "card_image_id": image.id,
+                "gift_card_id": image.gift_card_id,
+                "rotation_degrees": rotation_degrees,
+            },
+        )
+        with ocr_debug_run():
+            attempt = run_card_image_extraction(
+                db,
+                image,
+                rotation_degrees=rotation_degrees,
+            )
+        gift_card = (
+            db.query(GiftCard)
+            .filter(GiftCard.id == image.gift_card_id)
+            .first()
+        )
+        if gift_card:
+            gift_card.ocr_status = OCR_STATE_OCR_READY
+            db.commit()
+        db.refresh(image)
+        logger.info(
+            "Finished synchronous OCR rescan",
+            extra={
+                "card_image_id": image.id,
+                "gift_card_id": image.gift_card_id,
+                "attempt_id": attempt.id,
+            },
+        )
+        return {
+            "gift_card_id": image.gift_card_id,
+            "ocr_status": OCR_STATE_OCR_READY,
+            "latest_attempt_id": attempt.id,
+            "processed_image_url": image.processed_image_url,
+            "canonical_rotation_degrees": image.canonical_rotation_degrees,
+            "orientation_source": image.orientation_source,
+            "message": "OCR completed.",
+        }
+    except Exception as exc:
+        db.rollback()
+        gift_card = (
+            db.query(GiftCard)
+            .filter(GiftCard.id == image.gift_card_id)
+            .first()
+        )
+        if gift_card:
+            gift_card.ocr_status = "failed"
+            db.commit()
+        logger.exception(
+            "Synchronous OCR rescan failed",
+            extra={
+                "card_image_id": image.id,
+                "gift_card_id": image.gift_card_id,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"OCR re-scan failed: {exc}",
+        ) from exc
+
+
 @router.post("/upload")
 async def upload_card_image(
     gift_card_id: int = Form(...),
@@ -2090,6 +2183,10 @@ def test_card_image_ocr_zone(card_image_id: int, payload: OCRZoneTestPayload):
             if coordinate_mode == "card_boundary_relative"
             else "original -> stored canonical OCR image -> OCR crop"
         )
+        is_best_buy_pin_zone = (
+            is_best_buy_brand(brand)
+            and payload.zone_type.strip().lower() == "pin"
+        )
         debug_run = OCRDebugRun(enabled=True, max_files=ocr_debug_max_files_from_env())
         region_result = extract_region_ocr_result(
             str(physical_upload_path(image_path) or Path(image_path)),
@@ -2098,8 +2195,26 @@ def test_card_image_ocr_zone(card_image_id: int, payload: OCRZoneTestPayload):
             width_pct=image_space_zone["width_pct"],
             height_pct=image_space_zone["height_pct"],
             rotation_degrees=rotation_degrees,
-            horizontal_padding_pct=0.10,
-            vertical_padding_pct=0.20,
+            horizontal_padding_pct=0 if is_best_buy_pin_zone else 0.10,
+            vertical_padding_pct=0 if is_best_buy_pin_zone else 0.20,
+            character_whitelist=(
+                "0123456789"
+                if is_best_buy_pin_zone
+                else "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            ),
+            selected_baseline_only=not is_best_buy_pin_zone,
+            include_padded_passes=not is_best_buy_pin_zone,
+            digit_band_detection=is_best_buy_pin_zone,
+            ocr_modes=(
+                [
+                    ("single_line", "--psm 7"),
+                    ("single_word", "--psm 8"),
+                    ("single_char", "--psm 10"),
+                    ("raw_line", "--psm 13"),
+                ]
+                if is_best_buy_pin_zone
+                else None
+            ),
             debug_run=debug_run,
         )
         crop_duration_ms = round((time.monotonic() - request_started_at) * 1000)
@@ -2510,7 +2625,11 @@ def set_card_image_ocr_orientation(
 
 
 @router.post("/{card_image_id}/rescan")
-def rescan_card_image(card_image_id: int, rotation_degrees: int | None = None):
+def rescan_card_image(
+    card_image_id: int,
+    rotation_degrees: int | None = None,
+    sync: bool = False,
+):
     db: Session = SessionLocal()
 
     try:
@@ -2522,8 +2641,15 @@ def rescan_card_image(card_image_id: int, rotation_degrees: int | None = None):
         gift_card = db.query(GiftCard).filter(GiftCard.id == image.gift_card_id).first()
         if gift_card:
             clear_gift_card_ocr_artifacts(db, image.gift_card_id)
-            gift_card.ocr_status = OCR_STATE_QUEUED
+            gift_card.ocr_status = OCR_STATE_PREPROCESSING if sync else OCR_STATE_QUEUED
             db.commit()
+
+        if sync:
+            return run_card_image_extraction_sync(
+                db,
+                image,
+                rotation_degrees=rotation_degrees,
+            )
 
         queue_card_image_extraction(
             image.id,

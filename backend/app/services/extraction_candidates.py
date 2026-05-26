@@ -67,6 +67,51 @@ class SpatialToken:
 
 IGNORED_PIN_VALUES = {"2024", "2025", "2026", "2027", "0525"}
 DEFAULT_PIN_KEYWORDS = ["pin", "security code", "scratch", "scratch-off", "boxed"]
+OCR_METADATA_LINE_PREFIXES = (
+    "ZONE_IMAGE_SPACE|",
+    "ZONE_FINAL_PIXEL_CROP|",
+    "OCR_ZONE_LAYOUT:",
+    "OCR_ZONE_COORDINATE_MODE:",
+    "OCR_ZONE_IMAGE_NATURAL_SIZE:",
+    "OCR_CARD_BOUNDARY:",
+    "OCR_PASS|",
+    "OCR_IMAGE_SOURCE:",
+    "OCR_IMAGE_PATH:",
+    "OCR_SELECTED_ROTATION_DEGREES:",
+    "OCR_SELECTED_IMAGE_SOURCE:",
+    "OCR_SELECTED_TEMPLATE_LAYOUT:",
+    "OCR_SELECTED_TEMPLATE_CONFIDENCE:",
+    "OCR_TEMPLATE_MISMATCH:",
+    "OCR_CANONICAL_IMAGE:",
+    "OCR_CANONICAL_ROTATION_DEGREES:",
+    "OCR_CANONICAL_SELECTED_ROTATION:",
+    "OCR_CANONICAL_ORIENTATION_SCORE:",
+    "OCR_CANONICAL_ORIENTATION_SOURCE:",
+    "OCR_CANONICAL_COORDINATE_SPACE:",
+    "OCR_DISPLAY_IMAGE_USED:",
+    "OCR_BARCODE_IMAGE_USED:",
+    "OCR_SAVED_REVIEW_IMAGE_SOURCE:",
+    "OCR_SAVED_REVIEW_IMAGE_DIMENSIONS:",
+    "OCR_TEMPLATE_COORDINATE_SOURCE:",
+    "OCR_TEMPLATE_ZONE_BASIS:",
+    "OCR_TRANSFORM_CHAIN:",
+    "OCR_TEMPLATE_TRAINED_ORIENTATION:",
+    "OCR_TEMPLATE_ROTATION_TRIALS:",
+    "OCR_CANONICAL_ORIENTATION_TRIALS:",
+    "OCR_CANONICAL_REASON_SELECTED:",
+    "OCR_APPLIED_TEMPLATE_ROTATION:",
+    "OCR_CANONICAL_PERSISTED_ROTATION:",
+    "OCR_TEMPLATE_CANONICAL_SIZE:",
+    "OCR_ROTATION_SCORE:",
+    "OCR_BRAND_PROFILE:",
+    "OCR_DETECTED_CREDENTIAL_TYPE:",
+    "OCR_PREPROCESSING:",
+    "OCR_MODE_RESULTS:",
+    "OCR_BARCODE_ACCEPTED_VALUES:",
+    "OCR_BARCODE_ATTEMPTS:",
+    "OCR_SELECTION_NOTES:",
+    "OCR_LEGACY_PARSER_NOTES:",
+)
 BRAND_OCR_PROFILES = {
     "best buy": BrandOCRProfile(
         key="best_buy",
@@ -360,11 +405,158 @@ def extract_zone_sections(raw_text: str) -> list[dict]:
                 "y_pct": parts[6],
                 "width_pct": parts[7],
                 "height_pct": parts[8],
-                "text": zone_text,
+                "raw_text": zone_text,
+                "text": candidate_visible_ocr_text(zone_text),
             }
         )
 
     return sections
+
+
+def candidate_visible_ocr_text(raw_text: str) -> str:
+    """Remove parser/debug metadata before extracting credential candidates."""
+    visible_lines: list[str] = []
+
+    for line in raw_text.splitlines():
+        stripped_line = line.strip()
+
+        if not stripped_line:
+            visible_lines.append(line)
+            continue
+
+        if stripped_line.startswith(OCR_METADATA_LINE_PREFIXES):
+            continue
+
+        visible_lines.append(line)
+
+    return "\n".join(visible_lines)
+
+
+def extract_ocr_pass_sections(raw_text: str) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    current_pass: str | None = None
+    current_lines: list[str] = []
+
+    for line in raw_text.splitlines():
+        stripped_line = line.strip()
+        if stripped_line.startswith("OCR_PASS|"):
+            if current_pass is not None:
+                sections.append((current_pass, "\n".join(current_lines)))
+            current_pass = stripped_line.removeprefix("OCR_PASS|")
+            current_lines = []
+            continue
+
+        if current_pass is not None:
+            current_lines.append(line)
+
+    if current_pass is not None:
+        sections.append((current_pass, "\n".join(current_lines)))
+
+    return sections
+
+
+def ocr_pass_parts(pass_name: str) -> tuple[str, str]:
+    parts = pass_name.split(":")
+    variant = parts[1] if len(parts) >= 3 else pass_name
+    mode = parts[2] if len(parts) >= 3 else ""
+    return variant, mode
+
+
+def aggregate_pin_zone_consensus_candidates(
+    raw_zone_text: str,
+    *,
+    brand: str | None,
+    rules: BrandParsingRules,
+    confidence_boost: float,
+    notes_suffix: str,
+) -> list[ExtractionCandidate]:
+    grouped: dict[str, dict] = {}
+
+    for pass_name, pass_text in extract_ocr_pass_sections(raw_zone_text):
+        visible_pass_text = candidate_visible_ocr_text(pass_text)
+        if not visible_pass_text.strip() or visible_pass_text.strip() == "NO_TEXT":
+            continue
+
+        variant, mode = ocr_pass_parts(pass_name)
+        for candidate in extract_ocr_pin_candidates(
+            visible_pass_text,
+            brand=brand,
+            rules=rules,
+        ):
+            group = grouped.setdefault(
+                candidate.value,
+                {
+                    "max_confidence": candidate.confidence_score,
+                    "notes": candidate.notes,
+                    "passes": set(),
+                    "variants": set(),
+                    "modes": set(),
+                },
+            )
+            group["max_confidence"] = max(
+                group["max_confidence"],
+                candidate.confidence_score,
+            )
+            group["passes"].add(pass_name)
+            group["variants"].add(variant)
+            group["modes"].add(mode)
+
+    consensus_candidates: list[ExtractionCandidate] = []
+    for value, group in grouped.items():
+        consensus_count = len(group["passes"])
+        if consensus_count < 2:
+            continue
+
+        variants = group["variants"]
+        modes = group["modes"]
+        consensus_bonus = min(0.34, max(0, consensus_count - 1) * 0.075)
+        mode_bonus = 0.0
+        if "single_line" in modes:
+            mode_bonus += 0.07
+        if "single_char" in modes:
+            mode_bonus += 0.06
+        if "raw_line" in modes:
+            mode_bonus += 0.04
+
+        variant_bonus = 0.0
+        if "saturation_reduced_3x" in variants:
+            variant_bonus += 0.035
+        if "red_channel_3x" in variants:
+            variant_bonus += 0.035
+        if any(str(variant).startswith("original") for variant in variants):
+            variant_bonus += 0.025
+        if "grayscale_contrast_3x" in variants or "thresholded_3x" in variants:
+            variant_bonus += 0.02
+
+        confidence = min(
+            0.99,
+            group["max_confidence"]
+            + confidence_boost
+            + consensus_bonus
+            + mode_bonus
+            + variant_bonus,
+        )
+        notes = (
+            f"{group['notes']} Consensus across {consensus_count} OCR passes; "
+            f"modes={', '.join(sorted(mode for mode in modes if mode)) or 'unknown'}; "
+            f"variants={', '.join(sorted(variants)) or 'unknown'}."
+            f"{notes_suffix}"
+        )
+        consensus_candidates.append(
+            ExtractionCandidate(
+                candidate_type="pin",
+                source="zone_consensus",
+                value=value,
+                confidence_score=confidence,
+                notes=notes,
+            )
+        )
+
+    return sorted(
+        consensus_candidates,
+        key=lambda candidate: candidate.confidence_score,
+        reverse=True,
+    )
 
 
 def extract_ocr_number_values(raw_text: str) -> list[str]:
@@ -1165,6 +1357,15 @@ def extract_zone_candidates(
                 expected_pin_length=zone["expected_length"] or (rules.expected_pin_length if rules else None),
                 pin_label_keywords=rules.pin_label_keywords if rules else None,
             )
+
+            for candidate in aggregate_pin_zone_consensus_candidates(
+                zone["raw_text"],
+                brand=brand,
+                rules=zone_rules,
+                confidence_boost=boost,
+                notes_suffix=notes_suffix,
+            ):
+                add_candidate(candidates, candidate)
 
             for candidate in extract_ocr_pin_candidates(
                 zone_text,

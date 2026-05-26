@@ -1648,6 +1648,19 @@ function clampPercent(value: number) {
   return Math.max(0, Math.min(100, value));
 }
 
+function isDefaultishBestBuyBoundary(boundary: OCRZone | undefined) {
+  if (!boundary) {
+    return true;
+  }
+
+  return (
+    boundary.x_pct <= 3 &&
+    boundary.y_pct <= 3 &&
+    boundary.width_pct >= 94 &&
+    boundary.height_pct >= 94
+  );
+}
+
 function zoneImageBox(zone: OCRZone, boundary: OCRZone | undefined) {
   if (!boundary || zone.zone_name === "card_boundary") {
     return {
@@ -2019,6 +2032,8 @@ export default function GiftCardVerificationPage() {
     (zone) => zone.zone_name !== "card_boundary",
   );
   const hasBoundary = Boolean(boundaryZone);
+  const bestBuyBoundaryNeedsAdjustment =
+    isBestBuyCard && isDefaultishBestBuyBoundary(boundaryZone);
   const hasCredentialZone = credentialZones.length > 0;
   const coordinateMode = hasBoundary
     ? "card-boundary-relative"
@@ -2537,7 +2552,7 @@ export default function GiftCardVerificationPage() {
 
   async function rescanPrimaryImage(
     successText = "OCR re-scanned.",
-    options: { preserveSavedTemplate?: boolean } = {},
+    options: { preserveSavedTemplate?: boolean; sync?: boolean } = {},
   ) {
     if (!primaryImage) {
       return;
@@ -2555,7 +2570,9 @@ export default function GiftCardVerificationPage() {
         : currentGiftCard,
     );
 
-    const endpoint = `${API_BASE_URL}/card-images/${primaryImage.id}/rescan`;
+    const endpoint = `${API_BASE_URL}/card-images/${primaryImage.id}/rescan${
+      options.sync ? "?sync=true" : ""
+    }`;
 
     try {
       const response = await fetch(endpoint, {
@@ -2581,6 +2598,33 @@ export default function GiftCardVerificationPage() {
         ocr_status?: string;
         message?: string;
       };
+
+      if (options.sync) {
+        const details = await loadGiftCardVerificationDetails(giftCardId);
+        setGiftCard(details.giftCard);
+        setCardImages(details.cardImages);
+        setReceipts(details.receipts);
+        setExtractionAttempts(details.extractionAttempts);
+        setExtractionCandidates(details.extractionCandidates);
+        setForm(getInitialVerificationForm(details));
+        setZoneTestResult(null);
+        if (options.preserveSavedTemplate) {
+          setZoneTemplateSaved(true);
+          setZoneTemplateMessage(
+            "Saved template OCR completed. Review the updated suggestions.",
+          );
+        } else {
+          setSelectedZoneName(null);
+          setZoneTrainingMode("idle");
+          setZoneTemplateSaved(false);
+          setZoneTemplateMessage(
+            "OCR completed. Review the updated suggestions from the saved Review/OCR image.",
+          );
+        }
+        setImageUploadMessage(result.message ?? successText);
+        return;
+      }
+
       setGiftCard((currentGiftCard) =>
         currentGiftCard
           ? {
@@ -3123,6 +3167,16 @@ export default function GiftCardVerificationPage() {
         ? managedBestBuyLayouts.find((layout) => layout.active)?.layout_name ??
           "best_buy_barcode_above_number"
         : selectedBestBuyLayout;
+    if (
+      isBestBuy &&
+      isDefaultishBestBuyBoundary(zones.find((zone) => zone.zone_name === "card_boundary")) &&
+      !window.confirm(
+        "Best Buy zones are still using a broad/default card boundary. Set the card boundary to the physical card edges before saving for reliable OCR. Save anyway?",
+      )
+    ) {
+      setZoneTemplateError("Adjust card boundary before saving Best Buy zones.");
+      return;
+    }
     const savedLayouts = isBestBuy
       ? managedBestBuyLayouts.map((layout) => ({
           layout_name: layout.layout_name,
@@ -3995,7 +4049,7 @@ export default function GiftCardVerificationPage() {
                   onClick={() => {
                     void rescanPrimaryImage(
                       "OCR re-run on saved orientation.",
-                      { preserveSavedTemplate: true },
+                      { preserveSavedTemplate: true, sync: true },
                     );
                   }}
                   type="button"
@@ -4136,7 +4190,7 @@ export default function GiftCardVerificationPage() {
                         onClick={() => {
                           void rescanPrimaryImage(
                             "OCR re-run on saved orientation.",
-                            { preserveSavedTemplate: true },
+                            { preserveSavedTemplate: true, sync: true },
                           );
                         }}
                         type="button"
@@ -4921,10 +4975,34 @@ export default function GiftCardVerificationPage() {
                       Use this card as new Best Buy layout
                     </button>
                     <span className="text-xs text-slate-400 sm:col-span-2">
-                      Layouts describe the printed card design. Barcode
-                      card-number detection still runs independently of the
-                      selected layout.
+                      Set the card boundary first, then adjust credential zones.
+                      Layouts describe the printed card design. Barcode card-number
+                      detection still runs independently of the selected layout.
                     </span>
+                    {bestBuyBoundaryNeedsAdjustment ? (
+                      <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950 sm:col-span-2">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <span>
+                            Adjust card boundary before saving Best Buy zones.
+                          </span>
+                          <button
+                            className="h-8 rounded-md bg-amber-300 px-3 text-xs font-semibold text-slate-950 transition hover:bg-amber-200"
+                            onClick={() => {
+                              setSelectedZoneName("card_boundary");
+                              setZoneTrainingMode("boundary");
+                              setZoneForm((currentForm) => ({
+                                ...currentForm,
+                                zone_name: "card_boundary",
+                                zone_type: "card_boundary",
+                              }));
+                            }}
+                            type="button"
+                          >
+                            Set Card Boundary
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                     <details className="rounded-md border border-slate-700 bg-slate-900 p-3 sm:col-span-2">
                       <summary className="cursor-pointer text-xs font-semibold text-cyan-200">
                         Manage Best Buy layout templates
@@ -5012,6 +5090,11 @@ export default function GiftCardVerificationPage() {
                 {templateMismatch === "yes" ? (
                   <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
                     Template mismatch — choose another layout or redraw zones.
+                  </p>
+                ) : null}
+                {bestBuyBoundaryNeedsAdjustment ? (
+                  <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                    Adjust card boundary before saving Best Buy zones.
                   </p>
                 ) : null}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
