@@ -248,8 +248,73 @@ const saleStatusLabels: Record<string, string> = {
   awaiting_payment: "Awaiting Payment",
   partially_paid: "Partially Paid",
   settled: "Settled",
+  completed: "Completed",
   voided: "Voided",
 };
+
+const saleLifecycleFilters = [
+  {
+    value: "open",
+    label: "Open / Awaiting Payment",
+    statuses: ["ACTIVE", "SOLD_PENDING_PAYMENT", "PARTIALLY_SETTLED"],
+  },
+  {
+    value: "active",
+    label: "Active",
+    statuses: ["ACTIVE", "SOLD_PENDING_PAYMENT"],
+  },
+  {
+    value: "partially_paid",
+    label: "Partially Paid",
+    statuses: ["PARTIALLY_SETTLED"],
+  },
+  {
+    value: "settled",
+    label: "Settled",
+    statuses: ["SETTLED"],
+  },
+  {
+    value: "completed",
+    label: "Completed",
+    statuses: ["COMPLETED"],
+  },
+  {
+    value: "voided",
+    label: "Voided",
+    statuses: ["VOIDED"],
+  },
+  {
+    value: "all",
+    label: "All",
+    statuses: null,
+  },
+] as const;
+
+type SaleLifecycleFilter = (typeof saleLifecycleFilters)[number]["value"];
+
+function lifecycleFilterForStatus(
+  statusFilter: string | null,
+): SaleLifecycleFilter | null {
+  if (statusFilter === "draft" || statusFilter === "created") {
+    return "active";
+  }
+  if (statusFilter === "awaiting_payment" || statusFilter === "awaiting") {
+    return "active";
+  }
+  if (statusFilter === "partially_paid") {
+    return "partially_paid";
+  }
+  if (statusFilter === "settled") {
+    return "settled";
+  }
+  if (statusFilter === "completed") {
+    return "completed";
+  }
+  if (statusFilter === "voided") {
+    return "voided";
+  }
+  return null;
+}
 
 function matchesStatusFilter(sale: Sale, statusFilter: string | null) {
   if (!statusFilter) {
@@ -266,14 +331,13 @@ function matchesStatusFilter(sale: Sale, statusFilter: string | null) {
     );
   }
   if (statusFilter === "partially_paid") {
-    return (
-      sale.status === "PARTIALLY_SETTLED" ||
-      (["ACTIVE", "SOLD_PENDING_PAYMENT"].includes(sale.status) &&
-        Number(sale.payout_received ?? 0) > 0)
-    );
+    return sale.status === "PARTIALLY_SETTLED";
   }
   if (statusFilter === "settled") {
-    return sale.status === "COMPLETED" || sale.status === "SETTLED";
+    return sale.status === "SETTLED";
+  }
+  if (statusFilter === "completed") {
+    return sale.status === "COMPLETED";
   }
   if (statusFilter === "voided") {
     return sale.status === "VOIDED";
@@ -347,6 +411,8 @@ function SalesContent() {
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>([]);
   const [search, setSearch] = useState("");
+  const [lifecycleFilter, setLifecycleFilter] =
+    useState<SaleLifecycleFilter>("open");
   const [expandedSaleIds, setExpandedSaleIds] = useState<Record<number, boolean>>(
     {},
   );
@@ -411,8 +477,26 @@ function SalesContent() {
 
   const visibleSales = useMemo(
     () => {
+      const urlLifecycleFilter = lifecycleFilterForStatus(statusFilter);
+      const effectiveLifecycleFilter =
+        urlLifecycleFilter ?? (saleIdFilter ? "all" : lifecycleFilter);
+      const lifecycleStatuses =
+        saleLifecycleFilters.find(
+          (filter) => filter.value === effectiveLifecycleFilter,
+        )?.statuses ?? null;
+
       const filteredSales = sales.filter((sale) => {
-        if (dateRange && sale.status === "VOIDED") {
+        if (
+          lifecycleStatuses &&
+          !lifecycleStatuses.some((status) => status === sale.status)
+        ) {
+          return false;
+        }
+        if (
+          dateRange &&
+          sale.status === "VOIDED" &&
+          effectiveLifecycleFilter !== "voided"
+        ) {
           return false;
         }
         if (!matchesStatusFilter(sale, statusFilter)) {
@@ -436,7 +520,7 @@ function SalesContent() {
 
       return filteredSales;
     },
-    [dateRange, focus, sales, saleIdFilter, statusFilter],
+    [dateRange, focus, lifecycleFilter, sales, saleIdFilter, statusFilter],
   );
 
   useEffect(() => {
@@ -722,16 +806,37 @@ function SalesContent() {
         ) : null}
 
         <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <label className="block space-y-2 text-sm font-medium text-slate-700">
-            <span>Search Sales History</span>
-            <input
-              className="h-11 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Buyer, sale #, brand, face value, card ending, alt ID, email, notes..."
-              type="search"
-              value={search}
-            />
-          </label>
+          <div className="grid gap-4 lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:items-end">
+            <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Status</span>
+              <select
+                className="h-11 min-w-56 rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                onChange={(event) =>
+                  setLifecycleFilter(event.target.value as SaleLifecycleFilter)
+                }
+                value={lifecycleFilter}
+              >
+                {saleLifecycleFilters.map((filter) => (
+                  <option key={filter.value} value={filter.value}>
+                    {filter.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Search Sales History</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Buyer, sale #, brand, face value, card ending, alt ID, email, notes..."
+                type="search"
+                value={search}
+              />
+            </label>
+            <p className="pb-3 text-sm font-medium text-slate-500 lg:text-right">
+              {visibleSales.length} of {sales.length} sales
+            </p>
+          </div>
           {copyMessage ? (
             <p className="mt-3 text-sm font-medium text-slate-700">
               {copyMessage}
@@ -751,7 +856,7 @@ function SalesContent() {
             <p className="mt-2 text-sm text-slate-500">
               {activeFilterParts.length > 0
                 ? "No sales match the active filter."
-                : "Create a sale to bundle cards and fuel accounts for one buyer."}
+                : "No sales match the selected status or search."}
             </p>
             <Link
               className="mt-4 inline-flex h-11 items-center rounded-md bg-slate-950 px-4 text-sm font-semibold text-white"
