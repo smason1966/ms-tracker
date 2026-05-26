@@ -56,9 +56,6 @@ def physical_upload_path(reference: str | None, upload_root: Path = UPLOAD_ROOT)
         if reference.startswith(("http://", "https://"))
         else reference
     )
-    candidate = Path(parsed_path)
-    if candidate.is_absolute():
-        return candidate
 
     normalized = parsed_path.lstrip("/")
     prefix = f"{PUBLIC_UPLOAD_ROOT}/"
@@ -66,6 +63,9 @@ def physical_upload_path(reference: str | None, upload_root: Path = UPLOAD_ROOT)
         return upload_root
     if normalized.startswith(prefix):
         return storage.local_path(normalized[len(prefix):]) or (upload_root / normalized[len(prefix):])
+    candidate = Path(parsed_path)
+    if candidate.is_absolute():
+        return candidate
     storage_path = storage.local_path(normalized)
     if storage_path is not None:
         return storage_path
