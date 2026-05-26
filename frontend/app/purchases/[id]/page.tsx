@@ -86,6 +86,7 @@ type PurchaseDeleteReport = {
     gift_cards_to_delete: number;
     receipts_to_delete: number;
     fuel_point_entries_to_delete: number;
+    fuel_points_to_reverse: number;
     payment_lines_to_remove: number;
     reward_transactions_to_delete: number;
     ocr_attempts_to_delete: number;
@@ -176,6 +177,7 @@ export default function PurchaseDetailPage() {
   const [deleteReport, setDeleteReport] = useState<PurchaseDeleteReport | null>(null);
   const [isLoadingDeleteReport, setIsLoadingDeleteReport] = useState(false);
   const [isDeletingPurchase, setIsDeletingPurchase] = useState(false);
+  const [isRemovingFuelPointEntry, setIsRemovingFuelPointEntry] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [receiptsError, setReceiptsError] = useState<string | null>(null);
   const [paymentsError, setPaymentsError] = useState<string | null>(null);
@@ -260,9 +262,15 @@ export default function PurchaseDetailPage() {
     return summary;
   }, [giftCards, purchase]);
   const deleteImpact = deleteReport?.impact;
+  const nonFuelRealDeleteImpactCount = deleteImpact
+    ? deleteImpact.gift_cards_to_delete +
+      deleteImpact.ocr_attempts_to_delete +
+      deleteImpact.ocr_candidates_to_delete +
+      deleteImpact.ocr_metrics_to_delete +
+      deleteImpact.card_images_to_delete
+    : 0;
   const realRecordDeleteImpactCount = deleteImpact
     ? deleteImpact.gift_cards_to_delete +
-      deleteImpact.receipts_to_delete +
       deleteImpact.fuel_point_entries_to_delete +
       deleteImpact.ocr_attempts_to_delete +
       deleteImpact.ocr_candidates_to_delete +
@@ -271,6 +279,7 @@ export default function PurchaseDetailPage() {
     : 0;
   const generatedCleanupRows = deleteImpact
     ? [
+        ["Receipts", deleteImpact.receipts_to_delete],
         ["Generated payment records", deleteImpact.payment_lines_to_remove],
         [
           "Generated reward transactions",
@@ -280,15 +289,18 @@ export default function PurchaseDetailPage() {
     : [];
   const canDeleteEmptyPurchase =
     Boolean(deleteReport?.can_delete) && realRecordDeleteImpactCount === 0;
+  const canRemoveFuelPointEntry =
+    Boolean(deleteReport?.can_delete) &&
+    Boolean(deleteImpact?.fuel_point_entries_to_delete) &&
+    nonFuelRealDeleteImpactCount === 0;
   const deleteBlockedReason =
     deleteReport?.blocking_dependencies[0]?.message ??
     (deleteReport && realRecordDeleteImpactCount > 0
-      ? "Purchase has inventory, receipt, fuel, OCR, or card-image records."
+      ? "Purchase has inventory, fuel, OCR, or card-image records."
       : null);
   const deleteImpactRows = deleteImpact
     ? [
         ["Gift cards", deleteImpact.gift_cards_to_delete],
-        ["Receipts", deleteImpact.receipts_to_delete],
         ["Fuel point entries", deleteImpact.fuel_point_entries_to_delete],
         ["OCR attempts", deleteImpact.ocr_attempts_to_delete],
         ["OCR candidates", deleteImpact.ocr_candidates_to_delete],
@@ -424,6 +436,40 @@ export default function PurchaseDetailPage() {
       }
     },
     [purchaseId, receiptsUrl],
+  );
+
+  const loadDeleteReport = useCallback(
+    async (options: { showLoading?: boolean } = {}) => {
+      if (!purchaseId) {
+        return;
+      }
+
+      if (options.showLoading ?? true) {
+        setIsLoadingDeleteReport(true);
+      }
+
+      setDeleteError(null);
+
+      try {
+        const response = await fetch(deleteReportUrl);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load delete report (${response.status})`);
+        }
+
+        const data = (await response.json()) as PurchaseDeleteReport;
+        setDeleteReport(data);
+      } catch (err) {
+        setDeleteError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load delete safety report.",
+        );
+      } finally {
+        setIsLoadingDeleteReport(false);
+      }
+    },
+    [deleteReportUrl, purchaseId],
   );
 
   useEffect(() => {
@@ -681,49 +727,8 @@ export default function PurchaseDetailPage() {
   }, [giftCardsUrl, purchaseId]);
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function loadDeleteReport() {
-      if (!purchaseId) {
-        return;
-      }
-
-      setIsLoadingDeleteReport(true);
-      setDeleteError(null);
-
-      try {
-        const response = await fetch(deleteReportUrl);
-
-        if (!response.ok) {
-          throw new Error(`Failed to load delete report (${response.status})`);
-        }
-
-        const data = (await response.json()) as PurchaseDeleteReport;
-
-        if (isMounted) {
-          setDeleteReport(data);
-        }
-      } catch (err) {
-        if (isMounted) {
-          setDeleteError(
-            err instanceof Error
-              ? err.message
-              : "Failed to load delete safety report.",
-          );
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoadingDeleteReport(false);
-        }
-      }
-    }
-
-    loadDeleteReport();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [deleteReportUrl, purchaseId]);
+    void Promise.resolve().then(() => loadDeleteReport());
+  }, [loadDeleteReport]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -960,7 +965,7 @@ export default function PurchaseDetailPage() {
     }
 
     const confirmed = window.confirm(
-      "Delete this empty purchase and generated payment/reward records? This cannot be undone.",
+      "Delete this empty purchase and related receipt/payment/reward records? This cannot be undone.",
     );
 
     if (!confirmed) {
@@ -989,6 +994,57 @@ export default function PurchaseDetailPage() {
       );
     } finally {
       setIsDeletingPurchase(false);
+    }
+  }
+
+  async function handleRemoveFuelPointEntry() {
+    if (!purchaseId || !canRemoveFuelPointEntry) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "This will remove the fuel points earned from this purchase and update the fuel account balance.",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsRemovingFuelPointEntry(true);
+    setDeleteError(null);
+
+    try {
+      const response = await fetch(`${purchaseUrl}/fuel-info`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          fuel_reward_account_id: null,
+          fuel_points_quantity: null,
+          fuel_points_unit: null,
+          fuel_points_notes: null,
+        }),
+      });
+
+      if (!response.ok) {
+        const responseBody = await response.text();
+        throw new Error(
+          `Failed to remove fuel point entry (${response.status}): ${responseBody}`,
+        );
+      }
+
+      const updatedPurchase = (await response.json()) as PurchaseBatch;
+      setPurchase(updatedPurchase);
+      await loadDeleteReport({ showLoading: false });
+    } catch (err) {
+      setDeleteError(
+        err instanceof Error
+          ? err.message
+          : "Failed to remove fuel point entry.",
+      );
+    } finally {
+      setIsRemovingFuelPointEntry(false);
     }
   }
 
@@ -1293,8 +1349,9 @@ export default function PurchaseDetailPage() {
             <div>
               <h2 className="text-lg font-semibold">Purchase Cleanup</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Empty test purchases can be deleted when they have no inventory,
-                receipt, fuel, OCR, or card-image records.
+                Purchases with no gift cards or inventory records can be
+                deleted. Related receipt records and generated payment/reward
+                records will be removed with the purchase.
               </p>
               {isLoadingDeleteReport ? (
                 <p className="mt-2 text-sm text-slate-500">
@@ -1306,7 +1363,7 @@ export default function PurchaseDetailPage() {
                 </p>
               ) : canDeleteEmptyPurchase ? (
                 <p className="mt-2 text-sm font-medium text-emerald-700">
-                  This purchase is empty and safe to delete.
+                  This purchase is safe to delete.
                 </p>
               ) : null}
               {deleteReport?.blocking_dependencies.length ? (
@@ -1333,6 +1390,17 @@ export default function PurchaseDetailPage() {
                       </li>
                     ))}
                   </ul>
+                </div>
+              ) : null}
+              {canRemoveFuelPointEntry && deleteImpact ? (
+                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  <p className="font-medium">Fuel point entry can be removed first.</p>
+                  <p className="mt-1">
+                    This will remove{" "}
+                    {deleteImpact.fuel_points_to_reverse.toLocaleString()} fuel
+                    points from the linked fuel account, then refresh cleanup
+                    eligibility.
+                  </p>
                 </div>
               ) : null}
               {generatedCleanupRows.length ? (
@@ -1365,18 +1433,32 @@ export default function PurchaseDetailPage() {
                 </p>
               ) : null}
             </div>
-            <button
-              className="h-10 rounded-md border border-red-300 px-4 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-transparent"
-              disabled={
-                isLoadingDeleteReport ||
-                isDeletingPurchase ||
-                !canDeleteEmptyPurchase
-              }
-              onClick={handleDeleteEmptyPurchase}
-              type="button"
-            >
-              {isDeletingPurchase ? "Deleting..." : "Delete Empty Purchase"}
-            </button>
+            <div className="flex flex-col gap-2 sm:items-end">
+              {canRemoveFuelPointEntry ? (
+                <button
+                  className="h-10 rounded-md border border-amber-300 px-4 text-sm font-semibold text-amber-800 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-transparent"
+                  disabled={isLoadingDeleteReport || isRemovingFuelPointEntry}
+                  onClick={handleRemoveFuelPointEntry}
+                  type="button"
+                >
+                  {isRemovingFuelPointEntry
+                    ? "Removing fuel entry..."
+                    : "Remove fuel point entry"}
+                </button>
+              ) : null}
+              <button
+                className="h-10 rounded-md border border-red-300 px-4 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-transparent"
+                disabled={
+                  isLoadingDeleteReport ||
+                  isDeletingPurchase ||
+                  !canDeleteEmptyPurchase
+                }
+                onClick={handleDeleteEmptyPurchase}
+                type="button"
+              >
+                {isDeletingPurchase ? "Deleting..." : "Delete Empty Purchase"}
+              </button>
+            </div>
           </div>
         </section>
 
