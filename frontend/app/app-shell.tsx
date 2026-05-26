@@ -256,21 +256,12 @@ function SidebarContent({
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "/";
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [isIntakeContinueEnabled, setIsIntakeContinueEnabled] = useState(false);
   useRenderLoopDiagnostics("AppShell", { pathname });
 
   const title = useMemo(() => pageTitle(pathname), [pathname]);
-  const intakePurchaseId = useMemo(() => {
-    const match = pathname.match(/^\/intake\/([^/]+)$/);
-
-    return match?.[1] ?? null;
-  }, [pathname]);
 
   const isFocusedBarcodeMode =
     pathname.startsWith("/fuel-accounts/") && pathname.endsWith("/barcode");
-  const isNewPurchaseIntake = pathname === "/intake";
-  const canSubmitIntakeFromHeader =
-    isNewPurchaseIntake && isIntakeContinueEnabled;
 
   useEffect(() => {
     console.info("[AppShell] route transition", { pathname });
@@ -296,27 +287,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       window.removeEventListener("unhandledrejection", logUnhandledRejection);
     };
   }, []);
-
-  useEffect(() => {
-    if (!isNewPurchaseIntake) {
-      return;
-    }
-
-    function handleValidityChange(event: Event) {
-      const customEvent = event as CustomEvent<{ isValid: boolean }>;
-      setIsIntakeContinueEnabled(Boolean(customEvent.detail?.isValid));
-    }
-
-    window.addEventListener("purchase-intake-validity", handleValidityChange);
-    window.dispatchEvent(new Event("purchase-intake-validity-request"));
-
-    return () => {
-      window.removeEventListener(
-        "purchase-intake-validity",
-        handleValidityChange,
-      );
-    };
-  }, [isNewPurchaseIntake]);
 
   if (isFocusedBarcodeMode) {
     return <>{children}</>;
@@ -373,27 +343,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </div>
             </div>
 
-            {isNewPurchaseIntake ? (
-              <button
-                className="inline-flex h-10 shrink-0 cursor-pointer items-center rounded-lg border border-cyan-300/40 bg-cyan-300 px-3 text-sm font-semibold text-[#020617] shadow-lg shadow-cyan-950/20 transition hover:bg-cyan-200 active:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-45 sm:px-4"
-                disabled={!canSubmitIntakeFromHeader}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new Event("purchase-intake-submit-request"),
-                  )
-                }
-                type="button"
-              >
-                Continue
-              </button>
-            ) : intakePurchaseId ? (
-              <Link
-                className="inline-flex h-9 shrink-0 items-center rounded-lg border border-cyan-300/40 bg-cyan-300 px-3 text-sm font-semibold text-[#020617] shadow-lg shadow-cyan-950/20 transition hover:bg-cyan-200 active:bg-cyan-400 sm:px-4"
-                href={`/purchases/${intakePurchaseId}`}
-              >
-                Finish
-              </Link>
-            ) : null}
+            <div className="h-10 w-10 shrink-0" />
           </div>
         </header>
 

@@ -628,7 +628,7 @@ export default function PurchaseIntakePage() {
     hasBlankPaymentRows;
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950">
+    <main className="min-h-screen bg-slate-50 px-4 py-6 pb-28 text-slate-950 sm:pb-6">
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col sm:max-w-2xl">
         <header className="pb-5">
           <p className="text-sm font-medium text-slate-500">Purchase Intake</p>
@@ -1219,7 +1219,7 @@ export default function PurchaseIntakePage() {
             </div>
           ) : null}
 
-          <div className="sticky bottom-0 mt-auto bg-slate-50 py-4">
+          <div className="sticky bottom-0 mt-auto bg-slate-50 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4">
             <button
               className="h-12 w-full rounded-md bg-slate-900 px-5 text-base font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
               type="submit"
