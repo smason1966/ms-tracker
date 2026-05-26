@@ -26,6 +26,7 @@ class FuelRewardAccountCreate(BaseModel):
     retailer: str
     email: str | None = None
     alt_id: str | None = None
+    login_password: str | None = None
     status: str = "ACTIVE"
     target_points: int | None = None
     barcode_image_url: str | None = None
@@ -37,6 +38,7 @@ class FuelRewardAccountUpdate(BaseModel):
     retailer: str | None = None
     email: str | None = None
     alt_id: str | None = None
+    login_password: str | None = None
     status: str | None = None
     target_points: int | None = None
     barcode_image_url: str | None = None
@@ -54,7 +56,12 @@ def get_payload_fields(payload: BaseModel) -> set[str]:
     )
 
 
-def account_to_dict(db: Session, account: FuelRewardAccount):
+def account_to_dict(
+    db: Session,
+    account: FuelRewardAccount,
+    *,
+    include_sensitive: bool = False,
+):
     today = date.today()
     expiration_cycle = (
         db.query(func.min(FuelPointEntry.expires_on))
@@ -85,7 +92,7 @@ def account_to_dict(db: Session, account: FuelRewardAccount):
         else None
     )
 
-    return {
+    payload = {
         "id": account.id,
         "retailer": account.retailer,
         "email": account.email,
@@ -103,6 +110,11 @@ def account_to_dict(db: Session, account: FuelRewardAccount):
         "expiration_cycle": expiration_cycle,
         "entries_count": int(entries_count or 0),
     }
+
+    if include_sensitive:
+        payload["login_password"] = account.login_password
+
+    return payload
 
 
 def fuel_account_sort_key(item: dict):
@@ -206,6 +218,7 @@ def create_fuel_account(payload: FuelRewardAccountCreate):
             retailer=payload.retailer,
             email=payload.email,
             alt_id=payload.alt_id,
+            login_password=payload.login_password,
             status=payload.status,
             target_points=payload.target_points,
             barcode_image_url=payload.barcode_image_url,
@@ -217,7 +230,7 @@ def create_fuel_account(payload: FuelRewardAccountCreate):
         db.commit()
         db.refresh(account)
 
-        return account_to_dict(db, account)
+        return account_to_dict(db, account, include_sensitive=True)
 
     finally:
         db.close()
@@ -273,7 +286,7 @@ async def upload_fuel_account_barcode_image(
         db.commit()
         db.refresh(account)
 
-        return account_to_dict(db, account)
+        return account_to_dict(db, account, include_sensitive=True)
 
     finally:
         db.close()
@@ -293,7 +306,7 @@ def get_fuel_account(account_id: int):
         if not account:
             raise HTTPException(status_code=404, detail="Fuel account not found")
 
-        return account_to_dict(db, account)
+        return account_to_dict(db, account, include_sensitive=True)
 
     finally:
         db.close()
@@ -321,7 +334,7 @@ def update_fuel_account(account_id: int, payload: FuelRewardAccountUpdate):
         db.commit()
         db.refresh(account)
 
-        return account_to_dict(db, account)
+        return account_to_dict(db, account, include_sensitive=True)
 
     finally:
         db.close()

@@ -18,6 +18,7 @@ type FuelAccount = {
   retailer: string;
   email: string | null;
   alt_id: string | null;
+  login_password: string | null;
   status: string;
   target_points: number | null;
   barcode_image_url: string | null;
@@ -142,6 +143,27 @@ function getProgressBarClass(progressPercent: number | null) {
   return "bg-blue-600";
 }
 
+function statusBadge(account: FuelAccount) {
+  if (account.status === "SOLD") {
+    return {
+      label: "Sold",
+      className: "border-slate-300 bg-slate-100 text-slate-700",
+    };
+  }
+
+  if (account.status === "INACTIVE") {
+    return {
+      label: "Inactive",
+      className: "border-slate-300 bg-slate-50 text-slate-600",
+    };
+  }
+
+  return {
+    label: "Active",
+    className: "border-slate-200 bg-slate-50 text-slate-700",
+  };
+}
+
 export default function FuelAccountDetailPage() {
   const params = useParams<{ id: string | string[] }>();
   const accountId = Array.isArray(params.id) ? params.id[0] : params.id;
@@ -149,6 +171,8 @@ export default function FuelAccountDetailPage() {
   const [account, setAccount] = useState<FuelAccount | null>(null);
   const [entries, setEntries] = useState<FuelPointEntry[]>([]);
   const [targetPoints, setTargetPoints] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [barcodeFileInputKey, setBarcodeFileInputKey] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -185,6 +209,7 @@ export default function FuelAccountDetailPage() {
       setTargetPoints(
         accountData.target_points !== null ? String(accountData.target_points) : "",
       );
+      setLoginPassword(accountData.login_password ?? "");
       setEntries(entriesData);
     } catch (err) {
       setError(
@@ -241,6 +266,13 @@ export default function FuelAccountDetailPage() {
     });
   }
 
+  async function handlePasswordSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await updateAccount({
+      login_password: loginPassword.trim() === "" ? null : loginPassword,
+    });
+  }
+
   async function handleBarcodeImageChange(
     event: ChangeEvent<HTMLInputElement>,
   ) {
@@ -288,6 +320,13 @@ export default function FuelAccountDetailPage() {
   );
   const progressPercent = account ? getProgressPercent(account) : null;
   const progressBarClass = getProgressBarClass(progressPercent);
+  const accountStatusBadge = account ? statusBadge(account) : null;
+  const isUsableAccount = account?.status === "ACTIVE";
+  const isReadyToSell =
+    Boolean(isUsableAccount) &&
+    account?.target_points !== null &&
+    account?.target_points !== undefined &&
+    account.current_points >= account.target_points;
   const barcodeImageUrl = account
     ? getUploadUrl(account.barcode_image_url)
     : null;
@@ -331,10 +370,16 @@ export default function FuelAccountDetailPage() {
               {account?.retailer ?? "Fuel Account"}
             </h1>
             {account ? (
-              <p className="mt-1 text-sm text-slate-500">
-                {account.email || account.alt_id || "No account identifier"} ·{" "}
-                {account.status}
-              </p>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+                <span>{account.email || account.alt_id || "No account identifier"}</span>
+                {accountStatusBadge ? (
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${accountStatusBadge.className}`}
+                  >
+                    {accountStatusBadge.label}
+                  </span>
+                ) : null}
+              </div>
             ) : null}
           </div>
 
@@ -347,22 +392,26 @@ export default function FuelAccountDetailPage() {
             >
               Refresh
             </button>
-            <button
-              className="h-11 cursor-pointer rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white transition hover:bg-emerald-600 active:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isSaving || !account || account.status === "SOLD"}
-              onClick={() => updateAccount({ status: "SOLD" })}
-              type="button"
-            >
-              Mark SOLD
-            </button>
-            <button
-              className="h-11 cursor-pointer rounded-md bg-slate-700 px-4 text-sm font-semibold text-white transition hover:bg-slate-600 active:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isSaving || !account || account.status === "INACTIVE"}
-              onClick={() => updateAccount({ status: "INACTIVE" })}
-              type="button"
-            >
-              Mark INACTIVE
-            </button>
+            {account && account.status !== "SOLD" ? (
+              <button
+                className="h-11 cursor-pointer rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white transition hover:bg-emerald-600 active:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isSaving}
+                onClick={() => updateAccount({ status: "SOLD" })}
+                type="button"
+              >
+                Mark SOLD
+              </button>
+            ) : null}
+            {account && account.status === "ACTIVE" ? (
+              <button
+                className="h-11 cursor-pointer rounded-md bg-slate-700 px-4 text-sm font-semibold text-white transition hover:bg-slate-600 active:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isSaving}
+                onClick={() => updateAccount({ status: "INACTIVE" })}
+                type="button"
+              >
+                Mark INACTIVE
+              </button>
+            ) : null}
             {account ? (
               <Link
                 className="flex h-11 cursor-pointer items-center rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 active:bg-slate-800"
@@ -402,8 +451,7 @@ export default function FuelAccountDetailPage() {
                     {progressPercent !== null ? `(${progressPercent}%)` : ""}
                   </p>
                 </div>
-                {account.target_points !== null &&
-                account.current_points >= account.target_points ? (
+                {isReadyToSell ? (
                   <span className="inline-flex rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-800">
                     Ready to Sell
                   </span>
@@ -538,6 +586,62 @@ export default function FuelAccountDetailPage() {
               </div>
 
               <aside className="space-y-4">
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                  <h2 className="text-lg font-semibold">Credentials</h2>
+                  <dl className="mt-3 space-y-2 text-sm">
+                    <div>
+                      <dt className="font-medium text-slate-500">
+                        Rewards account identifier/email
+                      </dt>
+                      <dd className="mt-1 break-all text-slate-700">
+                        {account.email || "-"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-medium text-slate-500">
+                        Alternate ID / phone / loyalty number
+                      </dt>
+                      <dd className="mt-1 break-all text-slate-700">
+                        {account.alt_id || "-"}
+                      </dd>
+                    </div>
+                  </dl>
+                  <form
+                    className="mt-4 space-y-3"
+                    onSubmit={handlePasswordSubmit}
+                  >
+                    <label className="block space-y-2 text-sm font-medium text-slate-700">
+                      <span>Password / PIN</span>
+                      <div className="flex gap-2">
+                        <input
+                          className="h-11 min-w-0 flex-1 rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                          onChange={(event) =>
+                            setLoginPassword(event.target.value)
+                          }
+                          type={showPassword ? "text" : "password"}
+                          value={loginPassword}
+                        />
+                        <button
+                          className="h-11 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                          onClick={() =>
+                            setShowPassword((currentValue) => !currentValue)
+                          }
+                          type="button"
+                        >
+                          {showPassword ? "Hide" : "Show"}
+                        </button>
+                      </div>
+                    </label>
+                    <button
+                      className="h-11 w-full cursor-pointer rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 active:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isSaving}
+                      type="submit"
+                    >
+                      {isSaving ? "Saving..." : "Save Password / PIN"}
+                    </button>
+                  </form>
+                </section>
+
                 <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                   <h2 className="text-lg font-semibold">Barcode</h2>
                   <p className="mt-2 text-sm text-slate-500">
