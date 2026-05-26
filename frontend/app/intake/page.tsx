@@ -98,11 +98,11 @@ function createInitialForm(): IntakeForm {
   };
 }
 
-function createEmptyPaymentRow(): PaymentRow {
+function createEmptyPaymentRow(amount = ""): PaymentRow {
   return {
     payment_type: "CREDIT_CARD",
     credit_card_id: "",
-    amount: "",
+    amount,
     notes: "",
   };
 }
@@ -293,6 +293,15 @@ export default function PurchaseIntakePage() {
     !isSplitTenderEnabled ||
     form.purchase_total_paid.trim() === "" ||
     Math.round(paymentDifference * 100) !== 0;
+  const addPaymentLabel =
+    form.purchase_total_paid.trim() !== "" &&
+    !Number.isNaN(totalPaid) &&
+    paymentDifference > 0
+      ? `Add Payment (${new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: "USD",
+        }).format(paymentDifference)} remaining)`
+      : "Add Payment";
 
   useEffect(() => {
     let isMounted = true;
@@ -410,6 +419,30 @@ export default function PurchaseIntakePage() {
 
     if (isEnabled) {
       updateFormField("credit_card_id", "");
+      setPaymentRows((currentRows) => {
+        if (currentRows.length > 0) {
+          return currentRows;
+        }
+
+        const purchaseTotalPaid = Number(form.purchase_total_paid);
+
+        if (
+          form.purchase_total_paid.trim() !== "" &&
+          !Number.isNaN(purchaseTotalPaid) &&
+          purchaseTotalPaid <= 0
+        ) {
+          return currentRows;
+        }
+
+        return [
+          createEmptyPaymentRow(
+            form.purchase_total_paid.trim() !== "" &&
+              !Number.isNaN(purchaseTotalPaid)
+              ? purchaseTotalPaid.toFixed(2)
+              : "",
+          ),
+        ];
+      });
     } else {
       setPaymentRows([]);
     }
@@ -441,7 +474,29 @@ export default function PurchaseIntakePage() {
   }
 
   function addPaymentRow() {
-    setPaymentRows((currentRows) => [...currentRows, createEmptyPaymentRow()]);
+    setPaymentRows((currentRows) => {
+      const purchaseTotalPaid = Number(form.purchase_total_paid);
+      const currentTotal = currentRows.reduce((total, row) => {
+        const amount = Number(row.amount);
+
+        return total + (Number.isNaN(amount) ? 0 : amount);
+      }, 0);
+      const remaining =
+        form.purchase_total_paid.trim() === "" || Number.isNaN(purchaseTotalPaid)
+          ? null
+          : purchaseTotalPaid - currentTotal;
+
+      if (remaining !== null && remaining <= 0) {
+        return currentRows;
+      }
+
+      return [
+        ...currentRows,
+        createEmptyPaymentRow(
+          remaining !== null ? Math.max(0, remaining).toFixed(2) : "",
+        ),
+      ];
+    });
   }
 
   function removePaymentRow(index: number) {
@@ -936,13 +991,26 @@ export default function PurchaseIntakePage() {
                         onClick={addPaymentRow}
                         type="button"
                       >
-                        Add Payment
+                        {addPaymentLabel}
                       </button>
                     </div>
                   ) : null}
                 </div>
               ) : null}
             </section>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Receipt Image</span>
+              <input
+                className="block w-full cursor-pointer rounded-md border border-slate-300 bg-white text-sm text-slate-700 file:mr-4 file:h-12 file:cursor-pointer file:border-0 file:bg-slate-900 file:px-4 file:text-sm file:font-semibold file:text-white file:transition file:hover:bg-slate-700"
+                type="file"
+                accept="image/*"
+                onChange={handleReceiptChange}
+              />
+              {receiptFile ? (
+                <p className="text-sm text-slate-500">{receiptFile.name}</p>
+              ) : null}
+            </label>
 
             {showFuelPoints ? (
               <section className="space-y-4 rounded-md border border-slate-200 bg-slate-50 p-4">
@@ -1193,18 +1261,6 @@ export default function PurchaseIntakePage() {
               />
             </label>
 
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Receipt Image</span>
-              <input
-                className="block w-full cursor-pointer rounded-md border border-slate-300 bg-white text-sm text-slate-700 file:mr-4 file:h-12 file:cursor-pointer file:border-0 file:bg-slate-900 file:px-4 file:text-sm file:font-semibold file:text-white file:transition file:hover:bg-slate-700"
-                type="file"
-                accept="image/*"
-                onChange={handleReceiptChange}
-              />
-              {receiptFile ? (
-                <p className="text-sm text-slate-500">{receiptFile.name}</p>
-              ) : null}
-            </label>
           </section>
 
           {submitError ? (
