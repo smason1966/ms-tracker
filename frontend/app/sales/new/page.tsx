@@ -405,6 +405,37 @@ export default function NewSalePage() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  async function loadAvailableAssets() {
+    const [cardsResponse, fuelResponse] = await Promise.all([
+      fetch(`${API_BASE_URL}/gift-cards/`),
+      fetch(`${API_BASE_URL}/fuel-accounts/dashboard`),
+    ]);
+
+    if (!cardsResponse.ok || !fuelResponse.ok) {
+      const failures = await Promise.all(
+        [
+          [`${API_BASE_URL}/gift-cards/`, cardsResponse],
+          [`${API_BASE_URL}/fuel-accounts/dashboard`, fuelResponse],
+        ]
+          .filter(([, response]) => !(response as Response).ok)
+          .map(([endpoint, response]) =>
+            errorMessageFromResponse(response as Response, endpoint as string),
+          ),
+      );
+      throw new Error(failures.join(" | "));
+    }
+
+    const cardData = (await cardsResponse.json()) as GiftCard[];
+    const fuelData = (await fuelResponse.json()) as FuelAccount[];
+
+    setGiftCards(
+      cardData.filter((card) => card.status === "VERIFIED_AVAILABLE"),
+    );
+    setFuelAccounts(
+      fuelData.filter((account) => account.status === "ACTIVE"),
+    );
+  }
+
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       async function loadData() {
@@ -641,6 +672,10 @@ export default function NewSalePage() {
     setCreatedSale(null);
 
     try {
+      const soldCardIds = new Set(selectedCardIds);
+      const soldFuelAccountIds = new Set(
+        fuelSelections.map((selection) => selection.fuel_reward_account_id),
+      );
       const endpoint = `${API_BASE_URL}/sales/`;
       const payload = {
         buyer_id: Number(buyerId),
@@ -682,16 +717,49 @@ export default function NewSalePage() {
         );
       }
 
-      setCreatedSale((await response.json()) as CreatedSale);
+      const sale = (await response.json()) as CreatedSale;
+      setCreatedSale(sale);
       setSelectedCardIds([]);
       setFuelSelections([]);
+      setGiftCards((currentCards) =>
+        currentCards.filter((card) => !soldCardIds.has(card.id)),
+      );
+      setFuelAccounts((currentAccounts) =>
+        currentAccounts.filter((account) => !soldFuelAccountIds.has(account.id)),
+      );
       setPaymentAccountId("");
       setExpectedPaymentDate("");
       setNotes("");
+      try {
+        await loadAvailableAssets();
+      } catch (refreshError) {
+        setError(
+          refreshError instanceof Error
+            ? `Sale created, but available inventory refresh failed: ${refreshError.message}`
+            : "Sale created, but available inventory refresh failed.",
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create sale.");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function handleStartNewSale() {
+    setCreatedSale(null);
+    setSelectedCardIds([]);
+    setFuelSelections([]);
+    setError(null);
+
+    try {
+      await loadAvailableAssets();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to refresh available inventory.",
+      );
     }
   }
 
@@ -764,10 +832,17 @@ export default function NewSalePage() {
               </a>
               <Link
                 className="inline-flex h-10 items-center rounded-md border border-slate-300 px-4 text-sm font-semibold hover:bg-slate-100"
-                href="/sales"
+                href={`/sales?sale=${createdSale.id}`}
               >
-                View Sales
+                View Sale
               </Link>
+              <button
+                className="inline-flex h-10 items-center rounded-md border border-emerald-300 bg-white px-4 text-sm font-semibold text-emerald-900 hover:bg-emerald-100"
+                onClick={() => void handleStartNewSale()}
+                type="button"
+              >
+                Start New Sale
+              </button>
             </div>
           </section>
         ) : null}
