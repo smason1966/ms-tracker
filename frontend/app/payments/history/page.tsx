@@ -31,6 +31,16 @@ type PaymentLedgerRow = {
   status_label: string;
 };
 
+const paymentHistoryFilters = [
+  { value: "recent", label: "Recent" },
+  { value: "settled", label: "Settled" },
+  { value: "short", label: "Short Pay" },
+  { value: "over", label: "Overpay" },
+  { value: "all", label: "All" },
+] as const;
+
+type PaymentHistoryFilter = (typeof paymentHistoryFilters)[number]["value"];
+
 function formatCurrency(value: string | number | null) {
   const amount = Number(value ?? 0);
 
@@ -88,17 +98,37 @@ function differenceTone(value: string | number) {
   return "text-slate-700";
 }
 
-function filterLabel(status: string | null) {
+function filterFromStatusParam(status: string | null): PaymentHistoryFilter {
   if (status === "short") {
-    return "short pays";
+    return "short";
   }
   if (status === "over") {
-    return "overpays";
+    return "over";
   }
   if (status === "settled") {
-    return "settled payments";
+    return "settled";
   }
-  return "all payments";
+  return "recent";
+}
+
+function varianceLabel(value: string | number) {
+  const amount = Number(value);
+  if (amount < 0) {
+    return {
+      className: "border-red-200 bg-red-50 text-red-700",
+      label: "Short pay",
+    };
+  }
+  if (amount > 0) {
+    return {
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      label: "Overpay",
+    };
+  }
+  return {
+    className: "border-slate-200 bg-slate-100 text-slate-600",
+    label: "Matched",
+  };
 }
 
 export default function PaymentHistoryPage() {
@@ -120,6 +150,9 @@ export default function PaymentHistoryPage() {
 function PaymentHistoryContent() {
   const searchParams = useSearchParams();
   const statusFilter = searchParams.get("status");
+  const [selectedFilter, setSelectedFilter] = useState<PaymentHistoryFilter>(
+    () => filterFromStatusParam(statusFilter),
+  );
   const [rows, setRows] = useState<PaymentLedgerRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -158,18 +191,18 @@ function PaymentHistoryContent() {
     () =>
       rows.filter((row) => {
         const difference = Number(row.difference);
-        if (statusFilter === "short") {
+        if (selectedFilter === "short") {
           return difference < 0;
         }
-        if (statusFilter === "over") {
+        if (selectedFilter === "over") {
           return difference > 0;
         }
-        if (statusFilter === "settled") {
+        if (selectedFilter === "settled") {
           return row.status === "COMPLETED" || row.status === "SETTLED";
         }
         return true;
       }),
-    [rows, statusFilter],
+    [rows, selectedFilter],
   );
 
   return (
@@ -203,20 +236,33 @@ function PaymentHistoryContent() {
           </div>
         </header>
 
-        {statusFilter ? (
-          <div className="flex flex-col gap-3 rounded-md border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-950 sm:flex-row sm:items-center sm:justify-between">
-            <p className="font-semibold">Showing: {filterLabel(statusFilter)}</p>
-            <Link className="font-semibold hover:underline" href="/payments/history">
-              Reset filter
-            </Link>
-          </div>
-        ) : null}
-
         {error ? (
           <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
             {error}
           </div>
         ) : null}
+
+        <section className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-end sm:justify-between">
+          <label className="space-y-2 text-sm font-medium text-slate-700">
+            <span>Status</span>
+            <select
+              className="h-10 min-w-48 rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              onChange={(event) =>
+                setSelectedFilter(event.target.value as PaymentHistoryFilter)
+              }
+              value={selectedFilter}
+            >
+              {paymentHistoryFilters.map((filter) => (
+                <option key={filter.value} value={filter.value}>
+                  {filter.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="pb-2 text-sm font-medium text-slate-500">
+            {visibleRows.length} of {rows.length} payments
+          </p>
+        </section>
 
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
@@ -225,9 +271,9 @@ function PaymentHistoryContent() {
                 <th className="px-4 py-3">Received</th>
                 <th className="px-4 py-3">Buyer</th>
                 <th className="px-4 py-3">Payment Account</th>
-                <th className="px-4 py-3">Received</th>
-                <th className="px-4 py-3">Expected</th>
-                <th className="px-4 py-3">Difference</th>
+                <th className="px-4 py-3 text-right">Received</th>
+                <th className="px-4 py-3 text-right">Expected</th>
+                <th className="px-4 py-3 text-right">Difference</th>
                 <th className="px-4 py-3">Sale</th>
                 <th className="px-4 py-3">Reference / Notes</th>
                 <th className="px-4 py-3">Status</th>
@@ -248,63 +294,77 @@ function PaymentHistoryContent() {
                   </td>
                 </tr>
               ) : (
-                visibleRows.map((row) => (
-                  <tr key={row.id}>
-                    <td className="px-4 py-3">{formatDate(row.received_date)}</td>
-                    <td className="px-4 py-3">{row.buyer ?? "-"}</td>
-                    <td className="px-4 py-3">
-                      {paymentAccountLabel(row.payment_account)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {formatCurrency(row.amount_received)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {formatCurrency(row.expected_amount)}
-                    </td>
-                    <td className={`px-4 py-3 font-semibold ${differenceTone(row.difference)}`}>
-                      {formatCurrency(row.difference)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {row.linked_sales.map((sale) => (
-                        <Link
-                          className="font-semibold text-slate-900 hover:underline"
-                          href={`/sales?sale=${sale.id}`}
-                          key={sale.id}
-                        >
-                          Sale #{sale.id}
-                        </Link>
-                      ))}
-                    </td>
-                    <td className="px-4 py-3">
-                      <p>{row.settlement_reference ?? "-"}</p>
-                      {row.settlement_notes ? (
-                        <p className="mt-1 max-w-xs truncate text-xs text-slate-500">
-                          {row.settlement_notes}
-                        </p>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3">{row.status_label}</td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex justify-end gap-2">
-                        <Link
-                          className="inline-flex h-9 items-center rounded-md border border-slate-300 px-3 text-xs font-semibold hover:bg-slate-100"
-                          href={`/sales?sale=${row.sale_id}`}
-                        >
-                          View Sale
-                        </Link>
-                        <Link
-                          className="inline-flex h-9 items-center rounded-md border border-slate-300 px-3 text-xs font-semibold hover:bg-slate-100"
-                          href={`/payments/receive?sale_id=${row.sale_id}`}
-                        >
-                          Edit Payment
-                        </Link>
-                        <span className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-slate-100 px-3 text-xs font-semibold text-slate-400">
-                          Reverse unavailable
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                visibleRows.map((row) => {
+                  const variance = varianceLabel(row.difference);
+                  const isSettled =
+                    row.status === "COMPLETED" || row.status === "SETTLED";
+
+                  return (
+                    <tr key={row.id}>
+                      <td className="px-4 py-3">{formatDate(row.received_date)}</td>
+                      <td className="px-4 py-3">{row.buyer ?? "-"}</td>
+                      <td className="px-4 py-3">
+                        {paymentAccountLabel(row.payment_account)}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        {formatCurrency(row.amount_received)}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        {formatCurrency(row.expected_amount)}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        <div className="flex flex-col items-end gap-1">
+                          <span className={`font-semibold ${differenceTone(row.difference)}`}>
+                            {formatCurrency(row.difference)}
+                          </span>
+                          <span
+                            className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-xs font-semibold ${variance.className}`}
+                          >
+                            {variance.label}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        {row.linked_sales.map((sale) => (
+                          <Link
+                            className="font-semibold text-slate-900 hover:underline"
+                            href={`/sales?sale=${sale.id}`}
+                            key={sale.id}
+                          >
+                            Sale #{sale.id}
+                          </Link>
+                        ))}
+                      </td>
+                      <td className="px-4 py-3">
+                        <p>{row.settlement_reference ?? "-"}</p>
+                        {row.settlement_notes ? (
+                          <p className="mt-1 max-w-xs truncate text-xs text-slate-500">
+                            {row.settlement_notes}
+                          </p>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3">{row.status_label}</td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex justify-end gap-2">
+                          <Link
+                            className="font-semibold text-slate-700 hover:text-slate-950 hover:underline"
+                            href={`/sales?sale=${row.sale_id}`}
+                          >
+                            View Sale
+                          </Link>
+                          {!isSettled ? (
+                            <Link
+                              className="font-semibold text-slate-700 hover:text-slate-950 hover:underline"
+                              href={`/payments/receive?buyer_id=${row.buyer_id}&sale_id=${row.sale_id}`}
+                            >
+                              Receive Balance
+                            </Link>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
