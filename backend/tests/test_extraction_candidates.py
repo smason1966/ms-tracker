@@ -35,6 +35,35 @@ BARCODE_CANDIDATES:
             )
         )
 
+    def test_nike_rejects_16_digit_card_candidate(self) -> None:
+        raw_text = """
+NIKE
+CARD NUMBER 6060 1012 3456 7890
+
+BARCODE_CANDIDATES:
+6060101234567890
+"""
+
+        candidates = build_extraction_candidates(raw_text, brand="Nike")
+        useful_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.candidate_type != "rejected"
+        ]
+        rejected_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.candidate_type == "rejected"
+        ]
+
+        self.assertEqual(useful_candidates, [])
+        self.assertTrue(
+            any(
+                candidate.value == "6060101234567890"
+                for candidate in rejected_candidates
+            )
+        )
+
 
 class BestBuyBarcodeCandidateTest(unittest.TestCase):
     def test_best_buy_prefers_16_digit_barcode(self) -> None:

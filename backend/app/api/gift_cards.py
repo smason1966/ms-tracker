@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -430,6 +431,68 @@ def clean_credential_value(value: str | None) -> str | None:
 
     cleaned = value.strip()
     return cleaned or None
+
+
+def credential_digits(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    digits = re.sub(r"\D", "", value)
+    return digits or None
+
+
+BRAND_CREDENTIAL_RULES = {
+    "best buy": {
+        "display_name": "Best Buy",
+        "card_number_length": 16,
+        "pin_length": 4,
+    },
+    "nike": {
+        "display_name": "Nike",
+        "card_number_length": 19,
+        "pin_length": 6,
+    },
+}
+
+
+def brand_credential_rule(brand: str | None) -> dict | None:
+    normalized_brand = (brand or "").strip().lower()
+    for brand_key, rule in BRAND_CREDENTIAL_RULES.items():
+        if brand_key in normalized_brand:
+            return rule
+    return None
+
+
+def validate_brand_credentials(
+    brand: str | None,
+    card_number: str | None,
+    pin: str | None,
+    redemption_code: str | None,
+) -> tuple[str | None, str | None]:
+    rule = brand_credential_rule(brand)
+    if not rule or redemption_code:
+        return card_number, pin
+
+    display_name = str(rule["display_name"])
+    card_number_length = int(rule["card_number_length"])
+    pin_length = int(rule["pin_length"])
+
+    normalized_card_number = credential_digits(card_number)
+    if normalized_card_number is not None:
+        if len(normalized_card_number) != card_number_length:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{display_name} card number must be {card_number_length} digits.",
+            )
+        card_number = normalized_card_number
+
+    if pin is None or not pin.isdigit() or len(pin) != pin_length:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{display_name} PIN must be {pin_length} digits.",
+        )
+
+    return card_number, pin
 
 
 def locked_card_number(card: GiftCard) -> str | None:
@@ -1500,6 +1563,13 @@ def verify_gift_card(gift_card_id: int, payload: GiftCardVerify):
         confirmed_pin = clean_credential_value(payload.confirmed_pin)
         if confirmed_pin is None:
             confirmed_pin = clean_credential_value(payload.pin)
+
+        confirmed_card_number, confirmed_pin = validate_brand_credentials(
+            card.brand,
+            confirmed_card_number,
+            confirmed_pin,
+            confirmed_redemption_code,
+        )
 
         duplicate_check_value = confirmed_card_number or confirmed_redemption_code
         if duplicate_check_value is not None:

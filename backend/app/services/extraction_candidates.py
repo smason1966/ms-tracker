@@ -127,7 +127,7 @@ BRAND_OCR_PROFILES = {
         display_name="Nike",
         credential_type="card_number_plus_optional_pin",
         prefer_barcode_card_number=True,
-        card_number_lengths=(19, 16),
+        card_number_lengths=(19,),
         card_number_prefixes=("606010",),
         pin_expected_length=6,
     ),

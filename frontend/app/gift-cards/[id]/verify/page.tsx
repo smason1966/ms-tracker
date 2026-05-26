@@ -848,6 +848,72 @@ function normalizedCandidateValue(value: string) {
   return value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
 }
 
+function credentialDigits(value: string) {
+  return value.replace(/\D/g, "");
+}
+
+function brandCredentialRule(brand: string | null | undefined) {
+  const normalizedBrand = normalizedBrandName(brand);
+
+  if (normalizedBrand.includes("best buy")) {
+    return {
+      displayName: "Best Buy",
+      cardNumberLength: 16,
+      pinLength: 4,
+    };
+  }
+
+  if (normalizedBrand.includes("nike")) {
+    return {
+      displayName: "Nike",
+      cardNumberLength: 19,
+      pinLength: 6,
+    };
+  }
+
+  return null;
+}
+
+function validateManualCredentialsForBrand({
+  brand,
+  cardNumber,
+  isRedemptionCodeOnly,
+  pin,
+}: {
+  brand: string | null | undefined;
+  cardNumber: string;
+  isRedemptionCodeOnly: boolean;
+  pin: string;
+}) {
+  const rule = brandCredentialRule(brand);
+  if (!rule || isRedemptionCodeOnly) {
+    return {
+      cardNumberError: null,
+      normalizedCardNumber: cardNumber,
+      normalizedPin: pin,
+      pinError: null,
+    };
+  }
+
+  const normalizedCardNumber = credentialDigits(cardNumber);
+  const normalizedPin = pin.trim();
+  const cardNumberError =
+    normalizedCardNumber.length === rule.cardNumberLength
+      ? null
+      : `${rule.displayName} card number must be ${rule.cardNumberLength} digits.`;
+  const pinError =
+    /^\d+$/.test(normalizedPin) && normalizedPin.length === rule.pinLength
+      ? null
+      : `${rule.displayName} PIN must be ${rule.pinLength} digits.`;
+
+  return {
+    cardNumberError,
+    normalizedCardNumber,
+    normalizedPin,
+    pinError,
+  };
+}
+
 function isCandidateValidForBrand(
   candidate: Pick<ExtractionCandidate, "candidate_type" | "value">,
   brand: string | null | undefined,
@@ -869,7 +935,7 @@ function isCandidateValidForBrand(
     if (candidateType === "card_number") {
       return (
         /^606010\d+$/.test(normalizedValue) &&
-        (normalizedValue.length === 16 || normalizedValue.length === 19)
+        normalizedValue.length === 19
       );
     }
     if (candidateType === "pin") {
@@ -2065,6 +2131,15 @@ export default function GiftCardVerificationPage() {
     ),
   ];
   const isRedemptionCodeOnly = isRedemptionCodeOnlyBrand(giftCard?.brand);
+  const credentialValidation = validateManualCredentialsForBrand({
+    brand: giftCard?.brand,
+    cardNumber: form.card_number,
+    isRedemptionCodeOnly,
+    pin: form.pin,
+  });
+  const hasCredentialValidationError = Boolean(
+    credentialValidation.cardNumberError || credentialValidation.pinError,
+  );
   const primaryCredentialLabel = isRedemptionCodeOnly
     ? "Confirmed Redemption Code"
     : "Confirmed Card Number";
@@ -3574,6 +3649,15 @@ export default function GiftCardVerificationPage() {
       return;
     }
 
+    if (hasCredentialValidationError) {
+      setSubmitError(
+        credentialValidation.cardNumberError ??
+          credentialValidation.pinError ??
+          "Gift card credentials are invalid.",
+      );
+      return;
+    }
+
     setIsSubmitting(true);
     setSubmitError(null);
     setSuccessMessage(null);
@@ -3593,11 +3677,15 @@ export default function GiftCardVerificationPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          card_number: form.card_number,
-          confirmed_card_number: isRedemptionCodeOnly ? null : form.card_number,
+          card_number: credentialValidation.normalizedCardNumber,
+          confirmed_card_number: isRedemptionCodeOnly
+            ? null
+            : credentialValidation.normalizedCardNumber,
           confirmed_redemption_code: isRedemptionCodeOnly ? form.card_number : null,
-          pin: isRedemptionCodeOnly ? null : form.pin,
-          confirmed_pin: isRedemptionCodeOnly ? null : form.pin,
+          pin: isRedemptionCodeOnly ? null : credentialValidation.normalizedPin,
+          confirmed_pin: isRedemptionCodeOnly
+            ? null
+            : credentialValidation.normalizedPin,
           confirmed_source: form.confirmed_source || "manual",
           update_confirmed_credentials: isSaleLocked && allowLockedCredentialUpdate,
           face_value: Number(form.face_value),
@@ -6529,6 +6617,11 @@ export default function GiftCardVerificationPage() {
                 type="text"
                 value={form.card_number}
               />
+              {credentialValidation.cardNumberError ? (
+                <p className="text-xs font-medium text-red-700">
+                  {credentialValidation.cardNumberError}
+                </p>
+              ) : null}
             </label>
 
             {!isRedemptionCodeOnly ? (
@@ -6546,6 +6639,11 @@ export default function GiftCardVerificationPage() {
                   type="text"
                   value={form.pin}
                 />
+                {credentialValidation.pinError ? (
+                  <p className="text-xs font-medium text-red-700">
+                    {credentialValidation.pinError}
+                  </p>
+                ) : null}
               </label>
             ) : null}
 
@@ -6738,6 +6836,7 @@ export default function GiftCardVerificationPage() {
                 disabled={
                   isSubmitting ||
                   isSavingValueCost ||
+                  hasCredentialValidationError ||
                   (isSaleLocked && !allowLockedCredentialUpdate) ||
                   isInactiveCard
                 }
