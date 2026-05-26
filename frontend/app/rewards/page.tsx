@@ -98,9 +98,47 @@ type ActiveSignupBonus = {
   signup_bonus_points: number;
 };
 
+type InstantDiscountGroup = {
+  label: string;
+  store_name: string;
+  credit_card_id: number | null;
+  credit_card_nickname: string | null;
+  player_id: number | null;
+  player_label: string | null;
+  eligible_spend: string | number;
+  total_saved: string | number;
+  count: number;
+};
+
+type InstantDiscountDetail = {
+  transaction_id: number;
+  purchase_id: number | null;
+  store_name: string;
+  purchase_date: string | null;
+  credit_card_id: number | null;
+  credit_card_nickname: string | null;
+  player_id: number | null;
+  player_label: string | null;
+  player_name: string | null;
+  eligible_spend: string | number;
+  saved_amount: string | number;
+  reward_type: string;
+  matched_rule_id: number | null;
+  calculation_source: string | null;
+};
+
+type InstantDiscountSummary = {
+  total_saved: string | number;
+  eligible_spend: string | number;
+  count: number;
+  groups: InstantDiscountGroup[];
+  details: InstantDiscountDetail[];
+};
+
 type RewardsSummary = {
   rewards_by_program: RewardProgramMetric[];
   reward_program_drilldowns: RewardProgramDrilldown[];
+  instant_discounts?: InstantDiscountSummary;
   pending_rewards: string | number;
   fuel_points_earned: string | number;
   signup_bonuses_earned: string | number;
@@ -222,14 +260,6 @@ function getQueryParams() {
   return new URLSearchParams(window.location.search);
 }
 
-function blendedRate(spend: number, rewards: number) {
-  if (spend <= 0) {
-    return "-";
-  }
-
-  return `${formatNumber(rewards / spend, 2)}x`;
-}
-
 export default function RewardsPage() {
   const [summary, setSummary] = useState<RewardsSummary | null>(null);
   const [reportingRange, setReportingRange] = useState("this_month");
@@ -241,6 +271,7 @@ export default function RewardsPage() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [isMultiPlayerModeEnabled, setIsMultiPlayerModeEnabled] = useState(false);
   const [expandedPrograms, setExpandedPrograms] = useState<Set<string>>(new Set());
+  const [expandedInstantDiscounts, setExpandedInstantDiscounts] = useState<Set<string>>(new Set());
   const [activeTabs, setActiveTabs] = useState<Record<string, DetailTab>>({});
   const [isBonusOpen, setIsBonusOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -367,10 +398,6 @@ export default function RewardsPage() {
         return {
           ...program,
           qualifying_spend: qualifyingSpend,
-          blended_rate: blendedRate(
-            qualifyingSpend,
-            numericValue(program.estimated_rewards_earned),
-          ),
           drilldown,
         };
       }),
@@ -633,7 +660,7 @@ export default function RewardsPage() {
                         key={key}
                       >
                         <button
-                          className="grid w-full cursor-pointer gap-3 px-4 py-3 text-left transition hover:bg-white/[0.055] lg:grid-cols-[minmax(0,1.3fr)_auto_auto_auto_auto_auto] lg:items-center"
+                          className="grid w-full cursor-pointer gap-3 px-4 py-3 text-left transition hover:bg-white/[0.055] lg:grid-cols-[minmax(0,1.3fr)_auto_auto_auto_auto] lg:items-center"
                           onClick={() => toggleProgram(program)}
                           type="button"
                         >
@@ -661,7 +688,6 @@ export default function RewardsPage() {
                             label="spend"
                             value={formatCurrency(program.qualifying_spend)}
                           />
-                          <ProgramStat label="blended" value={program.blended_rate} />
                           <div className="text-left lg:text-right">
                             <p className="text-sm font-semibold text-slate-200">
                               {estimatedValueLabel(program)}
@@ -690,6 +716,27 @@ export default function RewardsPage() {
                 )}
               </div>
             </section>
+
+            {summary.instant_discounts &&
+            numericValue(summary.instant_discounts.count) > 0 ? (
+              <InstantDiscountsSection
+                expandedGroups={expandedInstantDiscounts}
+                instantDiscounts={summary.instant_discounts}
+                onToggleGroup={(key) => {
+                  setExpandedInstantDiscounts((current) => {
+                    const next = new Set(current);
+
+                    if (next.has(key)) {
+                      next.delete(key);
+                    } else {
+                      next.add(key);
+                    }
+
+                    return next;
+                  });
+                }}
+              />
+            ) : null}
 
             <section className="rounded-xl border border-white/10 bg-slate-950/55 shadow-2xl shadow-black/10">
               <button
@@ -818,6 +865,158 @@ function ProgramStat({ label, value }: { label: string; value: string }) {
     <div className="text-left lg:text-right">
       <p className="text-sm font-semibold text-slate-100">{value}</p>
       <p className="text-xs text-slate-500">{label}</p>
+    </div>
+  );
+}
+
+function InstantDiscountsSection({
+  expandedGroups,
+  instantDiscounts,
+  onToggleGroup,
+}: {
+  expandedGroups: Set<string>;
+  instantDiscounts: InstantDiscountSummary;
+  onToggleGroup: (key: string) => void;
+}) {
+  const groupCount = instantDiscounts.groups.length;
+
+  return (
+    <section className="rounded-xl border border-white/10 bg-slate-950/55 shadow-2xl shadow-black/10">
+      <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-300">
+            Instant Discounts
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Purchase-time savings from card-linked discounts.
+          </p>
+        </div>
+        <span className="text-xs text-slate-500">
+          {groupCount} discount program{groupCount === 1 ? "" : "s"}
+        </span>
+      </div>
+
+      <div className="divide-y divide-white/10">
+        {instantDiscounts.groups.map((group) => {
+          const key = instantDiscountGroupKey(group);
+          const isExpanded = expandedGroups.has(key);
+          const details = instantDiscounts.details.filter(
+            (detail) => instantDiscountGroupKey(detail) === key,
+          );
+
+          return (
+            <article key={key}>
+              <button
+                className="grid w-full cursor-pointer gap-3 px-4 py-3 text-left transition hover:bg-white/[0.055] lg:grid-cols-[minmax(0,1.3fr)_auto_auto_auto] lg:items-center"
+                onClick={() => onToggleGroup(key)}
+                type="button"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-base font-semibold text-white">
+                    {group.label}
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {group.store_name}
+                    {group.credit_card_nickname
+                      ? ` · ${group.credit_card_nickname}`
+                      : ""}
+                  </p>
+                </div>
+                <ProgramStat label="saved" value={formatCurrency(group.total_saved)} />
+                <ProgramStat
+                  label="eligible spend"
+                  value={formatCurrency(group.eligible_spend)}
+                />
+                <span className="text-sm font-semibold text-cyan-200 lg:text-right">
+                  {isExpanded ? "Hide details" : "View details"}
+                </span>
+              </button>
+
+              {isExpanded ? (
+                <InstantDiscountDetails details={details} />
+              ) : null}
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function instantDiscountGroupKey(
+  item: Pick<InstantDiscountGroup | InstantDiscountDetail, "store_name" | "credit_card_id">,
+) {
+  return `${item.store_name}-${item.credit_card_id ?? "card"}`;
+}
+
+function InstantDiscountDetails({
+  details,
+}: {
+  details: InstantDiscountDetail[];
+}) {
+  if (details.length === 0) {
+    return <EmptyState text="No instant discount transactions." />;
+  }
+
+  return (
+    <div className="border-t border-white/10 bg-slate-900/55 p-3">
+      <div className="overflow-x-auto rounded-lg border border-white/10">
+        <table className="min-w-full text-sm">
+          <thead className="bg-white/[0.035] text-left text-[11px] uppercase tracking-[0.14em] text-slate-500">
+            <tr>
+              <th className="px-3 py-2">Date</th>
+              <th className="px-3 py-2">Purchase</th>
+              <th className="px-3 py-2">Card</th>
+              <th className="px-3 py-2">Player</th>
+              <th className="px-3 py-2 text-right">Eligible spend</th>
+              <th className="px-3 py-2 text-right">Saved</th>
+              <th className="px-3 py-2">Source</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/10">
+            {details.map((detail, index) => (
+              <tr
+                className={index % 2 === 0 ? "bg-slate-950/35" : "bg-white/[0.025]"}
+                key={detail.transaction_id}
+              >
+                <td className="whitespace-nowrap px-3 py-2 text-slate-400">
+                  {formatDate(detail.purchase_date)}
+                </td>
+                <td className="px-3 py-2">
+                  {detail.purchase_id ? (
+                    <Link
+                      className="font-semibold text-slate-100 hover:text-cyan-100"
+                      href={`/purchases/${detail.purchase_id}`}
+                    >
+                      Purchase #{detail.purchase_id}
+                    </Link>
+                  ) : (
+                    <span className="font-semibold text-slate-100">Purchase</span>
+                  )}
+                  <p className="text-xs text-slate-500">{detail.store_name}</p>
+                </td>
+                <td className="px-3 py-2 text-slate-300">
+                  {detail.credit_card_nickname ?? "-"}
+                </td>
+                <td className="px-3 py-2 text-slate-300">
+                  {detail.player_label
+                    ? `${detail.player_label}${detail.player_name ? ` · ${detail.player_name}` : ""}`
+                    : "-"}
+                </td>
+                <td className="px-3 py-2 text-right text-slate-100">
+                  {formatCurrency(detail.eligible_spend)}
+                </td>
+                <td className="px-3 py-2 text-right font-semibold text-slate-100">
+                  {formatCurrency(detail.saved_amount)}
+                </td>
+                <td className="px-3 py-2 text-slate-400">
+                  {titleize(detail.calculation_source)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

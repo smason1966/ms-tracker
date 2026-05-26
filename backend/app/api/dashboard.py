@@ -27,6 +27,8 @@ from app.services.reward_program_defaults import ensure_default_reward_program_v
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
+INSTANT_DISCOUNT_REWARD_TYPES = {"instant_discount_percent", "purchase_discount"}
+
 
 def to_decimal(value) -> Decimal:
     if value is None:
@@ -78,6 +80,91 @@ def reward_program_valuation(
         "valuation_status": "fixed",
         "value_unit": value_unit,
     }
+
+
+def is_instant_discount_transaction(transaction: CreditCardRewardTransaction) -> bool:
+    reward_type = (transaction.reward_type or "").lower()
+
+    if reward_type in INSTANT_DISCOUNT_REWARD_TYPES:
+        return True
+
+    if to_decimal(getattr(transaction, "purchase_discount_amount", None)) > 0:
+        return True
+
+    return (
+        to_decimal(getattr(transaction, "effective_savings_amount", None)) > 0
+        and to_decimal(getattr(transaction, "rewards_earned", None)) == 0
+        and to_decimal(getattr(transaction, "cashback_amount", None)) == 0
+        and to_decimal(getattr(transaction, "statement_credit_amount", None)) == 0
+    )
+
+
+def instant_discount_saved_amount(transaction: CreditCardRewardTransaction) -> Decimal:
+    purchase_discount = to_decimal(getattr(transaction, "purchase_discount_amount", None))
+
+    if purchase_discount > 0:
+        return purchase_discount
+
+    return to_decimal(getattr(transaction, "effective_savings_amount", None))
+
+
+def instant_discount_label(store_name: str, card: CreditCard | None) -> str:
+    card_name = card.nickname if card else None
+
+    if card_name:
+        return f"{card_name} Discount"
+
+    return f"{store_name} Instant Discount"
+
+
+def add_instant_discount_metric(
+    *,
+    groups: dict[str, dict],
+    details: list[dict],
+    transaction: CreditCardRewardTransaction,
+    purchase: PurchaseBatch | None,
+    card: CreditCard | None,
+    player: Player | None,
+) -> None:
+    saved_amount = instant_discount_saved_amount(transaction)
+    qualifying_spend = to_decimal(transaction.qualifying_spend)
+    store_name = purchase.store_name if purchase else "Unknown Store"
+    group_key = f"{store_name}:{transaction.credit_card_id or 'unknown'}"
+    group = groups.setdefault(
+        group_key,
+        {
+            "label": instant_discount_label(store_name, card),
+            "store_name": store_name,
+            "credit_card_id": transaction.credit_card_id,
+            "credit_card_nickname": card.nickname if card else None,
+            "player_id": transaction.player_id,
+            "player_label": player.label if player else None,
+            "eligible_spend": Decimal("0"),
+            "total_saved": Decimal("0"),
+            "count": 0,
+        },
+    )
+    group["eligible_spend"] += qualifying_spend
+    group["total_saved"] += saved_amount
+    group["count"] += 1
+    details.append(
+        {
+            "transaction_id": transaction.id,
+            "purchase_id": transaction.purchase_id,
+            "store_name": store_name,
+            "purchase_date": transaction.purchase_date,
+            "credit_card_id": transaction.credit_card_id,
+            "credit_card_nickname": card.nickname if card else None,
+            "player_id": transaction.player_id,
+            "player_label": player.label if player else None,
+            "player_name": player.name if player else None,
+            "eligible_spend": qualifying_spend,
+            "saved_amount": saved_amount,
+            "reward_type": transaction.reward_type,
+            "matched_rule_id": transaction.matched_rule_id,
+            "calculation_source": transaction.calculation_source,
+        }
+    )
 
 
 def utilization_percent(card: CreditCard) -> float | None:
@@ -448,11 +535,14 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
         rewards_by_store: dict[str, dict] = {}
         rewards_by_month: dict[str, dict] = {}
         reward_program_drilldowns: dict[str, dict] = {}
+        instant_discount_groups: dict[str, dict] = {}
+        instant_discount_details: list[dict] = []
         fuel_points_earned = Decimal("0")
         cashback_earned = Decimal("0")
         statement_credits_earned = Decimal("0")
         purchase_discounts_earned = Decimal("0")
         effective_reward_savings = Decimal("0")
+        credit_cards_by_id = {card.id: card for card in credit_cards}
 
         for transaction in ranged_reward_transactions:
             cashback_earned += to_decimal(getattr(transaction, "cashback_amount", None))
@@ -465,6 +555,22 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
             effective_reward_savings += to_decimal(
                 getattr(transaction, "effective_savings_amount", None)
             )
+            purchase = purchases_by_id.get(transaction.purchase_id)
+            card = credit_cards_by_id.get(transaction.credit_card_id)
+            player = players.get(transaction.player_id) if transaction.player_id else None
+            store_name = purchase.store_name if purchase else "Unknown Store"
+
+            if is_instant_discount_transaction(transaction):
+                add_instant_discount_metric(
+                    groups=instant_discount_groups,
+                    details=instant_discount_details,
+                    transaction=transaction,
+                    purchase=purchase,
+                    card=card,
+                    player=player,
+                )
+                continue
+
             program = reward_programs.get(transaction.reward_program_id)
             rewards_type = program.short_code if program else "OTHER"
             rewards_by_type[rewards_type] = (
@@ -522,14 +628,7 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
 
             card = None
             if transaction.credit_card_id is not None:
-                card = next(
-                    (
-                        credit_card
-                        for credit_card in credit_cards
-                        if credit_card.id == transaction.credit_card_id
-                    ),
-                    None,
-                )
+                card = credit_cards_by_id.get(transaction.credit_card_id)
                 card_metric = rewards_by_card.setdefault(
                     transaction.credit_card_id,
                     {
@@ -647,8 +746,6 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
             program_player_metric["estimated_rewards_earned"] += reward_amount
             program_player_metric["estimated_value"] += estimated_value
 
-            purchase = purchases_by_id.get(transaction.purchase_id)
-            store_name = purchase.store_name if purchase else "Unknown Store"
             store_metric = rewards_by_store.setdefault(
                 store_name,
                 {
@@ -1011,6 +1108,30 @@ def dashboard_summary(range: str = "this_month", player_id: int | None = None):
             "purchase_discounts_earned": purchase_discounts_earned,
             "purchase_time_discounts_earned": purchase_discounts_earned,
             "effective_reward_savings": effective_reward_savings,
+            "instant_discounts": {
+                "total_saved": sum(
+                    to_decimal(group["total_saved"])
+                    for group in instant_discount_groups.values()
+                ),
+                "eligible_spend": sum(
+                    to_decimal(group["eligible_spend"])
+                    for group in instant_discount_groups.values()
+                ),
+                "count": sum(
+                    int(group["count"])
+                    for group in instant_discount_groups.values()
+                ),
+                "groups": sorted(
+                    instant_discount_groups.values(),
+                    key=lambda group: group["total_saved"],
+                    reverse=True,
+                ),
+                "details": sorted(
+                    instant_discount_details,
+                    key=lambda detail: detail["purchase_date"] or date.min,
+                    reverse=True,
+                )[:50],
+            },
             "signup_bonuses_earned": signup_bonuses_earned,
             "active_signup_bonuses": sorted(
                 active_signup_bonuses,
