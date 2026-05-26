@@ -40,6 +40,7 @@ type GiftCard = {
   sale_price: string | number | null;
   sale_notes: string | null;
   sale_history?: SaleHistory[];
+  created_at?: string | null;
   updated_at?: string | null;
 };
 
@@ -70,6 +71,13 @@ type CardImage = {
   retain_attachment?: boolean;
   purged_at?: string | null;
   created_at?: string;
+};
+
+type OrientationHint = {
+  gift_card_id: number;
+  brand: string;
+  rotation_degrees: number;
+  label: string;
 };
 
 type CardImageOcrStatus = {
@@ -330,6 +338,36 @@ function buildUploadUrlWithVersion(
     return url;
   }
   return `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(String(version))}`;
+}
+
+function normalizeRotationDegrees(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return null;
+  }
+
+  return ((Math.round(Number(value)) % 360) + 360) % 360;
+}
+
+function orientationActionLabel(rotationDegrees: number) {
+  const rotation = normalizeRotationDegrees(rotationDegrees) ?? 0;
+
+  if (rotation === 0) {
+    return "No rotation";
+  }
+
+  if (rotation === 90) {
+    return "Rotate Right";
+  }
+
+  if (rotation === 180) {
+    return "Rotate 180";
+  }
+
+  if (rotation === 270) {
+    return "Rotate Left";
+  }
+
+  return `${rotation}°`;
 }
 
 function formatAmount(value: string | number) {
@@ -1719,6 +1757,9 @@ export default function GiftCardVerificationPage() {
   const [imageUploadMessage, setImageUploadMessage] = useState<string | null>(
     null,
   );
+  const [orientationHint, setOrientationHint] = useState<OrientationHint | null>(
+    null,
+  );
   const [cleanupAction, setCleanupAction] = useState<"delete" | "void" | null>(
     null,
   );
@@ -1798,6 +1839,11 @@ export default function GiftCardVerificationPage() {
       null
     );
   }, [cardImages]);
+  const hasManualSavedOrientation = primaryImage?.orientation_source === "manual";
+  const currentGiftCardId = giftCard?.id ?? null;
+  const currentGiftCardBrand = giftCard?.brand ?? null;
+  const currentPurchaseBatchId = giftCard?.purchase_batch_id ?? null;
+  const currentPrimaryImageId = primaryImage?.id ?? null;
   const supportingAttachments = useMemo(
     () =>
       cardImages.filter(
@@ -2269,6 +2315,102 @@ export default function GiftCardVerificationPage() {
       isMounted = false;
     };
   }, [giftCard?.brand]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadOrientationHint() {
+      if (
+        !currentGiftCardId ||
+        !currentPrimaryImageId ||
+        !currentGiftCardBrand ||
+        !currentPurchaseBatchId ||
+        hasManualSavedOrientation
+      ) {
+        setOrientationHint(null);
+        return;
+      }
+
+      try {
+        const cardsResponse = await fetch(
+          `${API_BASE_URL}/gift-cards/purchase/${currentPurchaseBatchId}`,
+        );
+
+        if (!cardsResponse.ok) {
+          return;
+        }
+
+        const purchaseCards = (await cardsResponse.json()) as GiftCard[];
+        const siblingCards = purchaseCards
+          .filter(
+            (candidate) =>
+              candidate.id !== currentGiftCardId &&
+              normalizedBrandName(candidate.brand) ===
+                normalizedBrandName(currentGiftCardBrand),
+          )
+          .sort((cardA, cardB) => {
+            const createdA = cardA.created_at ? Date.parse(cardA.created_at) : 0;
+            const createdB = cardB.created_at ? Date.parse(cardB.created_at) : 0;
+
+            return createdB - createdA;
+          });
+
+        for (const siblingCard of siblingCards) {
+          const imagesResponse = await fetch(
+            `${API_BASE_URL}/card-images/gift-card/${siblingCard.id}`,
+          );
+
+          if (!imagesResponse.ok) {
+            continue;
+          }
+
+          const siblingImages = (await imagesResponse.json()) as CardImage[];
+          const siblingPrimaryImage = siblingImages.find(
+            (image) =>
+              image.image_type === "primary" &&
+              image.orientation_source === "manual" &&
+              image.canonical_rotation_degrees !== null &&
+              image.canonical_rotation_degrees !== undefined,
+          );
+          const rotation = normalizeRotationDegrees(
+            siblingPrimaryImage?.canonical_rotation_degrees,
+          );
+
+          if (rotation !== null) {
+            if (isMounted) {
+              setOrientationHint({
+                gift_card_id: siblingCard.id,
+                brand: siblingCard.brand,
+                rotation_degrees: rotation,
+                label: orientationActionLabel(rotation),
+              });
+            }
+            return;
+          }
+        }
+
+        if (isMounted) {
+          setOrientationHint(null);
+        }
+      } catch {
+        if (isMounted) {
+          setOrientationHint(null);
+        }
+      }
+    }
+
+    void loadOrientationHint();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    currentGiftCardBrand,
+    currentGiftCardId,
+    currentPrimaryImageId,
+    currentPurchaseBatchId,
+    hasManualSavedOrientation,
+  ]);
 
   useEffect(() => {
     let isMounted = true;
@@ -4174,6 +4316,23 @@ export default function GiftCardVerificationPage() {
                       >
                         Rotate Right
                       </button>
+                      {orientationHint && !hasManualSavedOrientation ? (
+                        <button
+                          className="h-11 cursor-pointer rounded-md border border-cyan-300 bg-cyan-50 px-4 text-sm font-semibold text-cyan-900 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={isRescanningImage || isSavingOcrOrientation}
+                          onClick={() => {
+                            setImageRotation(orientationHint.rotation_degrees);
+                            setImageUploadError(null);
+                            setImageUploadMessage(
+                              `Applied previous ${orientationHint.brand} orientation preview. Click Set as OCR orientation to save it for this card.`,
+                            );
+                          }}
+                          type="button"
+                        >
+                          Use previous {orientationHint.brand} orientation:{" "}
+                          {orientationHint.label}
+                        </button>
+                      ) : null}
                       <button
                         className="h-11 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
                         disabled={isRescanningImage || isSavingOcrOrientation}
