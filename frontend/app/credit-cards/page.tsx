@@ -29,6 +29,8 @@ type CreditCard = {
   id: number;
   player_id: number | null;
   player: Player | null;
+  issuer_id: number | null;
+  issuer_ref: CardIssuer | null;
   nickname: string;
   issuer: string;
   network: string | null;
@@ -90,6 +92,14 @@ type Store = {
   active: boolean;
 };
 
+type CardIssuer = {
+  id: number;
+  name: string;
+  short_name: string | null;
+  active: boolean;
+  issuer_type: string | null;
+};
+
 type RewardRule = {
   id: number;
   spending_category_id: number;
@@ -128,6 +138,7 @@ type RewardRuleDraft = {
 type CardForm = {
   player_id: string;
   nickname: string;
+  issuer_id: string;
   issuer: string;
   network: string;
   last_four: string;
@@ -161,6 +172,7 @@ type CardStatusFilter = "active" | "inactive" | "all";
 const emptyForm: CardForm = {
   player_id: "",
   nickname: "",
+  issuer_id: "",
   issuer: "",
   network: "",
   last_four: "",
@@ -675,6 +687,7 @@ function CreditCardsContent() {
   const [cards, setCards] = useState<CreditCard[]>([]);
   const [rewardPrograms, setRewardPrograms] = useState<RewardProgram[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
+  const [cardIssuers, setCardIssuers] = useState<CardIssuer[]>([]);
   const [spendingCategories, setSpendingCategories] = useState<SpendingCategory[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
   const [isMultiPlayerModeEnabled, setIsMultiPlayerModeEnabled] = useState(false);
@@ -711,6 +724,18 @@ function CreditCardsContent() {
         .sort((first, second) => compareText(first, second)),
     [cards],
   );
+  const issuerSelectOptions = useMemo(() => {
+    const options = new Map<number, CardIssuer>();
+    for (const issuer of cardIssuers) {
+      if (issuer.active || String(issuer.id) === form.issuer_id) {
+        options.set(issuer.id, issuer);
+      }
+    }
+
+    return [...options.values()].sort((first, second) =>
+      compareText(first.name, second.name),
+    );
+  }, [cardIssuers, form.issuer_id]);
   const rewardProgramOptions = useMemo(
     () =>
       [
@@ -822,6 +847,7 @@ function CreditCardsContent() {
         programsResponse,
         settingsResponse,
         playersResponse,
+        issuersResponse,
         categoriesResponse,
         storesResponse,
       ] =
@@ -832,6 +858,7 @@ function CreditCardsContent() {
           ),
           fetch(`${API_BASE_URL}/app-settings`),
           fetch(`${API_BASE_URL}/players/`),
+          fetch(`${API_BASE_URL}/card-issuers/`),
           fetch(`${API_BASE_URL}/spending-categories/`),
           fetch(`${API_BASE_URL}/stores/`),
         ]);
@@ -853,6 +880,11 @@ function CreditCardsContent() {
       }
       if (!playersResponse.ok) {
         throw new Error(await responseError(playersResponse, "Failed to load players"));
+      }
+      if (!issuersResponse.ok) {
+        throw new Error(
+          await responseError(issuersResponse, "Failed to load card issuers"),
+        );
       }
       if (!categoriesResponse.ok) {
         throw new Error(
@@ -876,6 +908,7 @@ function CreditCardsContent() {
       const settings = (await settingsResponse.json()) as AppSettings;
       setIsMultiPlayerModeEnabled(settings.multi_player_mode_enabled);
       setPlayers((await playersResponse.json()) as Player[]);
+      setCardIssuers((await issuersResponse.json()) as CardIssuer[]);
       setSpendingCategories((await categoriesResponse.json()) as SpendingCategory[]);
       setStores((await storesResponse.json()) as Store[]);
       console.info("[CreditCards] state updated", {
@@ -908,6 +941,7 @@ function CreditCardsContent() {
       cardCount: cards.length,
       rewardProgramCount: rewardPrograms.length,
       playerCount: players.length,
+      issuerCount: cardIssuers.length,
       categoryCount: spendingCategories.length,
       storeCount: stores.length,
       hasError: Boolean(error),
@@ -916,6 +950,7 @@ function CreditCardsContent() {
     cards.length,
     error,
     isLoading,
+    cardIssuers.length,
     players.length,
     rewardPrograms.length,
     spendingCategories.length,
@@ -977,6 +1012,23 @@ function CreditCardsContent() {
     setForm((currentForm) => ({
       ...currentForm,
       [field]: value,
+    }));
+  }
+
+  function updateIssuerField(value: string) {
+    if (value === "__legacy__") {
+      setForm((currentForm) => ({
+        ...currentForm,
+        issuer_id: "",
+      }));
+      return;
+    }
+
+    const issuer = cardIssuers.find((candidate) => String(candidate.id) === value);
+    setForm((currentForm) => ({
+      ...currentForm,
+      issuer_id: value,
+      issuer: issuer?.name ?? "",
     }));
   }
 
@@ -1129,10 +1181,9 @@ function CreditCardsContent() {
       return;
     }
 
-    const payload = {
+    const payload: Record<string, string | number | null> = {
       player_id: form.player_id ? Number(form.player_id) : null,
       nickname: form.nickname.trim(),
-      issuer: form.issuer.trim(),
       network: form.network.trim() || null,
       last_four: form.last_four.trim() || null,
       credit_limit: form.credit_limit,
@@ -1150,6 +1201,11 @@ function CreditCardsContent() {
       rewards_rate: form.rewards_rate || null,
       notes: form.notes.trim() || null,
     };
+    if (form.issuer_id) {
+      payload.issuer_id = Number(form.issuer_id);
+    } else {
+      payload.issuer = form.issuer.trim();
+    }
 
     try {
       const response = await fetch(
@@ -1652,9 +1708,45 @@ function CreditCardsContent() {
                 </label>
               ) : null}
 
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Nickname</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  onChange={(event) => updateFormField("nickname", event.target.value)}
+                  required
+                  type="text"
+                  value={form.nickname}
+                />
+              </label>
+
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Issuer</span>
+                <select
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  onChange={(event) => updateIssuerField(event.target.value)}
+                  required
+                  value={form.issuer_id || (form.issuer ? "__legacy__" : "")}
+                >
+                  <option value="">Select issuer</option>
+                  {issuerSelectOptions.map((issuer) => (
+                    <option key={issuer.id} value={issuer.id}>
+                      {issuer.name}
+                      {issuer.active ? "" : " (inactive)"}
+                    </option>
+                  ))}
+                  {!form.issuer_id && form.issuer ? (
+                    <option value="__legacy__">{form.issuer} (current legacy)</option>
+                  ) : null}
+                </select>
+                {!form.issuer_id && form.issuer ? (
+                  <p className="text-xs text-slate-500">
+                    This card still uses a legacy issuer label. Select a defined issuer
+                    when ready.
+                  </p>
+                ) : null}
+              </label>
+
               {([
-                ["nickname", "Nickname", "text", true],
-                ["issuer", "Issuer", "text", true],
                 ["last_four", "Last Four", "text", false],
                 ["credit_limit", "Credit Limit", "number", true],
                 ["current_balance", "Estimated Balance", "number", false],
