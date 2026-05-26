@@ -24,6 +24,40 @@ type PurchaseBatch = {
   notes: string | null;
   store_earns_fuel_points: boolean;
   store_default_fuel_multiplier: number | null;
+  fuel_point_entries?: FuelPointEntry[];
+};
+
+type FuelAccount = {
+  id: number;
+  retailer: string;
+  email: string | null;
+  alt_id: string | null;
+  status: string;
+  target_points: number | null;
+  current_points: number;
+  expiration_cycle: string | null;
+};
+
+type FuelPointEntry = {
+  id: number;
+  fuel_reward_account_id: number;
+  purchase_batch_id: number | null;
+  earned_date: string;
+  expires_on: string;
+  multiplier: number | null;
+  qualifying_spend: string | number | null;
+  points_earned: number;
+  entry_type: string;
+  notes: string | null;
+  fuel_account?: {
+    id: number;
+    retailer: string;
+    email: string | null;
+    alt_id: string | null;
+    status: string;
+    target_points: number | null;
+    current_points: number;
+  } | null;
 };
 
 type Receipt = {
@@ -78,6 +112,16 @@ type PurchaseFinancialForm = {
   financial_notes: string;
 };
 
+type FuelPointCorrectionForm = {
+  fuel_reward_account_id: string;
+  fuel_points_amount: string;
+  fuel_points_unit: string;
+  expires_on: string;
+  multiplier: string;
+  qualifying_spend: string;
+  fuel_points_notes: string;
+};
+
 type PurchaseDeleteReport = {
   can_delete: boolean;
   blocking_dependencies: { message?: string }[];
@@ -110,6 +154,16 @@ const emptyPurchaseFinancialForm: PurchaseFinancialForm = {
   fuel_points_amount: "",
   fuel_points_unit: "1000",
   financial_notes: "",
+};
+
+const emptyFuelPointCorrectionForm: FuelPointCorrectionForm = {
+  fuel_reward_account_id: "",
+  fuel_points_amount: "",
+  fuel_points_unit: "1000",
+  expires_on: "",
+  multiplier: "",
+  qualifying_spend: "",
+  fuel_points_notes: "",
 };
 
 const cardImageAccept = "image/jpeg,image/png,image/webp,image/heic,.jpg,.jpeg,.png,.webp,.heic";
@@ -149,12 +203,16 @@ export default function PurchaseDetailPage() {
   const [giftCards, setGiftCards] = useState<GiftCard[]>([]);
   const [destinationPurchases, setDestinationPurchases] = useState<PurchaseBatch[]>([]);
   const [cardBrands, setCardBrands] = useState<CardBrand[]>([]);
+  const [fuelAccounts, setFuelAccounts] = useState<FuelAccount[]>([]);
   const [revealedCardNumbers, setRevealedCardNumbers] = useState<
     Record<number, boolean>
   >({});
   const [form, setForm] = useState<GiftCardForm>(emptyGiftCardForm);
   const [financialForm, setFinancialForm] = useState<PurchaseFinancialForm>(
     emptyPurchaseFinancialForm,
+  );
+  const [fuelPointForm, setFuelPointForm] = useState<FuelPointCorrectionForm>(
+    emptyFuelPointCorrectionForm,
   );
   const [cardImageFile, setCardImageFile] = useState<File | null>(null);
   const [cardImageInputKey, setCardImageInputKey] = useState(0);
@@ -167,9 +225,12 @@ export default function PurchaseDetailPage() {
   const [isLoadingDestinationPurchases, setIsLoadingDestinationPurchases] =
     useState(true);
   const [isLoadingCardBrands, setIsLoadingCardBrands] = useState(true);
+  const [isLoadingFuelAccounts, setIsLoadingFuelAccounts] = useState(true);
   const [isRecalculatingAllocation, setIsRecalculatingAllocation] =
     useState(false);
   const [isSavingFinancials, setIsSavingFinancials] = useState(false);
+  const [isEditingFuelPoints, setIsEditingFuelPoints] = useState(false);
+  const [isSavingFuelPoints, setIsSavingFuelPoints] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [movingGiftCardId, setMovingGiftCardId] = useState<number | null>(null);
   const [moveTargetPurchaseId, setMoveTargetPurchaseId] = useState("");
@@ -186,6 +247,9 @@ export default function PurchaseDetailPage() {
   const [cardBrandsError, setCardBrandsError] = useState<string | null>(null);
   const [allocationError, setAllocationError] = useState<string | null>(null);
   const [financialError, setFinancialError] = useState<string | null>(null);
+  const [fuelAccountsError, setFuelAccountsError] = useState<string | null>(null);
+  const [fuelPointError, setFuelPointError] = useState<string | null>(null);
+  const [fuelPointMessage, setFuelPointMessage] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [moveMessage, setMoveMessage] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -197,11 +261,26 @@ export default function PurchaseDetailPage() {
   const receiptsUrl = `${API_BASE_URL}/receipts/purchase/${purchaseId}`;
   const giftCardsUrl = `${API_BASE_URL}/gift-cards/purchase/${purchaseId}`;
   const cardBrandsUrl = `${API_BASE_URL}/card-brands/`;
+  const fuelAccountsUrl = `${API_BASE_URL}/fuel-accounts/active`;
   const financialFuelPointsQuantity = calculateFuelPointsQuantity(
     financialForm.fuel_points_amount,
     financialForm.fuel_points_unit,
   );
+  const correctionFuelPointsQuantity = calculateFuelPointsQuantity(
+    fuelPointForm.fuel_points_amount,
+    fuelPointForm.fuel_points_unit,
+  );
   const storeEarnsFuelPoints = Boolean(purchase?.store_earns_fuel_points);
+  const currentFuelPointEntry = purchase?.fuel_point_entries?.[0] ?? null;
+  const currentFuelAccountId =
+    currentFuelPointEntry?.fuel_reward_account_id ?? null;
+  const selectedFuelAccountId = fuelPointForm.fuel_reward_account_id
+    ? Number(fuelPointForm.fuel_reward_account_id)
+    : null;
+  const isMovingFuelPoints =
+    Boolean(currentFuelAccountId) &&
+    Boolean(selectedFuelAccountId) &&
+    currentFuelAccountId !== selectedFuelAccountId;
 
   const purchaseSummary = useMemo(() => {
     const summary = giftCards.reduce(
@@ -643,6 +722,45 @@ export default function PurchaseDetailPage() {
   useEffect(() => {
     let isMounted = true;
 
+    async function loadFuelAccounts() {
+      setIsLoadingFuelAccounts(true);
+      setFuelAccountsError(null);
+
+      try {
+        const response = await fetch(fuelAccountsUrl);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load fuel accounts (${response.status})`);
+        }
+
+        const data = (await response.json()) as FuelAccount[];
+
+        if (isMounted) {
+          setFuelAccounts(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setFuelAccountsError(
+            err instanceof Error ? err.message : "Failed to load fuel accounts.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingFuelAccounts(false);
+        }
+      }
+    }
+
+    loadFuelAccounts();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [fuelAccountsUrl]);
+
+  useEffect(() => {
+    let isMounted = true;
+
     async function loadInitialReceipts() {
       if (!purchaseId) {
         return;
@@ -1069,6 +1187,50 @@ export default function PurchaseDetailPage() {
     return String(quantity / unit);
   }
 
+  function openFuelPointEditor() {
+    if (!purchase) {
+      return;
+    }
+
+    const entry = purchase.fuel_point_entries?.[0] ?? null;
+    const unit =
+      purchase.fuel_points_unit ??
+      entry?.multiplier ??
+      purchase.store_default_fuel_multiplier ??
+      1000;
+
+    setFuelPointForm({
+      fuel_reward_account_id: entry?.fuel_reward_account_id
+        ? String(entry.fuel_reward_account_id)
+        : "",
+      fuel_points_amount: getFuelPointsAmount(
+        purchase.fuel_points_quantity ?? entry?.points_earned ?? null,
+        purchase.fuel_points_unit ?? unit,
+      ),
+      fuel_points_unit: String(unit),
+      expires_on: entry?.expires_on ? entry.expires_on.slice(0, 10) : "",
+      multiplier: entry?.multiplier ? String(entry.multiplier) : "",
+      qualifying_spend:
+        entry?.qualifying_spend === null ||
+        entry?.qualifying_spend === undefined
+          ? ""
+          : String(entry.qualifying_spend),
+      fuel_points_notes: purchase.fuel_points_notes ?? entry?.notes ?? "",
+    });
+    setFuelPointError(null);
+    setFuelPointMessage(null);
+    setIsEditingFuelPoints(true);
+  }
+
+  function closeFuelPointEditor() {
+    if (isSavingFuelPoints) {
+      return;
+    }
+
+    setIsEditingFuelPoints(false);
+    setFuelPointError(null);
+  }
+
   function openFinancialEditor() {
     if (!purchase) {
       return;
@@ -1103,6 +1265,16 @@ export default function PurchaseDetailPage() {
 
     setIsEditingFinancials(false);
     setFinancialError(null);
+  }
+
+  function updateFuelPointFormField(
+    field: keyof FuelPointCorrectionForm,
+    value: string,
+  ) {
+    setFuelPointForm((currentForm) => ({
+      ...currentForm,
+      [field]: value,
+    }));
   }
 
   async function handleFinancialSave(event: FormEvent<HTMLFormElement>) {
@@ -1161,6 +1333,78 @@ export default function PurchaseDetailPage() {
       );
     } finally {
       setIsSavingFinancials(false);
+    }
+  }
+
+  async function handleFuelPointSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!purchaseId) {
+      return;
+    }
+
+    if (!fuelPointForm.fuel_reward_account_id) {
+      setFuelPointError("Choose the fuel account that should receive these points.");
+      return;
+    }
+
+    if (!correctionFuelPointsQuantity) {
+      setFuelPointError("Enter the fuel points amount to save.");
+      return;
+    }
+
+    setIsSavingFuelPoints(true);
+    setFuelPointError(null);
+    setFuelPointMessage(null);
+
+    try {
+      const payload = {
+        fuel_reward_account_id: Number(fuelPointForm.fuel_reward_account_id),
+        fuel_points_quantity: correctionFuelPointsQuantity,
+        fuel_points_unit: Number(fuelPointForm.fuel_points_unit),
+        expires_on:
+          fuelPointForm.expires_on.trim() === ""
+            ? null
+            : fuelPointForm.expires_on,
+        multiplier:
+          fuelPointForm.multiplier.trim() === ""
+            ? null
+            : Number(fuelPointForm.multiplier),
+        qualifying_spend: getOptionalFieldValue(fuelPointForm.qualifying_spend),
+        fuel_points_notes:
+          fuelPointForm.fuel_points_notes.trim() === ""
+            ? null
+            : fuelPointForm.fuel_points_notes.trim(),
+      };
+
+      const response = await fetch(`${purchaseUrl}/fuel-info`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const responseBody = await response.text();
+        throw new Error(
+          `Failed to save fuel point correction (${response.status}): ${responseBody}`,
+        );
+      }
+
+      const updatedPurchase = (await response.json()) as PurchaseBatch;
+      setPurchase(updatedPurchase);
+      setIsEditingFuelPoints(false);
+      setFuelPointMessage("Fuel points updated.");
+      await loadDeleteReport({ showLoading: false });
+    } catch (err) {
+      setFuelPointError(
+        err instanceof Error
+          ? err.message
+          : "Failed to save fuel point correction.",
+      );
+    } finally {
+      setIsSavingFuelPoints(false);
     }
   }
 
@@ -1552,14 +1796,30 @@ export default function PurchaseDetailPage() {
               <h2 className="text-lg font-semibold">
                 Purchase Financial Details
               </h2>
-              <button
-                className="h-10 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-                onClick={openFinancialEditor}
-                type="button"
-              >
-                Edit Financials
-              </button>
+              <div className="flex flex-wrap gap-2">
+                {(storeEarnsFuelPoints || currentFuelPointEntry) ? (
+                  <button
+                    className="h-10 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                    onClick={openFuelPointEditor}
+                    type="button"
+                  >
+                    Correct Fuel Points
+                  </button>
+                ) : null}
+                <button
+                  className="h-10 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                  onClick={openFinancialEditor}
+                  type="button"
+                >
+                  Edit Financials
+                </button>
+              </div>
             </div>
+            {fuelPointMessage ? (
+              <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+                {fuelPointMessage}
+              </p>
+            ) : null}
             <dl className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
               <div>
                 <dt className="text-sm font-medium text-slate-500">
@@ -1604,6 +1864,27 @@ export default function PurchaseDetailPage() {
                   )}
                 </dd>
               </div>
+              <div>
+                <dt className="text-sm font-medium text-slate-500">
+                  Fuel Account
+                </dt>
+                <dd className="mt-1 text-base font-semibold">
+                  {currentFuelPointEntry?.fuel_account?.retailer ??
+                    (currentFuelPointEntry
+                      ? `Account #${currentFuelPointEntry.fuel_reward_account_id}`
+                      : "")}
+                </dd>
+              </div>
+              {currentFuelPointEntry ? (
+                <div>
+                  <dt className="text-sm font-medium text-slate-500">
+                    Fuel Points Expire
+                  </dt>
+                  <dd className="mt-1 text-base font-semibold">
+                    {formatDate(currentFuelPointEntry.expires_on)}
+                  </dd>
+                </div>
+              ) : null}
               <div className="sm:col-span-2 lg:col-span-3">
                 <dt className="text-sm font-medium text-slate-500">
                   Financial Notes
@@ -1993,6 +2274,202 @@ export default function PurchaseDetailPage() {
           selectedDestination={selectedMoveDestination}
           selectedDestinationId={moveTargetPurchaseId}
         />
+      ) : null}
+
+      {isEditingFuelPoints ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 px-4 py-6 sm:items-center">
+          <form
+            className="max-h-[calc(100vh-3rem)] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl"
+            onSubmit={handleFuelPointSave}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold">Correct Fuel Points</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Move or update the fuel points tied to this purchase.
+                </p>
+              </div>
+              <button
+                className="rounded-md p-2 text-slate-500 transition hover:bg-slate-100"
+                onClick={closeFuelPointEditor}
+                type="button"
+              >
+                ✕
+              </button>
+            </div>
+
+            {fuelPointError ? (
+              <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+                {fuelPointError}
+              </div>
+            ) : null}
+
+            {fuelAccountsError ? (
+              <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+                {fuelAccountsError}
+              </div>
+            ) : null}
+
+            {isMovingFuelPoints ? (
+              <div className="mt-4 rounded-md border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm font-medium text-cyan-900">
+                This will move the fuel points from the current fuel account to
+                the selected account.
+              </div>
+            ) : null}
+
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <label className="space-y-2 text-sm font-medium text-slate-700 sm:col-span-2">
+                <span>Fuel Account</span>
+                <select
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  disabled={isLoadingFuelAccounts}
+                  onChange={(event) =>
+                    updateFuelPointFormField(
+                      "fuel_reward_account_id",
+                      event.target.value,
+                    )
+                  }
+                  required
+                  value={fuelPointForm.fuel_reward_account_id}
+                >
+                  <option value="">
+                    {isLoadingFuelAccounts
+                      ? "Loading fuel accounts..."
+                      : "Choose fuel account"}
+                  </option>
+                  {fuelAccounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.retailer}
+                      {account.email ? ` · ${account.email}` : ""}
+                      {account.current_points !== null
+                        ? ` · ${account.current_points.toLocaleString()} pts`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Fuel Points Amount</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  min="0"
+                  onChange={(event) =>
+                    updateFuelPointFormField(
+                      "fuel_points_amount",
+                      event.target.value,
+                    )
+                  }
+                  required
+                  step="1"
+                  type="number"
+                  value={fuelPointForm.fuel_points_amount}
+                />
+              </label>
+
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Fuel Points Unit</span>
+                <select
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  onChange={(event) =>
+                    updateFuelPointFormField(
+                      "fuel_points_unit",
+                      event.target.value,
+                    )
+                  }
+                  value={fuelPointForm.fuel_points_unit}
+                >
+                  <option value="100">100</option>
+                  <option value="1000">1,000</option>
+                </select>
+              </label>
+
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Expiration / Cycle Date</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  onChange={(event) =>
+                    updateFuelPointFormField("expires_on", event.target.value)
+                  }
+                  type="date"
+                  value={fuelPointForm.expires_on}
+                />
+              </label>
+
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Multiplier</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  min="0"
+                  onChange={(event) =>
+                    updateFuelPointFormField("multiplier", event.target.value)
+                  }
+                  step="1"
+                  type="number"
+                  value={fuelPointForm.multiplier}
+                />
+              </label>
+
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Qualifying Spend</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  min="0"
+                  onChange={(event) =>
+                    updateFuelPointFormField(
+                      "qualifying_spend",
+                      event.target.value,
+                    )
+                  }
+                  step="0.01"
+                  type="number"
+                  value={fuelPointForm.qualifying_spend}
+                />
+              </label>
+
+              <div className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Total Points</span>
+                <div className="flex h-11 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-slate-700">
+                  {correctionFuelPointsQuantity
+                    ? `${correctionFuelPointsQuantity.toLocaleString()} points`
+                    : "Enter amount and unit"}
+                </div>
+              </div>
+
+              <label className="space-y-2 text-sm font-medium text-slate-700 sm:col-span-2">
+                <span>Notes</span>
+                <textarea
+                  className="min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  onChange={(event) =>
+                    updateFuelPointFormField(
+                      "fuel_points_notes",
+                      event.target.value,
+                    )
+                  }
+                  value={fuelPointForm.fuel_points_notes}
+                />
+              </label>
+            </div>
+
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                className="h-11 rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                disabled={isSavingFuelPoints}
+                onClick={closeFuelPointEditor}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="h-11 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                disabled={isSavingFuelPoints || isLoadingFuelAccounts}
+                type="submit"
+              >
+                {isSavingFuelPoints ? "Saving..." : "Save Fuel Points"}
+              </button>
+            </div>
+          </form>
+        </div>
       ) : null}
 
       {isEditingFinancials ? (
