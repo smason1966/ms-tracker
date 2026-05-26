@@ -634,7 +634,7 @@ function cleanupReportFromBody(body: unknown): CleanupReport | null {
   };
 
   if (candidate.cleanup_report && typeof candidate.cleanup_report === "object") {
-    return candidate.cleanup_report as CleanupReport;
+    return normalizeCleanupReport(candidate.cleanup_report);
   }
 
   if (
@@ -644,11 +644,132 @@ function cleanupReportFromBody(body: unknown): CleanupReport | null {
     typeof (candidate.detail as { cleanup_report?: unknown }).cleanup_report ===
       "object"
   ) {
-    return (candidate.detail as { cleanup_report: CleanupReport })
-      .cleanup_report;
+    return normalizeCleanupReport(
+      (candidate.detail as { cleanup_report: unknown }).cleanup_report,
+    );
   }
 
   return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function asString(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+
+function asNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeCleanupReport(
+  value: unknown,
+  fallbackCard?: Pick<GiftCard, "id" | "brand" | "status"> | null,
+): CleanupReport | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const report = asRecord(value);
+  const blockingDependencies = Array.isArray(report.blocking_dependencies)
+    ? report.blocking_dependencies.map((dependency) => {
+        const blocker = asRecord(dependency);
+
+        return {
+          type: asString(blocker.type, "dependency"),
+          sale_id:
+            typeof blocker.sale_id === "number" ? blocker.sale_id : undefined,
+          message: asString(blocker.message, "Deletion is blocked."),
+        };
+      })
+    : [];
+  const linkedSales = Array.isArray(report.linked_sales)
+    ? report.linked_sales.map((linkedSale) => {
+        const sale = asRecord(linkedSale);
+
+        return {
+          sale_id: asNumber(sale.sale_id),
+          status: asString(sale.status, "UNKNOWN"),
+          expected_payout:
+            typeof sale.expected_payout === "string"
+              ? sale.expected_payout
+              : null,
+          payout_received:
+            typeof sale.payout_received === "string"
+              ? sale.payout_received
+              : null,
+          settlement_received_at:
+            typeof sale.settlement_received_at === "string"
+              ? sale.settlement_received_at
+              : null,
+          exported: Boolean(sale.exported),
+          blocking: Boolean(sale.blocking),
+        };
+      })
+    : [];
+  const linkedPurchaseSource =
+    report.linked_purchase && typeof report.linked_purchase === "object"
+      ? asRecord(report.linked_purchase)
+      : null;
+  const ocrAssets = asRecord(report.ocr_assets);
+  const imageReferences = asRecord(report.image_references);
+  const status = asString(report.status, fallbackCard?.status ?? "UNKNOWN");
+  const canHardDelete =
+    typeof report.can_hard_delete === "boolean"
+      ? report.can_hard_delete
+      : blockingDependencies.length === 0;
+
+  return {
+    gift_card_id:
+      typeof report.gift_card_id === "number"
+        ? report.gift_card_id
+        : fallbackCard?.id ?? 0,
+    brand: asString(report.brand, fallbackCard?.brand ?? "Gift card"),
+    status,
+    lifecycle_state: asString(
+      report.lifecycle_state,
+      status.toLowerCase() || "unknown",
+    ),
+    can_hard_delete: canHardDelete,
+    can_void:
+      typeof report.can_void === "boolean"
+        ? report.can_void
+        : !["SOLD", "SOLD_PENDING_PAYMENT", "SETTLED", "REDEEMED"].includes(
+            status,
+          ),
+    blocking_dependencies: blockingDependencies,
+    warnings: Array.isArray(report.warnings)
+      ? report.warnings.filter(
+          (warning): warning is string => typeof warning === "string",
+        )
+      : [],
+    linked_purchase: linkedPurchaseSource
+      ? {
+          purchase_id: asNumber(linkedPurchaseSource.purchase_id),
+          store_name: asString(linkedPurchaseSource.store_name, "Unknown store"),
+          purchase_date: asString(linkedPurchaseSource.purchase_date),
+          total_paid:
+            typeof linkedPurchaseSource.total_paid === "string"
+              ? linkedPurchaseSource.total_paid
+              : String(linkedPurchaseSource.total_paid ?? ""),
+        }
+      : null,
+    linked_sales: linkedSales,
+    ocr_assets: {
+      extraction_attempts: asNumber(ocrAssets.extraction_attempts),
+      extraction_candidates: asNumber(ocrAssets.extraction_candidates),
+      extraction_profile_metrics: asNumber(
+        ocrAssets.extraction_profile_metrics,
+      ),
+    },
+    image_references: {
+      card_images: asNumber(imageReferences.card_images),
+    },
+  };
 }
 
 function candidateSourceRank(candidate: ExtractionCandidate) {
@@ -1593,6 +1714,7 @@ export default function GiftCardVerificationPage() {
   const [cleanupReport, setCleanupReport] = useState<CleanupReport | null>(
     null,
   );
+  const [cleanupReportRequestKey, setCleanupReportRequestKey] = useState(0);
   const [isLoadingCleanupReport, setIsLoadingCleanupReport] = useState(false);
   const [isCleaningUpCard, setIsCleaningUpCard] = useState(false);
   const [duplicateWarning, setDuplicateWarning] =
@@ -1608,6 +1730,18 @@ export default function GiftCardVerificationPage() {
   );
   const [zoneTestStage, setZoneTestStage] = useState<string | null>(null);
   const [savedOcrZones, setSavedOcrZones] = useState<OCRZone[]>([]);
+  const cleanupGiftCardId = giftCard?.id ?? null;
+  const cleanupGiftCardFallback = useMemo(
+    () =>
+      cleanupGiftCardId
+        ? {
+            id: cleanupGiftCardId,
+            brand: giftCard?.brand ?? "Gift card",
+            status: giftCard?.status ?? "UNKNOWN",
+          }
+        : null,
+    [cleanupGiftCardId, giftCard?.brand, giftCard?.status],
+  );
   const [ocrLayouts, setOcrLayouts] = useState<OCRLayout[]>([]);
   const [selectedBestBuyLayout, setSelectedBestBuyLayout] = useState("auto");
   const [zoneTrainingMode, setZoneTrainingMode] = useState<
@@ -2125,13 +2259,15 @@ export default function GiftCardVerificationPage() {
     let isMounted = true;
 
     async function loadCleanupReport() {
-      if (!cleanupAction || !giftCard) {
+      if (!cleanupAction || !cleanupGiftCardId) {
         setCleanupReport(null);
+        setIsLoadingCleanupReport(false);
         return;
       }
 
-      const endpoint = `${API_BASE_URL}/gift-cards/${giftCard.id}/cleanup-report`;
+      const endpoint = `${API_BASE_URL}/gift-cards/${cleanupGiftCardId}/cleanup-report`;
       setIsLoadingCleanupReport(true);
+      setCleanupError(null);
 
       try {
         const response = await fetch(endpoint);
@@ -2152,14 +2288,20 @@ export default function GiftCardVerificationPage() {
         }
 
         if (isMounted) {
-          setCleanupReport(body as CleanupReport);
+          const report = normalizeCleanupReport(body, cleanupGiftCardFallback);
+
+          if (!report) {
+            throw new Error("Cleanup report response was not recognized.");
+          }
+
+          setCleanupReport(report);
           setCleanupError(null);
         }
       } catch (err) {
         if (isMounted) {
           console.error("Gift card cleanup report failed", {
             endpoint,
-            giftCardId: giftCard.id,
+            giftCardId: cleanupGiftCardId,
             error: err,
           });
           setCleanupReport(null);
@@ -2181,7 +2323,12 @@ export default function GiftCardVerificationPage() {
     return () => {
       isMounted = false;
     };
-  }, [cleanupAction, giftCard]);
+  }, [
+    cleanupAction,
+    cleanupGiftCardFallback,
+    cleanupGiftCardId,
+    cleanupReportRequestKey,
+  ]);
 
   useEffect(() => {
     const image = savedReviewImageRef.current;
@@ -3234,7 +3381,14 @@ export default function GiftCardVerificationPage() {
   }
 
   async function confirmGiftCardCleanup() {
-    if (!giftCard || !cleanupAction) {
+    if (!giftCard || !cleanupAction || isCleaningUpCard || isLoadingCleanupReport) {
+      return;
+    }
+
+    if (
+      cleanupAction === "delete" &&
+      (!cleanupReport || !cleanupReport.can_hard_delete)
+    ) {
       return;
     }
 
@@ -3606,6 +3760,7 @@ export default function GiftCardVerificationPage() {
                   onClick={() => {
                     setCleanupError(null);
                     setCleanupMessage(null);
+                    setCleanupReport(null);
                     setCleanupAction("void");
                   }}
                   type="button"
@@ -3617,6 +3772,8 @@ export default function GiftCardVerificationPage() {
                   onClick={() => {
                     setCleanupError(null);
                     setCleanupMessage(null);
+                    setCleanupReport(null);
+                    setCleanupReportRequestKey((currentKey) => currentKey + 1);
                     setCleanupAction("delete");
                   }}
                   type="button"
@@ -6242,9 +6399,25 @@ export default function GiftCardVerificationPage() {
               </div>
             ) : null}
             {cleanupError ? (
-              <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
-                {cleanupError}
-              </p>
+              <div className="mt-3 space-y-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+                <p>{cleanupError}</p>
+                {cleanupAction === "delete" ? (
+                  <button
+                    className="text-sm font-semibold underline underline-offset-4 hover:text-red-900 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isLoadingCleanupReport || isCleaningUpCard}
+                    onClick={() => {
+                      setCleanupError(null);
+                      setCleanupReport(null);
+                      setCleanupReportRequestKey(
+                        (currentKey) => currentKey + 1,
+                      );
+                    }}
+                    type="button"
+                  >
+                    Retry dependency inspection
+                  </button>
+                ) : null}
+              </div>
             ) : null}
             <div className="mt-5 grid gap-2 sm:grid-cols-2">
               <button
@@ -6269,8 +6442,7 @@ export default function GiftCardVerificationPage() {
                   isCleaningUpCard ||
                   isLoadingCleanupReport ||
                   (cleanupAction === "delete" &&
-                    cleanupReport !== null &&
-                    !cleanupReport.can_hard_delete)
+                    (!cleanupReport || !cleanupReport.can_hard_delete))
                 }
                 onClick={() => void confirmGiftCardCleanup()}
                 type="button"
