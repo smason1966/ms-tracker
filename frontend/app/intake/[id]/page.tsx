@@ -167,7 +167,6 @@ export default function RapidCardIntakePage() {
   const [lookupsError, setLookupsError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [lastSavedGiftCardId, setLastSavedGiftCardId] = useState<number | null>(null);
   const [cardUploadStatuses, setCardUploadStatuses] = useState<
     Record<number, string>
   >({});
@@ -332,7 +331,6 @@ export default function RapidCardIntakePage() {
   }, [purchaseId]);
 
   function updateFormField(field: keyof GiftCardForm, value: string) {
-    setLastSavedGiftCardId(null);
     setForm((currentForm) => ({
       ...currentForm,
       [field]: value,
@@ -381,7 +379,6 @@ export default function RapidCardIntakePage() {
   }
 
   function handleFaceValueChange(value: string) {
-    setLastSavedGiftCardId(null);
     setForm((currentForm) => {
       const preview = getInstantDiscountPreview(value);
 
@@ -420,22 +417,7 @@ export default function RapidCardIntakePage() {
   }
 
   function handleCardImageChange(event: ChangeEvent<HTMLInputElement>) {
-    setLastSavedGiftCardId(null);
     setCardImageFile(event.target.files?.[0] ?? null);
-  }
-
-  function startNextGiftCard() {
-    setForm((currentForm) => ({
-      ...initialForm,
-      card_source: currentForm.card_source,
-      brand: currentForm.brand,
-    }));
-    setCardImageFile(null);
-    setFileInputKey((currentKey) => currentKey + 1);
-    setIsCostManuallyEdited(false);
-    setSubmitError(null);
-    setSuccessMessage(null);
-    setLastSavedGiftCardId(null);
   }
 
   async function uploadCardImage(
@@ -471,7 +453,7 @@ export default function RapidCardIntakePage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (lastSavedGiftCardId !== null) {
+    if (isSubmitting) {
       return;
     }
 
@@ -535,7 +517,6 @@ export default function RapidCardIntakePage() {
       }
 
       const giftCard = (await response.json()) as GiftCard;
-      setLastSavedGiftCardId(giftCard.id);
 
       setForm((currentForm) => ({
         ...currentForm,
@@ -547,13 +528,7 @@ export default function RapidCardIntakePage() {
       }));
       setCardImageFile(null);
       setFileInputKey((currentKey) => currentKey + 1);
-      setSuccessMessage(
-        selectedImageFile
-          ? form.card_source === "digital"
-            ? `Digital gift card #${giftCard.id} saved. Attachment upload started; OCR was not queued.`
-            : `Gift card #${giftCard.id} saved. Image upload started — OCR will run in the background.`
-          : `Gift card #${giftCard.id} saved.`,
-      );
+      setSuccessMessage(`Gift card #${giftCard.id} saved. Ready for next card.`);
       await loadGiftCards({ showLoading: false });
 
       if (selectedImageFile) {
@@ -631,7 +606,6 @@ export default function RapidCardIntakePage() {
 
   const isSubmitDisabled =
     isSubmitting ||
-    lastSavedGiftCardId !== null ||
     isLoadingBrands ||
     Boolean(brandsError) ||
     cardBrands.length === 0 ||
@@ -970,22 +944,7 @@ export default function RapidCardIntakePage() {
 
           {successMessage ? (
             <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
-              <p>{successMessage}</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  className="h-9 rounded-md border border-emerald-300 bg-white px-3 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100"
-                  onClick={startNextGiftCard}
-                  type="button"
-                >
-                  Add Another Card
-                </button>
-                <Link
-                  className="flex h-9 items-center rounded-md bg-emerald-700 px-3 text-xs font-semibold text-white transition hover:bg-emerald-800"
-                  href={`/purchases/${purchaseId}`}
-                >
-                  Finish Intake
-                </Link>
-              </div>
+              {successMessage}
             </div>
           ) : null}
 
@@ -1062,11 +1021,7 @@ export default function RapidCardIntakePage() {
               type="submit"
               disabled={isSubmitDisabled}
             >
-              {lastSavedGiftCardId !== null
-                ? "Saved"
-                : isSubmitting
-                  ? "Saving..."
-                  : "Save Gift Card"}
+              {isSubmitting ? "Saving..." : "Save Gift Card"}
             </button>
           </div>
         </form>
