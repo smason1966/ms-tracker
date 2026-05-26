@@ -22,6 +22,8 @@ type PurchaseBatch = {
   fuel_points_notes: string | null;
   financial_notes: string | null;
   notes: string | null;
+  store_earns_fuel_points: boolean;
+  store_default_fuel_multiplier: number | null;
 };
 
 type Receipt = {
@@ -197,6 +199,7 @@ export default function PurchaseDetailPage() {
     financialForm.fuel_points_amount,
     financialForm.fuel_points_unit,
   );
+  const storeEarnsFuelPoints = Boolean(purchase?.store_earns_fuel_points);
 
   const purchaseSummary = useMemo(() => {
     const summary = giftCards.reduce(
@@ -1020,11 +1023,17 @@ export default function PurchaseDetailPage() {
       sales_tax: getInputValue(purchase.sales_tax),
       activation_fees: getInputValue(purchase.activation_fees),
       discounts: getInputValue(purchase.discounts),
-      fuel_points_amount: getFuelPointsAmount(
-        purchase.fuel_points_quantity,
-        purchase.fuel_points_unit,
+      fuel_points_amount: purchase.store_earns_fuel_points
+        ? getFuelPointsAmount(
+            purchase.fuel_points_quantity,
+            purchase.fuel_points_unit,
+          )
+        : "",
+      fuel_points_unit: String(
+        purchase.fuel_points_unit ??
+          purchase.store_default_fuel_multiplier ??
+          1000,
       ),
-      fuel_points_unit: String(purchase.fuel_points_unit ?? 1000),
       financial_notes: purchase.financial_notes ?? "",
     });
     setFinancialError(null);
@@ -1051,29 +1060,33 @@ export default function PurchaseDetailPage() {
     setFinancialError(null);
 
     try {
+      const payload = {
+        purchase_total_paid: getOptionalFieldValue(
+          financialForm.purchase_total_paid,
+        ),
+        sales_tax: getOptionalFieldValue(financialForm.sales_tax),
+        activation_fees: getOptionalFieldValue(financialForm.activation_fees),
+        discounts: getOptionalFieldValue(financialForm.discounts),
+        financial_notes:
+          financialForm.financial_notes.trim() === ""
+            ? null
+            : financialForm.financial_notes.trim(),
+        ...(storeEarnsFuelPoints
+          ? {
+              fuel_points_quantity: financialFuelPointsQuantity,
+              fuel_points_unit: financialFuelPointsQuantity
+                ? Number(financialForm.fuel_points_unit)
+                : null,
+            }
+          : {}),
+      };
+
       const response = await fetch(purchaseUrl, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          purchase_total_paid: getOptionalFieldValue(
-            financialForm.purchase_total_paid,
-          ),
-          sales_tax: getOptionalFieldValue(financialForm.sales_tax),
-          activation_fees: getOptionalFieldValue(
-            financialForm.activation_fees,
-          ),
-          discounts: getOptionalFieldValue(financialForm.discounts),
-          fuel_points_quantity: financialFuelPointsQuantity,
-          fuel_points_unit: financialFuelPointsQuantity
-            ? Number(financialForm.fuel_points_unit)
-            : null,
-          financial_notes:
-            financialForm.financial_notes.trim() === ""
-              ? null
-              : financialForm.financial_notes.trim(),
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
@@ -1912,7 +1925,7 @@ export default function PurchaseDetailPage() {
                   Edit Financial Details
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Updating total paid recalculates card acquisition costs.
+                  Total paid is receipt/payment context. Gift card cost is managed on each card.
                 </p>
               </div>
               <button
@@ -1994,43 +2007,45 @@ export default function PurchaseDetailPage() {
                 />
               </label>
 
-              <div className="space-y-2 text-sm font-medium text-slate-700">
-                <span>Fuel Points</span>
-                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                  <input
-                    className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                    min="0"
-                    onChange={(event) =>
-                      updateFinancialFormField(
-                        "fuel_points_amount",
-                        event.target.value,
-                      )
-                    }
-                    step="1"
-                    type="number"
-                    value={financialForm.fuel_points_amount}
-                  />
-                  <select
-                    className="h-11 rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                    onChange={(event) =>
-                      updateFinancialFormField(
-                        "fuel_points_unit",
-                        event.target.value,
-                      )
-                    }
-                    value={financialForm.fuel_points_unit}
-                  >
-                    <option value="100">100</option>
-                    <option value="1000">1,000</option>
-                  </select>
+              {storeEarnsFuelPoints ? (
+                <div className="space-y-2 text-sm font-medium text-slate-700">
+                  <span>Fuel Points</span>
+                  <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                    <input
+                      className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                      min="0"
+                      onChange={(event) =>
+                        updateFinancialFormField(
+                          "fuel_points_amount",
+                          event.target.value,
+                        )
+                      }
+                      step="1"
+                      type="number"
+                      value={financialForm.fuel_points_amount}
+                    />
+                    <select
+                      className="h-11 rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                      onChange={(event) =>
+                        updateFinancialFormField(
+                          "fuel_points_unit",
+                          event.target.value,
+                        )
+                      }
+                      value={financialForm.fuel_points_unit}
+                    >
+                      <option value="100">100</option>
+                      <option value="1000">1,000</option>
+                    </select>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Total:{" "}
+                    {financialFuelPointsQuantity
+                      ? `${financialFuelPointsQuantity.toLocaleString()} points`
+                      : ""}
+                  </p>
                 </div>
-                <p className="text-xs text-slate-500">
-                  Total:{" "}
-                  {financialFuelPointsQuantity
-                    ? `${financialFuelPointsQuantity.toLocaleString()} points`
-                    : ""}
-                </p>
-              </div>
+              ) : null}
 
               <label className="space-y-2 text-sm font-medium text-slate-700 sm:col-span-2">
                 <span>Financial Notes</span>
