@@ -1023,6 +1023,14 @@ export default function RapidCardIntakePage() {
             >
               {isSubmitting ? "Saving..." : "Save Gift Card"}
             </button>
+            {giftCards.length > 0 ? (
+              <Link
+                className="mt-2 flex h-10 w-full items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100 hover:text-slate-950"
+                href={`/purchases/${purchaseId}`}
+              >
+                Finish Intake
+              </Link>
+            ) : null}
           </div>
         </form>
       </div>
