@@ -74,13 +74,6 @@ type CardImage = {
   created_at?: string;
 };
 
-type OrientationHint = {
-  gift_card_id: number;
-  brand: string;
-  rotation_degrees: number;
-  label: string;
-};
-
 type CardImageOcrStatus = {
   card_image_id: number;
   gift_card_id: number;
@@ -340,36 +333,6 @@ function buildUploadUrlWithVersion(
     return url;
   }
   return `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(String(version))}`;
-}
-
-function normalizeRotationDegrees(value: number | null | undefined) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) {
-    return null;
-  }
-
-  return ((Math.round(Number(value)) % 360) + 360) % 360;
-}
-
-function orientationActionLabel(rotationDegrees: number) {
-  const rotation = normalizeRotationDegrees(rotationDegrees) ?? 0;
-
-  if (rotation === 0) {
-    return "No rotation";
-  }
-
-  if (rotation === 90) {
-    return "Rotate Right";
-  }
-
-  if (rotation === 180) {
-    return "Rotate 180";
-  }
-
-  if (rotation === 270) {
-    return "Rotate Left";
-  }
-
-  return `${rotation}°`;
 }
 
 function formatAmount(value: string | number) {
@@ -1858,9 +1821,6 @@ export default function GiftCardVerificationPage() {
   const [imageUploadMessage, setImageUploadMessage] = useState<string | null>(
     null,
   );
-  const [orientationHint, setOrientationHint] = useState<OrientationHint | null>(
-    null,
-  );
   const [cleanupAction, setCleanupAction] = useState<"delete" | "void" | null>(
     null,
   );
@@ -1940,11 +1900,6 @@ export default function GiftCardVerificationPage() {
       null
     );
   }, [cardImages]);
-  const hasManualSavedOrientation = primaryImage?.orientation_source === "manual";
-  const currentGiftCardId = giftCard?.id ?? null;
-  const currentGiftCardBrand = giftCard?.brand ?? null;
-  const currentPurchaseBatchId = giftCard?.purchase_batch_id ?? null;
-  const currentPrimaryImageId = primaryImage?.id ?? null;
   const supportingAttachments = useMemo(
     () =>
       cardImages.filter(
@@ -2435,102 +2390,6 @@ export default function GiftCardVerificationPage() {
       isMounted = false;
     };
   }, [giftCard?.brand]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadOrientationHint() {
-      if (
-        !currentGiftCardId ||
-        !currentPrimaryImageId ||
-        !currentGiftCardBrand ||
-        !currentPurchaseBatchId ||
-        hasManualSavedOrientation
-      ) {
-        setOrientationHint(null);
-        return;
-      }
-
-      try {
-        const cardsResponse = await fetch(
-          `${API_BASE_URL}/gift-cards/purchase/${currentPurchaseBatchId}`,
-        );
-
-        if (!cardsResponse.ok) {
-          return;
-        }
-
-        const purchaseCards = (await cardsResponse.json()) as GiftCard[];
-        const siblingCards = purchaseCards
-          .filter(
-            (candidate) =>
-              candidate.id !== currentGiftCardId &&
-              normalizedBrandName(candidate.brand) ===
-                normalizedBrandName(currentGiftCardBrand),
-          )
-          .sort((cardA, cardB) => {
-            const createdA = cardA.created_at ? Date.parse(cardA.created_at) : 0;
-            const createdB = cardB.created_at ? Date.parse(cardB.created_at) : 0;
-
-            return createdB - createdA;
-          });
-
-        for (const siblingCard of siblingCards) {
-          const imagesResponse = await fetch(
-            `${API_BASE_URL}/card-images/gift-card/${siblingCard.id}`,
-          );
-
-          if (!imagesResponse.ok) {
-            continue;
-          }
-
-          const siblingImages = (await imagesResponse.json()) as CardImage[];
-          const siblingPrimaryImage = siblingImages.find(
-            (image) =>
-              image.image_type === "primary" &&
-              image.orientation_source === "manual" &&
-              image.canonical_rotation_degrees !== null &&
-              image.canonical_rotation_degrees !== undefined,
-          );
-          const rotation = normalizeRotationDegrees(
-            siblingPrimaryImage?.canonical_rotation_degrees,
-          );
-
-          if (rotation !== null) {
-            if (isMounted) {
-              setOrientationHint({
-                gift_card_id: siblingCard.id,
-                brand: siblingCard.brand,
-                rotation_degrees: rotation,
-                label: orientationActionLabel(rotation),
-              });
-            }
-            return;
-          }
-        }
-
-        if (isMounted) {
-          setOrientationHint(null);
-        }
-      } catch {
-        if (isMounted) {
-          setOrientationHint(null);
-        }
-      }
-    }
-
-    void loadOrientationHint();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [
-    currentGiftCardBrand,
-    currentGiftCardId,
-    currentPrimaryImageId,
-    currentPurchaseBatchId,
-    hasManualSavedOrientation,
-  ]);
 
   useEffect(() => {
     let isMounted = true;
@@ -4397,98 +4256,6 @@ export default function GiftCardVerificationPage() {
           </section>
         ) : null}
 
-        {!isInactiveCard && (bestCardNumberCandidate || bestPinCandidate) ? (
-          <section className="rounded-lg border border-cyan-200 bg-white p-4 shadow-sm">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-950">
-                  Current OCR Suggestions
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  Suggestions come from the saved Review/OCR Image. Manual fields below
-                  remain the source of truth.
-                </p>
-              </div>
-              {primaryImage ? (
-                <button
-                  className="h-10 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={isRescanningImage || !primaryImage.processed_image_url}
-                  onClick={() => {
-                    void rescanPrimaryImage(
-                      "OCR re-run on saved orientation.",
-                      { preserveSavedTemplate: true, sync: true },
-                    );
-                  }}
-                  type="button"
-                >
-                  {isRescanningImage ? "Scanning..." : "Re-run OCR on saved orientation"}
-                </button>
-              ) : null}
-            </div>
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              {bestCardNumberCandidate ? (
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    {isRedemptionCodeOnly ? "Suggested Redemption Code" : "Suggested Card Number"}
-                  </p>
-                  <p className="mt-1 break-all font-mono text-base font-semibold text-slate-950">
-                    {bestCardNumberCandidate.value}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {bestCardNumberCandidate.source} ·{" "}
-                    {formatConfidence(bestCardNumberCandidate.confidence_score)}
-                  </p>
-                  <button
-                    className="mt-3 h-9 cursor-pointer rounded-md bg-cyan-300 px-3 text-xs font-semibold text-slate-950 transition hover:bg-cyan-200"
-                    onClick={() =>
-                      applyCredentialCandidate(bestCardNumberCandidate, {
-                        brand: giftCard.brand,
-                        isRedemptionCodeOnly,
-                        setForm,
-                      })
-                    }
-                    type="button"
-                  >
-                    Use {candidateTargetLabel(bestCardNumberCandidate, isRedemptionCodeOnly)}
-                  </button>
-                </div>
-              ) : null}
-              {!isRedemptionCodeOnly && bestPinCandidate ? (
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Suggested PIN
-                  </p>
-                  <p className="mt-1 break-all font-mono text-base font-semibold text-slate-950">
-                    {bestPinCandidate.value}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {bestPinCandidate.source} ·{" "}
-                    {formatConfidence(bestPinCandidate.confidence_score)}
-                  </p>
-                  {bestPinCandidate.notes ? (
-                    <p className="mt-1 line-clamp-2 text-xs text-slate-500">
-                      {bestPinCandidate.notes}
-                    </p>
-                  ) : null}
-                  <button
-                    className="mt-3 h-9 cursor-pointer rounded-md bg-cyan-300 px-3 text-xs font-semibold text-slate-950 transition hover:bg-cyan-200"
-                    onClick={() =>
-                      applyCredentialCandidate(bestPinCandidate, {
-                        brand: giftCard.brand,
-                        isRedemptionCodeOnly,
-                        setForm,
-                      })
-                    }
-                    type="button"
-                  >
-                    Use PIN
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </section>
-        ) : null}
-
         <section className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(380px,0.7fr)]">
           <div className="space-y-4">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -4541,23 +4308,6 @@ export default function GiftCardVerificationPage() {
                       >
                         Rotate Right
                       </button>
-                      {orientationHint && !hasManualSavedOrientation ? (
-                        <button
-                          className="h-11 cursor-pointer rounded-md border border-cyan-300 bg-cyan-50 px-4 text-sm font-semibold text-cyan-900 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={isRescanningImage || isSavingOcrOrientation}
-                          onClick={() => {
-                            setImageRotation(orientationHint.rotation_degrees);
-                            setImageUploadError(null);
-                            setImageUploadMessage(
-                              `Applied previous ${orientationHint.brand} orientation preview. Click Set as OCR orientation to save it for this card.`,
-                            );
-                          }}
-                          type="button"
-                        >
-                          Use previous {orientationHint.brand} orientation:{" "}
-                          {orientationHint.label}
-                        </button>
-                      ) : null}
                       <button
                         className="h-11 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
                         disabled={isRescanningImage || isSavingOcrOrientation}
@@ -4656,80 +4406,6 @@ export default function GiftCardVerificationPage() {
                       </a>
                     ) : null}
                   </div>
-                  <dl className="mb-3 grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 md:grid-cols-2">
-                    <div>
-                      <dt className="font-semibold text-slate-800">
-                        Display image
-                      </dt>
-                      <dd className="break-all">
-                        {primaryImage.processed_image_url
-                          ? primaryImage.processed_image_url
-                          : primaryImage.original_image_url}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="font-semibold text-slate-800">OCR image</dt>
-                      <dd className="break-all">
-                        {primaryImage.processed_image_url ?? "Not set"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="font-semibold text-slate-800">
-                        Barcode image
-                      </dt>
-                      <dd className="break-all">
-                        {primaryImage.processed_image_url
-                          ? "Saved Review/OCR Image plus Best Buy original/crop fallbacks"
-                          : "Original upload fallback only"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="font-semibold text-slate-800">
-                        Image dimensions
-                      </dt>
-                      <dd>
-                        natural{" "}
-                        {canonicalImageSize
-                          ? `${canonicalImageSize.width} x ${canonicalImageSize.height}`
-                          : debugSavedReviewImageDimensions ?? "not loaded"}
-                        {" · "}rendered{" "}
-                        {canonicalRenderedSize
-                          ? `${canonicalRenderedSize.width} x ${canonicalRenderedSize.height}`
-                          : "not measured"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="font-semibold text-slate-800">
-                        Saved rotation
-                      </dt>
-                      <dd>{orientationStatusLabel ?? "Not set"}</dd>
-                    </div>
-                    <div>
-                      <dt className="font-semibold text-slate-800">
-                        Template coordinate source
-                      </dt>
-                      <dd>
-                        {debugTemplateCoordinateSource ??
-                          coordinateMode}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="font-semibold text-slate-800">
-                        Card boundary
-                      </dt>
-                      <dd className="break-all">
-                        {boundaryZone
-                          ? `x ${boundaryZone.x_pct.toFixed(2)}%, y ${boundaryZone.y_pct.toFixed(2)}%, w ${boundaryZone.width_pct.toFixed(2)}%, h ${boundaryZone.height_pct.toFixed(2)}%`
-                          : debugOcrCardBoundary ?? "Not set"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="font-semibold text-slate-800">
-                        OCR zone image size
-                      </dt>
-                      <dd>{debugOcrZoneImageNaturalSize ?? "Not recorded"}</dd>
-                    </div>
-                  </dl>
                   <div className="mb-3 grid gap-3 md:grid-cols-2">
                     <figure className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
                       <figcaption className="border-b border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">
@@ -4963,77 +4639,6 @@ export default function GiftCardVerificationPage() {
             ) : null}
 
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold">Purchase Receipt</h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    {receipts.length}{" "}
-                    {receipts.length === 1 ? "receipt" : "receipts"} attached
-                    to purchase #{giftCard.purchase_batch_id}.
-                  </p>
-                </div>
-                <Link
-                  className="inline-flex h-11 cursor-pointer items-center justify-center rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
-                  href={purchaseHref}
-                >
-                  View Purchase
-                </Link>
-              </div>
-
-              {receipts.length === 0 ? (
-                <p className="mt-3 text-sm text-slate-500">
-                  No receipt uploaded for this purchase yet.
-                </p>
-              ) : (
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  {receipts.map((receipt) => {
-                    const receiptUrl = buildUploadUrl(receipt.image_url);
-                    const purged =
-                      (receipt.retention_status ?? "active") === "purged";
-
-                    return (
-                      <figure
-                        className="overflow-hidden rounded-md border border-slate-200 bg-slate-50"
-                        key={receipt.id}
-                      >
-                        {purged ? (
-                          <div className="flex h-40 items-center justify-center bg-amber-50 px-4 text-center text-sm font-medium text-amber-900">
-                            Attachment purged per retention policy
-                          </div>
-                        ) : (
-                          <a href={receiptUrl} target="_blank" rel="noreferrer">
-                            <Image
-                              alt={receipt.original_filename || "Purchase receipt"}
-                              className="h-40 w-full object-cover"
-                              height={160}
-                              src={receiptUrl}
-                              unoptimized
-                              width={320}
-                            />
-                          </a>
-                        )}
-                        <figcaption className="space-y-2 p-3 text-xs text-slate-600">
-                          <p className="truncate font-medium text-slate-800">
-                            {receipt.original_filename || `Receipt #${receipt.id}`}
-                          </p>
-                          {purged ? null : (
-                            <a
-                              className="inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 bg-white px-3 font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
-                              download
-                              href={receiptUrl}
-                            >
-                              Open / Download Receipt
-                            </a>
-                          )}
-                        </figcaption>
-                      </figure>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="text-lg font-semibold">Extraction Summary</h2>
               {latestExtractionAttempt ? (
                 <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
@@ -5214,6 +4819,84 @@ export default function GiftCardVerificationPage() {
                   No code detected - open OCR debug to inspect raw OCR text,
                   rejected candidates, and selected rotation.
                 </div>
+              ) : null}
+              {primaryImage ? (
+                <details className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                  <summary className="cursor-pointer font-semibold text-slate-700">
+                    Image routing and OCR metadata
+                  </summary>
+                  <dl className="mt-3 grid gap-2 md:grid-cols-2">
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        Display image
+                      </dt>
+                      <dd className="break-all">
+                        {primaryImage.processed_image_url
+                          ? primaryImage.processed_image_url
+                          : primaryImage.original_image_url}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">OCR image</dt>
+                      <dd className="break-all">
+                        {primaryImage.processed_image_url ?? "Not set"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        Barcode image
+                      </dt>
+                      <dd className="break-all">
+                        {primaryImage.processed_image_url
+                          ? "Saved Review/OCR Image plus Best Buy original/crop fallbacks"
+                          : "Original upload fallback only"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        Image dimensions
+                      </dt>
+                      <dd>
+                        natural{" "}
+                        {canonicalImageSize
+                          ? `${canonicalImageSize.width} x ${canonicalImageSize.height}`
+                          : debugSavedReviewImageDimensions ?? "not loaded"}
+                        {" · "}rendered{" "}
+                        {canonicalRenderedSize
+                          ? `${canonicalRenderedSize.width} x ${canonicalRenderedSize.height}`
+                          : "not measured"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        Saved rotation
+                      </dt>
+                      <dd>{orientationStatusLabel ?? "Not set"}</dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        Template coordinate source
+                      </dt>
+                      <dd>{debugTemplateCoordinateSource ?? coordinateMode}</dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        Card boundary
+                      </dt>
+                      <dd className="break-all">
+                        {boundaryZone
+                          ? `x ${boundaryZone.x_pct.toFixed(2)}%, y ${boundaryZone.y_pct.toFixed(2)}%, w ${boundaryZone.width_pct.toFixed(2)}%, h ${boundaryZone.height_pct.toFixed(2)}%`
+                          : debugOcrCardBoundary ?? "Not set"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-800">
+                        OCR zone image size
+                      </dt>
+                      <dd>{debugOcrZoneImageNaturalSize ?? "Not recorded"}</dd>
+                    </div>
+                  </dl>
+                </details>
               ) : null}
               {latestExtractionAttempt?.raw_text ? (
                 <details className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -6274,10 +5957,81 @@ export default function GiftCardVerificationPage() {
                 ) : null}
               </details>
             </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold">Purchase Receipt</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {receipts.length}{" "}
+                    {receipts.length === 1 ? "receipt" : "receipts"} attached
+                    to purchase #{giftCard.purchase_batch_id}.
+                  </p>
+                </div>
+                <Link
+                  className="inline-flex h-11 cursor-pointer items-center justify-center rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
+                  href={purchaseHref}
+                >
+                  View Purchase
+                </Link>
+              </div>
+
+              {receipts.length === 0 ? (
+                <p className="mt-3 text-sm text-slate-500">
+                  No receipt uploaded for this purchase yet.
+                </p>
+              ) : (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  {receipts.map((receipt) => {
+                    const receiptUrl = buildUploadUrl(receipt.image_url);
+                    const purged =
+                      (receipt.retention_status ?? "active") === "purged";
+
+                    return (
+                      <figure
+                        className="overflow-hidden rounded-md border border-slate-200 bg-slate-50"
+                        key={receipt.id}
+                      >
+                        {purged ? (
+                          <div className="flex h-40 items-center justify-center bg-amber-50 px-4 text-center text-sm font-medium text-amber-900">
+                            Attachment purged per retention policy
+                          </div>
+                        ) : (
+                          <a href={receiptUrl} target="_blank" rel="noreferrer">
+                            <Image
+                              alt={receipt.original_filename || "Purchase receipt"}
+                              className="h-40 w-full object-cover"
+                              height={160}
+                              src={receiptUrl}
+                              unoptimized
+                              width={320}
+                            />
+                          </a>
+                        )}
+                        <figcaption className="space-y-2 p-3 text-xs text-slate-600">
+                          <p className="truncate font-medium text-slate-800">
+                            {receipt.original_filename || `Receipt #${receipt.id}`}
+                          </p>
+                          {purged ? null : (
+                            <a
+                              className="inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 bg-white px-3 font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
+                              download
+                              href={receiptUrl}
+                            >
+                              Open / Download Receipt
+                            </a>
+                          )}
+                        </figcaption>
+                      </figure>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
           <form
-            className="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm xl:sticky xl:top-6 xl:self-start"
+            className="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm xl:sticky xl:top-6 xl:max-h-[calc(100dvh-3rem)] xl:self-start xl:overflow-y-auto xl:overscroll-contain"
             id="confirm-card-details-form"
             onSubmit={handleVerify}
           >
