@@ -804,7 +804,116 @@ function normalizeCleanupReport(
 }
 
 function candidateSourceRank(candidate: ExtractionCandidate) {
-  return candidate.source.toLowerCase() === "barcode" ? 1 : 0;
+  const source = candidate.source.toLowerCase();
+
+  if (source === "barcode") {
+    return 4;
+  }
+
+  if (source.includes("zone_test_consensus") || source.includes("zone_consensus")) {
+    return 3;
+  }
+
+  if (source.includes("zone_test")) {
+    return 2;
+  }
+
+  if (source.includes("zone")) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function isZoneTestCandidate(candidate: ExtractionCandidate | null | undefined) {
+  return candidate?.source.toLowerCase().startsWith("zone_test") ?? false;
+}
+
+function zoneTestCandidateToExtractionCandidate(
+  candidate: OCRCandidatePayload,
+  giftCardId: number,
+  index = 0,
+): ExtractionCandidate {
+  const source = candidate.source.toLowerCase().includes("consensus")
+    ? "zone_test_consensus"
+    : "zone_test";
+
+  return {
+    id: candidate.candidate_type === "pin" ? -10000 - index : -20000 - index,
+    gift_card_id: giftCardId,
+    candidate_type: candidate.candidate_type,
+    source,
+    value: candidate.value,
+    confidence_score: Math.max(candidate.confidence_score ?? 0, 0.9),
+    notes: candidate.notes
+      ? `${candidate.notes} Promoted from the current manual zone test.`
+      : "Promoted from the current manual zone test.",
+    created_at: new Date().toISOString(),
+  };
+}
+
+function zoneTestCandidatesToExtractionCandidates(
+  candidates: Array<OCRCandidatePayload | null | undefined>,
+  giftCardId: number,
+  candidateType?: string,
+) {
+  const seenValues = new Set<string>();
+
+  return candidates
+    .filter(
+      (candidate): candidate is OCRCandidatePayload =>
+        Boolean(candidate) &&
+        (!candidateType || candidate?.candidate_type === candidateType) &&
+        Boolean(candidate?.value),
+    )
+    .sort((candidateA, candidateB) => {
+      const confidenceA = candidateA.confidence_score ?? 0;
+      const confidenceB = candidateB.confidence_score ?? 0;
+
+      return confidenceB - confidenceA;
+    })
+    .filter((candidate) => {
+      const key = `${candidate.candidate_type}:${normalizedCandidateValue(
+        candidate.value,
+      )}`;
+
+      if (seenValues.has(key)) {
+        return false;
+      }
+
+      seenValues.add(key);
+      return true;
+    })
+    .map((candidate, index) =>
+      zoneTestCandidateToExtractionCandidate(candidate, giftCardId, index),
+    );
+}
+
+function mergeZoneTestCandidates(
+  candidates: ExtractionCandidate[],
+  zoneCandidates: Array<OCRCandidatePayload | null | undefined>,
+  giftCardId: number,
+) {
+  const promotedCandidates = zoneTestCandidatesToExtractionCandidates(
+    zoneCandidates,
+    giftCardId,
+  );
+
+  if (promotedCandidates.length === 0) {
+    return candidates;
+  }
+
+  const withoutDuplicate = candidates.filter(
+    (existingCandidate) =>
+      !promotedCandidates.some(
+        (promotedCandidate) =>
+          existingCandidate.candidate_type === promotedCandidate.candidate_type &&
+          normalizedCandidateValue(existingCandidate.value) ===
+            normalizedCandidateValue(promotedCandidate.value),
+      ),
+  );
+
+  return [...promotedCandidates, ...withoutDuplicate];
 }
 
 function normalizedCandidateValue(value: string) {
@@ -2184,6 +2293,30 @@ export default function GiftCardVerificationPage() {
     zoneTestResult?.promoted_candidates.filter(
       (candidate) => candidate.candidate_type === zonePreferredCandidateType,
     ) ?? [];
+  const zoneTestHasPinContext = Boolean(
+    zoneTestResult &&
+      (currentZone.zone_type === "pin" ||
+        currentZone.zone_name.toLowerCase().includes("pin") ||
+        zoneTestResult.best_candidate?.candidate_type === "pin" ||
+        zoneTestResult.promoted_candidates.some(
+          (candidate) => candidate.candidate_type === "pin",
+        )),
+  );
+  const zoneTestPinCandidates =
+    giftCard && zoneTestHasPinContext && zoneTestResult
+      ? zoneTestCandidatesToExtractionCandidates(
+          [zoneTestResult.best_candidate, ...zoneTestResult.promoted_candidates],
+          giftCard.id,
+          "pin",
+        ).filter((candidate) => isCandidateValidForBrand(candidate, giftCard.brand))
+      : [];
+  const storedBestPinCandidate =
+    bestPinCandidate && !isZoneTestCandidate(bestPinCandidate)
+      ? bestPinCandidate
+      : null;
+  const visibleStoredOtherPinCandidates = otherPinCandidates.filter(
+    (candidate) => !isZoneTestCandidate(candidate),
+  );
   const downloadOcrDebug = () => {
     if (!zoneTestResult || !giftCard) {
       return;
@@ -2676,12 +2809,16 @@ export default function GiftCardVerificationPage() {
       return;
     }
 
+    const currentZoneTestCandidates =
+      zoneTestResult && !zoneCropMismatch
+        ? [zoneTestResult.best_candidate, ...zoneTestResult.promoted_candidates]
+        : [];
+
     setIsRescanningImage(true);
     setImageUploadError(null);
     setImageUploadMessage(null);
     setExtractionAttempts([]);
     setExtractionCandidates([]);
-    setZoneTestResult(null);
     setGiftCard((currentGiftCard) =>
       currentGiftCard
         ? { ...currentGiftCard, ocr_status: "preprocessing" }
@@ -2723,12 +2860,19 @@ export default function GiftCardVerificationPage() {
         setCardImages(details.cardImages);
         setReceipts(details.receipts);
         setExtractionAttempts(details.extractionAttempts);
-        setExtractionCandidates(details.extractionCandidates);
+        setExtractionCandidates(
+          currentZoneTestCandidates.length > 0
+            ? mergeZoneTestCandidates(
+                details.extractionCandidates,
+                currentZoneTestCandidates,
+                details.giftCard.id,
+              )
+            : details.extractionCandidates,
+        );
         setForm(getInitialVerificationForm(details));
         setIsValueCostSyncedToFaceValue(
           acquisitionCostDefaultsToFaceValue(details.giftCard),
         );
-        setZoneTestResult(null);
         if (options.preserveSavedTemplate) {
           setZoneTemplateSaved(true);
           setZoneTemplateMessage(
@@ -3244,7 +3388,17 @@ export default function GiftCardVerificationPage() {
       }
 
       setZoneTestStage("parsing candidates");
-      setZoneTestResult((await response.json()) as OCRZoneTestResult);
+      const result = (await response.json()) as OCRZoneTestResult;
+      setZoneTestResult(result);
+      if (giftCard) {
+        setExtractionCandidates((currentCandidates) =>
+          mergeZoneTestCandidates(
+            currentCandidates,
+            [result.best_candidate, ...result.promoted_candidates],
+            giftCard.id,
+          ),
+        );
+      }
     } catch (err) {
       setZoneTemplateError(
         err instanceof DOMException && err.name === "AbortError"
@@ -6293,7 +6447,36 @@ export default function GiftCardVerificationPage() {
               )}
             </section>
 
-            {!isRedemptionCodeOnly && bestPinCandidate && (
+            {!isRedemptionCodeOnly && zoneTestPinCandidates.length > 0 ? (
+              <section className="rounded-lg border border-cyan-200 bg-cyan-50 p-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-cyan-800">
+                    PIN candidates from zone test
+                  </p>
+                  <p className="mt-1 text-xs text-cyan-900">
+                    These came from the latest manual PIN zone test. Use the one
+                    that matches the card image.
+                  </p>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {zoneTestPinCandidates.map((candidate, index) => (
+                    <CandidateRow
+                      candidate={candidate}
+                      key={`${candidate.source}-${candidate.value}-${index}`}
+                      onUse={() =>
+                        setForm((currentForm) => ({
+                          ...currentForm,
+                          pin: candidate.value,
+                          confirmed_source: candidate.source || "OCR",
+                        }))
+                      }
+                    />
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            {!isRedemptionCodeOnly && storedBestPinCandidate && (
               <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -6301,15 +6484,15 @@ export default function GiftCardVerificationPage() {
                       Suggested PIN
                     </p>
                     <p className="mt-1 break-all font-mono text-base">
-                      {bestPinCandidate.value}
+                      {storedBestPinCandidate.value}
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
-                      {bestPinCandidate.source} ·{" "}
-                      {formatConfidence(bestPinCandidate.confidence_score)}
+                      {storedBestPinCandidate.source} ·{" "}
+                      {formatConfidence(storedBestPinCandidate.confidence_score)}
                     </p>
-                    {bestPinCandidate.notes ? (
+                    {storedBestPinCandidate.notes ? (
                       <p className="mt-1 text-xs text-slate-500">
-                        {bestPinCandidate.notes}
+                        {storedBestPinCandidate.notes}
                       </p>
                     ) : null}
                   </div>
@@ -6318,23 +6501,23 @@ export default function GiftCardVerificationPage() {
                     onClick={() =>
                       setForm((currentForm) => ({
                         ...currentForm,
-                        pin: bestPinCandidate.value,
-                        confirmed_source: bestPinCandidate.source || "OCR",
+                        pin: storedBestPinCandidate.value,
+                        confirmed_source: storedBestPinCandidate.source || "OCR",
                       }))
                     }
                     type="button"
                   >
-                    Use
-                  </button>
-                </div>
+                  Use
+                </button>
+              </div>
 
-                {otherPinCandidates.length > 0 && (
-                  <details className="mt-3 text-sm">
-                    <summary className="cursor-pointer font-medium text-slate-600 hover:text-slate-950">
-                      Show other PIN candidates
-                    </summary>
+                {visibleStoredOtherPinCandidates.length > 0 && (
+                  <div className="mt-3 text-sm">
+                    <p className="font-medium text-slate-600">
+                      Other stored PIN candidates
+                    </p>
                     <div className="mt-2 space-y-2">
-                      {otherPinCandidates.map((candidate) => (
+                      {visibleStoredOtherPinCandidates.map((candidate) => (
                         <CandidateRow
                           candidate={candidate}
                           key={candidate.id}
@@ -6348,7 +6531,7 @@ export default function GiftCardVerificationPage() {
                         />
                       ))}
                     </div>
-                  </details>
+                  </div>
                 )}
               </section>
             )}
