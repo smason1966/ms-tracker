@@ -22,6 +22,7 @@ type GiftCard = {
   brand: string;
   card_source?: string | null;
   face_value: string | number;
+  acquisition_cost: string | number | null;
   status: string;
   ocr_status?: string;
   card_number_encrypted: string | null;
@@ -131,6 +132,7 @@ type VerificationForm = {
   card_number: string;
   pin: string;
   face_value: string;
+  acquisition_cost: string;
   notes: string;
   confirmed_source: string;
 };
@@ -381,6 +383,34 @@ function formatAmount(value: string | number) {
     style: "currency",
     currency: "USD",
   });
+}
+
+function amountToCents(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  return Math.round(parsed * 100);
+}
+
+function amountsEqual(
+  first: string | number | null | undefined,
+  second: string | number | null | undefined,
+) {
+  return amountToCents(first) === amountToCents(second);
+}
+
+function cardAcquisitionCost(card: GiftCard) {
+  return card.acquisition_cost ?? card.face_value;
+}
+
+function acquisitionCostDefaultsToFaceValue(card: GiftCard) {
+  return amountsEqual(cardAcquisitionCost(card), card.face_value);
 }
 
 function formatDate(value: string | null | undefined) {
@@ -975,6 +1005,7 @@ function getInitialVerificationForm(details: VerificationDetails) {
     card_number: credentialValue(details.giftCard) ?? "",
     pin: isRedemptionCodeOnly ? "" : credentialPin(details.giftCard) ?? "",
     face_value: String(details.giftCard.face_value),
+    acquisition_cost: String(cardAcquisitionCost(details.giftCard)),
     notes: details.giftCard.notes ?? "",
     confirmed_source: details.giftCard.confirmed_source ?? "manual",
   };
@@ -1741,11 +1772,15 @@ export default function GiftCardVerificationPage() {
     card_number: "",
     pin: "",
     face_value: "",
+    acquisition_cost: "",
     notes: "",
     confirmed_source: "manual",
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingValueCost, setIsSavingValueCost] = useState(false);
+  const [isValueCostSyncedToFaceValue, setIsValueCostSyncedToFaceValue] =
+    useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -2011,6 +2046,13 @@ export default function GiftCardVerificationPage() {
   const isInactiveCard = ["VOID", "VOIDED", "ARCHIVED"].includes(
     giftCard?.status ?? "",
   );
+  const canCorrectValueCost =
+    giftCard !== null &&
+    ["NEEDS_VERIFICATION", "VERIFIED_AVAILABLE"].includes(giftCard.status);
+  const valueCostChanged =
+    giftCard !== null &&
+    (!amountsEqual(form.face_value, giftCard.face_value) ||
+      !amountsEqual(form.acquisition_cost, cardAcquisitionCost(giftCard)));
   const isBestBuyCard = normalizedBrandName(giftCard?.brand).includes("best buy");
   const activeBestBuyLayoutOptions = ocrLayouts
     .filter((layout) => layout.active && !LEGACY_BEST_BUY_LAYOUT_NAMES.has(layout.layout_name))
@@ -2224,6 +2266,9 @@ export default function GiftCardVerificationPage() {
           setExtractionAttempts(details.extractionAttempts);
           setExtractionCandidates(details.extractionCandidates);
           setForm(getInitialVerificationForm(details));
+          setIsValueCostSyncedToFaceValue(
+            acquisitionCostDefaultsToFaceValue(details.giftCard),
+          );
         }
       } catch (err) {
         if (isMounted) {
@@ -2590,6 +2635,9 @@ export default function GiftCardVerificationPage() {
           setExtractionAttempts(details.extractionAttempts);
           setExtractionCandidates(details.extractionCandidates);
           setForm(getInitialVerificationForm(details));
+          setIsValueCostSyncedToFaceValue(
+            acquisitionCostDefaultsToFaceValue(details.giftCard),
+          );
           setImageUploadMessage(
             status.ocr_status === "failed"
               ? "OCR failed. Manual verification is still available."
@@ -2749,6 +2797,9 @@ export default function GiftCardVerificationPage() {
         setExtractionAttempts(details.extractionAttempts);
         setExtractionCandidates(details.extractionCandidates);
         setForm(getInitialVerificationForm(details));
+        setIsValueCostSyncedToFaceValue(
+          acquisitionCostDefaultsToFaceValue(details.giftCard),
+        );
         setZoneTestResult(null);
         if (options.preserveSavedTemplate) {
           setZoneTemplateSaved(true);
@@ -3426,6 +3477,88 @@ export default function GiftCardVerificationPage() {
     }
   }
 
+  function handleFaceValueChange(value: string) {
+    setForm((currentForm) => ({
+      ...currentForm,
+      face_value: value,
+      acquisition_cost: isValueCostSyncedToFaceValue
+        ? value
+        : currentForm.acquisition_cost,
+    }));
+  }
+
+  function handleAcquisitionCostChange(value: string) {
+    setIsValueCostSyncedToFaceValue(false);
+    setForm((currentForm) => ({
+      ...currentForm,
+      acquisition_cost: value,
+    }));
+  }
+
+  async function saveValueCostCorrection(options: { silent?: boolean } = {}) {
+    if (!giftCard || !canCorrectValueCost || !valueCostChanged) {
+      return giftCard;
+    }
+
+    setIsSavingValueCost(true);
+    if (!options.silent) {
+      setSubmitError(null);
+      setSuccessMessage(null);
+    }
+
+    const endpoint = `${API_BASE_URL}/gift-cards/${giftCard.id}`;
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          face_value: Number(form.face_value),
+          acquisition_cost: Number(form.acquisition_cost),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await readResponseBody(response);
+        throw new Error(
+          backendErrorMessage(
+            errorBody,
+            `Failed to update value/cost (${response.status})`,
+          ),
+        );
+      }
+
+      const updatedGiftCard = (await response.json()) as GiftCard;
+      setGiftCard(updatedGiftCard);
+      setForm((currentForm) => ({
+        ...currentForm,
+        face_value: String(updatedGiftCard.face_value),
+        acquisition_cost: String(cardAcquisitionCost(updatedGiftCard)),
+      }));
+      setIsValueCostSyncedToFaceValue(
+        acquisitionCostDefaultsToFaceValue(updatedGiftCard),
+      );
+      if (!options.silent) {
+        setSuccessMessage("Gift card value and cost updated.");
+      }
+      return updatedGiftCard;
+    } finally {
+      setIsSavingValueCost(false);
+    }
+  }
+
+  async function handleValueCostCorrection() {
+    try {
+      await saveValueCostCorrection();
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "Failed to update value/cost.",
+      );
+    }
+  }
+
   async function handleVerify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -3450,6 +3583,10 @@ export default function GiftCardVerificationPage() {
     let loggedResponseError = false;
 
     try {
+      if (valueCostChanged) {
+        await saveValueCostCorrection({ silent: true });
+      }
+
       const response = await fetch(endpoint, {
         method: "PATCH",
         headers: {
@@ -3938,7 +4075,7 @@ export default function GiftCardVerificationPage() {
                 {!isSaleLocked || allowLockedCredentialUpdate ? (
                   <button
                     className="h-11 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 active:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-                    disabled={isSubmitting}
+                disabled={isSubmitting}
                     form="confirm-card-details-form"
                     type="submit"
                   >
@@ -6416,19 +6553,82 @@ export default function GiftCardVerificationPage() {
               <span>Face Value</span>
               <input
                 className="h-12 w-full rounded-md border border-slate-300 px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                disabled={!canCorrectValueCost}
                 min="0"
-                onChange={(event) =>
-                  setForm((currentForm) => ({
-                    ...currentForm,
-                    face_value: event.target.value,
-                  }))
-                }
+                onChange={(event) => handleFaceValueChange(event.target.value)}
                 required
                 step="0.01"
                 type="number"
                 value={form.face_value}
               />
             </label>
+
+            <section className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Value / Cost correction
+                </h3>
+                <p className="mt-1 text-xs text-slate-600">
+                  Changing face value or cost may update purchase allocation
+                  and expected profit.
+                </p>
+              </div>
+
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                <span>Gift Card Cost / Acquisition Cost</span>
+                <input
+                  className="h-12 w-full rounded-md border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-100 disabled:text-slate-500"
+                  disabled={!canCorrectValueCost}
+                  min="0"
+                  onChange={(event) =>
+                    handleAcquisitionCostChange(event.target.value)
+                  }
+                  required
+                  step="0.01"
+                  type="number"
+                  value={form.acquisition_cost}
+                />
+              </label>
+
+              {canCorrectValueCost ? (
+                <>
+                  {isValueCostSyncedToFaceValue ? (
+                    <p className="text-xs text-slate-600">
+                      Acquisition cost is tracking face value because the
+                      original cost matched the original face value.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-slate-600">
+                      Manual acquisition cost is preserved when face value
+                      changes.
+                    </p>
+                  )}
+                  <button
+                    className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                    disabled={
+                      isSavingValueCost ||
+                      isSubmitting ||
+                      !valueCostChanged ||
+                      !form.face_value ||
+                      !form.acquisition_cost
+                    }
+                    onClick={() => void handleValueCostCorrection()}
+                    type="button"
+                  >
+                    {isSavingValueCost
+                      ? "Saving..."
+                      : valueCostChanged
+                        ? "Save value/cost correction"
+                        : "Value/cost saved"}
+                  </button>
+                </>
+              ) : (
+                <p className="text-xs font-medium text-slate-600">
+                  Value/cost corrections are locked once a card is sold or
+                  settled.
+                </p>
+              )}
+            </section>
 
             <label className="block space-y-2 text-sm font-medium text-slate-700">
               <span>Notes</span>
@@ -6535,11 +6735,12 @@ export default function GiftCardVerificationPage() {
 
             <button
               className="h-12 w-full rounded-md bg-slate-950 px-4 font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-              disabled={
-                isSubmitting ||
-                (isSaleLocked && !allowLockedCredentialUpdate) ||
-                isInactiveCard
-              }
+                disabled={
+                  isSubmitting ||
+                  isSavingValueCost ||
+                  (isSaleLocked && !allowLockedCredentialUpdate) ||
+                  isInactiveCard
+                }
               type="submit"
             >
               {isInactiveCard

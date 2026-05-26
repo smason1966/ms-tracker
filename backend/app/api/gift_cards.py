@@ -52,6 +52,21 @@ class GiftCardUpdate(BaseModel):
     digital_source_notes: str | None = None
 
 
+SAFE_VALUE_CORRECTION_STATUSES = {"NEEDS_VERIFICATION", "VERIFIED_AVAILABLE"}
+BLOCKED_VALUE_CORRECTION_STATUSES = {
+    "SOLD_PENDING_PAYMENT",
+    "PARTIALLY_SETTLED",
+    "SOLD",
+    "SETTLED",
+    "REDEEMED",
+    "VOID",
+    "VOIDED",
+    "ARCHIVED",
+    "DELETED_SOFT",
+    "SOFT_DELETED",
+}
+
+
 def get_payload_fields(payload: BaseModel) -> set[str]:
     return set(
         getattr(
@@ -60,6 +75,29 @@ def get_payload_fields(payload: BaseModel) -> set[str]:
             getattr(payload, "__fields_set__", set()),
         )
     )
+
+
+def ensure_safe_value_cost_correction(db: Session, card: GiftCard) -> None:
+    status = (card.status or "").upper()
+    if status not in SAFE_VALUE_CORRECTION_STATUSES:
+        detail = (
+            "Gift card value/cost corrections are allowed only for unsold "
+            "cards that need verification or are verified available."
+        )
+        if status in BLOCKED_VALUE_CORRECTION_STATUSES:
+            detail = "Value/cost corrections are locked once a card is sold, settled, redeemed, voided, or archived."
+        raise HTTPException(status_code=400, detail=detail)
+
+    sale_link = (
+        db.query(SaleGiftCard)
+        .filter(SaleGiftCard.gift_card_id == card.id)
+        .first()
+    )
+    if sale_link:
+        raise HTTPException(
+            status_code=400,
+            detail="Value/cost corrections are locked for cards with sale history.",
+        )
 
 
 def normalize_card_source(value: str | None) -> str:
@@ -1563,19 +1601,24 @@ def update_gift_card(gift_card_id: int, payload: GiftCardUpdate):
             raise HTTPException(status_code=404, detail="Gift card not found")
 
         payload_fields = get_payload_fields(payload)
+        value_cost_fields = {"face_value", "acquisition_cost"}
+        value_cost_changed = bool(payload_fields & value_cost_fields)
+
+        if value_cost_changed:
+            ensure_safe_value_cost_correction(db, card)
 
         for field in payload_fields:
             setattr(card, field, getattr(payload, field))
 
         card.updated_at = datetime.utcnow()
 
-        if "face_value" in payload_fields:
+        if value_cost_changed:
             recalculate_purchase_allocation(db, card.purchase_batch_id)
 
         db.commit()
         db.refresh(card)
 
-        return card
+        return serialize_gift_card(card, db)
 
     finally:
         db.close()
