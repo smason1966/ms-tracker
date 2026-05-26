@@ -1972,14 +1972,6 @@ export default function GiftCardVerificationPage() {
     latestExtractionAttempt?.raw_text,
     "OCR_SELECTED_IMAGE_SOURCE",
   );
-  const appliedTemplateRotation = ocrDebugValue(
-    latestExtractionAttempt?.raw_text,
-    "OCR_APPLIED_TEMPLATE_ROTATION",
-  );
-  const persistedCanonicalRotation = ocrDebugValue(
-    latestExtractionAttempt?.raw_text,
-    "OCR_CANONICAL_PERSISTED_ROTATION",
-  );
   const canonicalRotation = ocrDebugValue(
     latestExtractionAttempt?.raw_text,
     "OCR_CANONICAL_ROTATION_DEGREES",
@@ -2132,6 +2124,8 @@ export default function GiftCardVerificationPage() {
         ? `Auto orientation selected: ${savedRotationLabel}°`
         : `OCR orientation saved: ${savedRotationLabel}°`
     : null;
+  const hasUnsavedPreviewRotation =
+    ((imageRotation % 360) + 360) % 360 !== 0;
   const currentZone: OCRZone = {
     zone_name: zoneForm.zone_name.trim() || "credential_zone",
     zone_type: zoneForm.zone_type,
@@ -4259,91 +4253,115 @@ export default function GiftCardVerificationPage() {
         <section className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(380px,0.7fr)]">
           <div className="space-y-4">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <h2 className="text-lg font-semibold">Uploaded Card Image</h2>
-                <div className="flex flex-wrap gap-2">
-                  <label
-                    className={`inline-flex h-11 cursor-pointer items-center rounded-md border border-slate-300 px-4 text-sm font-medium transition ${
-                      isUploadingImage
-                        ? "cursor-not-allowed bg-slate-100 text-slate-400"
-                        : "text-slate-700 hover:bg-slate-100"
-                    }`}
-                  >
-                    <span>
-                      {isUploadingImage
-                        ? "Uploading..."
-                        : isDigitalCard
-                          ? "Upload Attachment"
-                          : primaryImage
-                          ? "Replace Image"
-                          : "Upload Image"}
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <label
+                  className={`inline-flex h-10 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-sm font-medium transition ${
+                    isUploadingImage
+                      ? "cursor-not-allowed bg-slate-100 text-slate-400"
+                      : "text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  <span>
+                    {isUploadingImage
+                      ? "Uploading..."
+                      : isDigitalCard
+                        ? "Upload Attachment"
+                        : primaryImage
+                        ? "Replace Image"
+                        : "Upload Image"}
+                  </span>
+                  <input
+                    accept={isDigitalCard ? digitalAttachmentAccept : cardImageAccept}
+                    className="sr-only"
+                    disabled={isUploadingImage}
+                    onChange={handleImageUpload}
+                    type="file"
+                  />
+                </label>
+                {primaryImage && (
+                  <>
+                    <button
+                      aria-label="Rotate left"
+                      className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-md border border-slate-300 text-lg font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isRescanningImage || isSavingOcrOrientation}
+                      onClick={() => {
+                        setImageRotation((currentRotation) => currentRotation - 90);
+                      }}
+                      title="Rotate left"
+                      type="button"
+                    >
+                      <span aria-hidden="true">↺</span>
+                      <span className="sr-only">Rotate Left</span>
+                    </button>
+                    <button
+                      aria-label="Rotate right"
+                      className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-md border border-slate-300 text-lg font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isRescanningImage || isSavingOcrOrientation}
+                      onClick={() => {
+                        setImageRotation((currentRotation) => currentRotation + 90);
+                      }}
+                      title="Rotate right"
+                      type="button"
+                    >
+                      <span aria-hidden="true">↻</span>
+                      <span className="sr-only">Rotate Right</span>
+                    </button>
+                    <button
+                      className={`h-10 cursor-pointer rounded-md px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:bg-slate-400 ${
+                        hasUnsavedPreviewRotation
+                          ? "border border-amber-300 bg-amber-300 text-slate-950 shadow-[0_0_0_3px_rgba(251,191,36,0.25)] hover:bg-amber-200"
+                          : "bg-slate-950 text-white hover:bg-slate-800"
+                      }`}
+                      disabled={isRescanningImage || isSavingOcrOrientation}
+                      onClick={() => {
+                        void setSavedOcrOrientation();
+                      }}
+                      type="button"
+                    >
+                      {isSavingOcrOrientation ? "Saving..." : "Set as OCR orientation"}
+                    </button>
+                    <button
+                      aria-label="Rerun OCR using saved orientation"
+                      className="h-10 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isRescanningImage || !primaryImage.processed_image_url}
+                      onClick={() => {
+                        void rescanPrimaryImage(
+                          "OCR re-run on saved orientation.",
+                          { preserveSavedTemplate: true, sync: true },
+                        );
+                      }}
+                      title="Rerun OCR using saved orientation"
+                      type="button"
+                    >
+                      Rerun OCR
+                    </button>
+                    <button
+                      className="h-10 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isRescanningImage || isSavingOcrOrientation}
+                      onClick={() => {
+                        setImageRotation(0);
+                      }}
+                      type="button"
+                    >
+                      Reset Preview
+                    </button>
+                    <span
+                      className={`inline-flex h-10 items-center rounded-full border px-2.5 text-xs font-semibold ${
+                        hasUnsavedPreviewRotation
+                          ? "border-amber-300 bg-amber-100 text-amber-950"
+                          : canonicalReady
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                            : "border-slate-200 bg-slate-50 text-slate-600"
+                      }`}
+                    >
+                      {hasUnsavedPreviewRotation
+                        ? "Unsaved rotation"
+                        : primaryImage.processed_image_url
+                          ? `Saved${savedRotationLabel ? ` · ${savedRotationLabel}°` : ""}`
+                          : "OCR image not saved"}
                     </span>
-                    <input
-                      accept={isDigitalCard ? digitalAttachmentAccept : cardImageAccept}
-                      className="sr-only"
-                      disabled={isUploadingImage}
-                      onChange={handleImageUpload}
-                      type="file"
-                    />
-                  </label>
-                  {primaryImage && (
-                    <>
-                      <button
-                        className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={isRescanningImage || isSavingOcrOrientation}
-                        onClick={() => {
-                          setImageRotation((currentRotation) => currentRotation - 90);
-                        }}
-                        type="button"
-                      >
-                        Rotate Left
-                      </button>
-                      <button
-                        className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={isRescanningImage || isSavingOcrOrientation}
-                        onClick={() => {
-                          setImageRotation((currentRotation) => currentRotation + 90);
-                        }}
-                        type="button"
-                      >
-                        Rotate Right
-                      </button>
-                      <button
-                        className="h-11 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-                        disabled={isRescanningImage || isSavingOcrOrientation}
-                        onClick={() => {
-                          void setSavedOcrOrientation();
-                        }}
-                        type="button"
-                      >
-                        {isSavingOcrOrientation ? "Saving..." : "Set as OCR orientation"}
-                      </button>
-                      <button
-                        className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={isRescanningImage || !primaryImage.processed_image_url}
-                        onClick={() => {
-                          void rescanPrimaryImage(
-                            "OCR re-run on saved orientation.",
-                            { preserveSavedTemplate: true, sync: true },
-                          );
-                        }}
-                        type="button"
-                      >
-                        Re-run OCR on saved orientation
-                      </button>
-                      <button
-                        className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={isRescanningImage || isSavingOcrOrientation}
-                        onClick={() => {
-                          setImageRotation(0);
-                        }}
-                        type="button"
-                      >
-                        Reset Preview
-                      </button>
-                    </>
-                  )}
-                </div>
+                  </>
+                )}
               </div>
               {imageUploadMessage ? (
                 <p className="mb-3 text-sm font-medium text-emerald-700">
@@ -4367,94 +4385,15 @@ export default function GiftCardVerificationPage() {
               ) : null}
               {primaryImage ? (
                 <>
-                  <p className="mb-2 text-xs font-medium text-slate-500">
-                    {canonicalReady
-                      ? "OCR is using the saved Review/OCR Image. Zones are relative to that image only."
-                      : "OCR image not set. Rotate the upload preview, then click Set as OCR orientation."}
-                    {primaryImage.processed_image_url
-                      ? ` · saved Review/OCR Image ready`
-                      : " · OCR and zones are locked until orientation is saved"}
-                    {appliedTemplateRotation && appliedTemplateRotation !== "none"
-                      ? ` · template tested at ${appliedTemplateRotation}°`
-                      : ""}
-                    {selectedTemplateLayout
-                      ? ` · layout ${selectedTemplateLayout}`
-                      : ""}
-                    {persistedCanonicalRotation &&
-                    persistedCanonicalRotation !== "0"
-                      ? ` · canonical image rotated ${persistedCanonicalRotation}°`
-                      : ""}
-                    {orientationStatusLabel ? ` · ${orientationStatusLabel}` : ""}
-                  </p>
-                  <div className="mb-3 flex flex-wrap gap-2 text-xs">
-                    <a
-                      className="font-semibold text-slate-600 underline underline-offset-2 hover:text-slate-950"
-                      href={buildUploadUrl(primaryImage.original_image_url)}
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      Original upload
-                    </a>
-                    {primaryImage.processed_image_url ? (
-                      <a
-                        className="font-semibold text-slate-600 underline underline-offset-2 hover:text-slate-950"
-                        href={buildUploadUrl(primaryImage.processed_image_url)}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        Saved Review/OCR Image
-                      </a>
-                    ) : null}
-                  </div>
-                  <div className="mb-3 grid gap-3 md:grid-cols-2">
-                    <figure className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                      <figcaption className="border-b border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">
-                        Original Upload Preview
-                        {imageRotation % 360
-                          ? ` · preview ${((imageRotation % 360) + 360) % 360}°`
-                          : ""}
-                      </figcaption>
-                      <img
-                        alt={`${giftCard.brand} original upload`}
-                        className="h-48 w-full object-contain"
-                        src={originalUploadPreviewUrl}
-                        style={{
-                          transform: `rotate(${imageRotation}deg)`,
-                        }}
-                      />
-                    </figure>
-                    <figure className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                      <figcaption className="border-b border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">
-                        Saved Review/OCR Image
-                        {orientationStatusLabel
-                          ? ` · ${orientationStatusLabel}`
-                          : ""}
-                      </figcaption>
-                      {primaryImage.processed_image_url ? (
-                        <img
-                          alt={`${giftCard.brand} saved Review/OCR Image`}
-                          className="h-48 w-full object-contain"
-                          src={savedReviewOcrImageUrl}
-                          style={{
-                            transform: `rotate(${imageRotation}deg)`,
-                          }}
-                        />
-                      ) : (
-                        <div className="flex h-48 items-center justify-center text-sm text-slate-500">
-                          No saved Review/OCR Image yet
-                        </div>
-                      )}
-                    </figure>
-                  </div>
                   {reviewImagePath ? (
-                    <div className="relative flex min-h-[28rem] touch-none items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-3 sm:min-h-[34rem] md:min-h-[40rem] lg:min-h-[44rem]">
+                    <div className="relative flex min-h-[18rem] touch-none items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-2 sm:min-h-[26rem] md:min-h-[30rem] lg:min-h-[34rem]">
                       <div
-                        className="relative inline-block max-h-[78vh] max-w-full"
+                        className="relative inline-block max-h-[68vh] max-w-full"
                       >
                         <img
                           ref={savedReviewImageRef}
                           alt={`${giftCard.brand} review/OCR working image`}
-                          className="block h-auto max-h-[78vh] w-auto max-w-full object-contain"
+                          className="block h-auto max-h-[68vh] w-auto max-w-full object-contain"
                           onLoad={(event) => {
                             const renderedRect =
                               event.currentTarget.getBoundingClientRect();
@@ -4472,7 +4411,7 @@ export default function GiftCardVerificationPage() {
                             transform: `rotate(${imageRotation}deg)`,
                           }}
                         />
-                      {canonicalReady && imageRotation % 360 === 0 ? (
+                      {canonicalReady && !hasUnsavedPreviewRotation ? (
                         <div
                           className="absolute inset-0 cursor-crosshair"
                           onPointerCancel={finishZoneDraw}
@@ -4559,19 +4498,18 @@ export default function GiftCardVerificationPage() {
                           </div>
                           ) : null}
                         </div>
-                      ) : imageRotation % 360 !== 0 ? (
-                        <div className="absolute inset-x-3 bottom-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900 shadow">
-                          Preview rotation is not saved yet. Click Set as OCR
-                          orientation to persist this view and reload zones.
+                      ) : hasUnsavedPreviewRotation ? (
+                        <div className="absolute inset-x-2 bottom-2 rounded-md border border-amber-300 bg-amber-50/95 px-2 py-1.5 text-xs font-semibold text-amber-900 shadow">
+                          Unsaved rotation. Set as OCR orientation to persist.
                         </div>
                       ) : null}
                       </div>
                     </div>
                   ) : (
-                    <div className="flex min-h-[24rem] items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-3">
+                    <div className="flex min-h-[18rem] items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-2 sm:min-h-[26rem]">
                       <img
                         alt={`${giftCard.brand} original upload`}
-                        className="block h-auto max-h-[70vh] w-auto max-w-full object-contain"
+                        className="block h-auto max-h-[68vh] w-auto max-w-full object-contain"
                         src={originalUploadPreviewUrl}
                         style={{
                           transform: `rotate(${imageRotation}deg)`,
@@ -4896,6 +4834,65 @@ export default function GiftCardVerificationPage() {
                       <dd>{debugOcrZoneImageNaturalSize ?? "Not recorded"}</dd>
                     </div>
                   </dl>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <figure className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                      <figcaption className="border-b border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">
+                        Original upload
+                        {hasUnsavedPreviewRotation
+                          ? ` · preview ${((imageRotation % 360) + 360) % 360}°`
+                          : ""}
+                      </figcaption>
+                      <img
+                        alt={`${giftCard.brand} original upload`}
+                        className="h-36 w-full object-contain"
+                        src={originalUploadPreviewUrl}
+                        style={{
+                          transform: `rotate(${imageRotation}deg)`,
+                        }}
+                      />
+                      <div className="border-t border-slate-200 px-3 py-2">
+                        <a
+                          className="font-semibold text-slate-600 underline underline-offset-2 hover:text-slate-950"
+                          href={buildUploadUrl(primaryImage.original_image_url)}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          Open original
+                        </a>
+                      </div>
+                    </figure>
+                    <figure className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                      <figcaption className="border-b border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">
+                        Saved Review/OCR Image
+                        {orientationStatusLabel
+                          ? ` · ${orientationStatusLabel}`
+                          : ""}
+                      </figcaption>
+                      {primaryImage.processed_image_url ? (
+                        <>
+                          <img
+                            alt={`${giftCard.brand} saved Review/OCR Image`}
+                            className="h-36 w-full object-contain"
+                            src={savedReviewOcrImageUrl}
+                          />
+                          <div className="border-t border-slate-200 px-3 py-2">
+                            <a
+                              className="font-semibold text-slate-600 underline underline-offset-2 hover:text-slate-950"
+                              href={buildUploadUrl(primaryImage.processed_image_url)}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              Open saved OCR image
+                            </a>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex h-36 items-center justify-center px-3 text-sm text-slate-500">
+                          No saved Review/OCR Image yet
+                        </div>
+                      )}
+                    </figure>
+                  </div>
                 </details>
               ) : null}
               {latestExtractionAttempt?.raw_text ? (
