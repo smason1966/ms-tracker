@@ -38,6 +38,8 @@ type CreditCard = {
   statement_balance: string | number | null;
   statement_paid_amount: string | number | null;
   statement_remaining: string | number | null;
+  available_credit: string | number | null;
+  calculated_available_credit: string | number | null;
   minimum_payment_due: string | number | null;
   minimum_payment_paid: boolean;
   payment_due_date: string | null;
@@ -141,6 +143,21 @@ type CardForm = {
   notes: string;
 };
 
+type CardSortKey =
+  | "statement_close"
+  | "payment_due"
+  | "utilization_desc"
+  | "available_credit_asc"
+  | "available_credit_desc"
+  | "balance_desc"
+  | "limit_desc"
+  | "network"
+  | "issuer"
+  | "card_name"
+  | "reward_program";
+
+type CardStatusFilter = "active" | "inactive" | "all";
+
 const emptyForm: CardForm = {
   player_id: "",
   nickname: "",
@@ -173,6 +190,20 @@ const REWARD_TYPE_OPTIONS = [
   { value: "instant_discount_percent", label: "Instant Discount %" },
   { value: "statement_credit", label: "Statement Credit" },
   { value: "none", label: "None" },
+];
+
+const CARD_SORT_OPTIONS: Array<{ value: CardSortKey; label: string }> = [
+  { value: "statement_close", label: "Statement closes soonest" },
+  { value: "payment_due", label: "Payment due soonest" },
+  { value: "utilization_desc", label: "Utilization high to low" },
+  { value: "available_credit_asc", label: "Available credit low to high" },
+  { value: "available_credit_desc", label: "Available credit high to low" },
+  { value: "balance_desc", label: "Estimated balance high to low" },
+  { value: "limit_desc", label: "Credit limit high to low" },
+  { value: "network", label: "Network/type" },
+  { value: "issuer", label: "Issuer" },
+  { value: "card_name", label: "Card name" },
+  { value: "reward_program", label: "Reward program" },
 ];
 
 class CreditCardsRenderBoundary extends Component<
@@ -277,7 +308,7 @@ async function responseError(response: Response, fallback: string) {
   }`;
 }
 
-function formatAmount(value: string | number | null) {
+function formatWholeDollarAmount(value: string | number | null) {
   if (value === null || value === "") {
     return "-";
   }
@@ -289,9 +320,16 @@ function formatAmount(value: string | number | null) {
   }
 
   return amount.toLocaleString(undefined, {
-    style: "currency",
     currency: "USD",
+    maximumFractionDigits: 0,
+    minimumFractionDigits: 0,
+    style: "currency",
   });
+}
+
+function numericValue(value: string | number | null | undefined) {
+  const parsedValue = Number(value ?? 0);
+  return Number.isNaN(parsedValue) ? 0 : parsedValue;
 }
 
 function formatPercent(value: number | null) {
@@ -300,31 +338,6 @@ function formatPercent(value: number | null) {
   }
 
   return `${Math.round(value)}%`;
-}
-
-function getProgress(card: CreditCard) {
-  const target = Number(card.signup_bonus_spend ?? 0);
-  const current = Number(card.current_spend_progress ?? 0);
-
-  if (!target || Number.isNaN(target)) {
-    return 0;
-  }
-
-  return Math.min(100, Math.round((current / target) * 100));
-}
-
-function isDeadlineSoon(value: string | null) {
-  if (!value) {
-    return false;
-  }
-
-  const deadline = new Date(`${value}T00:00:00`);
-  const today = new Date();
-  const days = Math.ceil(
-    (deadline.getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
-  );
-
-  return days >= 0 && days <= 30;
 }
 
 export default function CreditCardsPage() {
@@ -396,6 +409,102 @@ function aggregateUtilization(cards: CreditCard[]) {
   return (balance / creditLimit) * 100;
 }
 
+function cardAvailableCredit(card: CreditCard) {
+  return numericValue(card.calculated_available_credit ?? card.available_credit);
+}
+
+function cardRewardProgramLabel(card: CreditCard) {
+  return card.reward_program?.name || card.rewards_type || "No program";
+}
+
+function compactRewardProgramLabel(card: CreditCard) {
+  return card.reward_program?.short_code || card.reward_program?.name || card.rewards_type || "-";
+}
+
+function compareText(first: string | null | undefined, second: string | null | undefined) {
+  return (first ?? "").localeCompare(second ?? "", undefined, {
+    sensitivity: "base",
+  });
+}
+
+function daysSortValue(value: number | null) {
+  return value === null ? Number.MAX_SAFE_INTEGER : value;
+}
+
+function sortCreditCards(cards: CreditCard[], sortKey: CardSortKey) {
+  return [...cards].sort((first, second) => {
+    switch (sortKey) {
+      case "statement_close":
+        return (
+          daysSortValue(first.days_until_statement_close) -
+          daysSortValue(second.days_until_statement_close)
+        );
+      case "payment_due":
+        return (
+          daysSortValue(first.days_until_payment_due) -
+          daysSortValue(second.days_until_payment_due)
+        );
+      case "utilization_desc":
+        return numericValue(second.utilization_percent) - numericValue(first.utilization_percent);
+      case "available_credit_asc":
+        return cardAvailableCredit(first) - cardAvailableCredit(second);
+      case "available_credit_desc":
+        return cardAvailableCredit(second) - cardAvailableCredit(first);
+      case "balance_desc":
+        return numericValue(second.current_balance) - numericValue(first.current_balance);
+      case "limit_desc":
+        return numericValue(second.credit_limit) - numericValue(first.credit_limit);
+      case "network":
+        return compareText(first.network, second.network) || compareText(first.nickname, second.nickname);
+      case "issuer":
+        return compareText(first.issuer, second.issuer) || compareText(first.nickname, second.nickname);
+      case "card_name":
+        return compareText(first.nickname, second.nickname);
+      case "reward_program":
+        return (
+          compareText(cardRewardProgramLabel(first), cardRewardProgramLabel(second)) ||
+          compareText(first.nickname, second.nickname)
+        );
+      default:
+        return 0;
+    }
+  });
+}
+
+function upcomingLabel(days: number | null, fallbackDate: string | null, fallbackDay: number | null) {
+  if (days !== null) {
+    if (days < 0) {
+      return `${Math.abs(days)}d overdue`;
+    }
+    if (days === 0) {
+      return "Today";
+    }
+    return `${days}d`;
+  }
+
+  if (fallbackDate) {
+    return fallbackDate;
+  }
+
+  return fallbackDay ? `Day ${fallbackDay}` : "-";
+}
+
+function compactUpcomingLabel(prefix: string, days: number | null) {
+  if (days === null) {
+    return `${prefix} -`;
+  }
+
+  if (days < 0) {
+    return `${prefix} ${Math.abs(days)}d overdue`;
+  }
+
+  if (days === 0) {
+    return `${prefix} today`;
+  }
+
+  return `${prefix} ${days}d`;
+}
+
 function formatRuleValue(rule: RewardRule) {
   if (rule.reward_type === "points" || rule.reward_type === "points_multiplier") {
     return `${Number(rule.multiplier).toFixed(Number(rule.multiplier) % 1 === 0 ? 0 : 1)}x`;
@@ -421,10 +530,6 @@ function isInstantDiscountRule(rule: Pick<RewardRule, "reward_type">) {
 
 function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
-}
-
-function normalizeRewardRuleType(value: string) {
-  return value === "points" ? "points_multiplier" : value;
 }
 
 function apiRewardRuleType(value: string) {
@@ -457,32 +562,6 @@ function newRewardRuleDraft(
     effective_start_date: todayIsoDate(),
     active: true,
     notes: "",
-  };
-}
-
-function rewardRuleToDraft(rule: RewardRule, cardRewardProgramId: number | null) {
-  const rewardType = normalizeRewardRuleType(rule.reward_type);
-  return {
-    local_id: `existing-${rule.id}`,
-    id: rule.id,
-    spending_category_id: String(rule.spending_category_id),
-    reward_type: rewardType,
-    merchant_type: rule.merchant_type ?? "",
-    store_id: rule.store_id === null ? "" : String(rule.store_id),
-    reward_program_id:
-      rewardType !== "points_multiplier"
-        ? ""
-        : rule.reward_program_id === null
-        ? cardRewardProgramId === null
-          ? ""
-          : String(cardRewardProgramId)
-        : String(rule.reward_program_id),
-    multiplier: String(rule.multiplier ?? ""),
-    value: rule.value === null ? "" : String(rule.value),
-    priority: String(rule.priority ?? 100),
-    effective_start_date: rule.effective_start_date ?? todayIsoDate(),
-    active: rule.active,
-    notes: rule.notes ?? "",
   };
 }
 
@@ -603,6 +682,11 @@ function CreditCardsContent() {
   const [rewardRuleDrafts, setRewardRuleDrafts] = useState<RewardRuleDraft[]>([]);
   const [deletedRewardRuleIds, setDeletedRewardRuleIds] = useState<number[]>([]);
   const [isAdvancedRulesOpen, setIsAdvancedRulesOpen] = useState(false);
+  const [sortKey, setSortKey] = useState<CardSortKey>("statement_close");
+  const [statusFilter, setStatusFilter] = useState<CardStatusFilter>("active");
+  const [networkFilter, setNetworkFilter] = useState("");
+  const [issuerFilter, setIssuerFilter] = useState("");
+  const [rewardProgramFilter, setRewardProgramFilter] = useState("");
   const [editingCard, setEditingCard] = useState<CreditCard | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -615,11 +699,59 @@ function CreditCardsContent() {
     hasError: Boolean(error),
   });
 
-  const activeCards = useMemo(() => {
-    const filteredCards = cards.filter((card) => card.is_active);
+  const networkOptions = useMemo(
+    () =>
+      [...new Set(cards.map((card) => card.network).filter(Boolean) as string[])]
+        .sort((first, second) => compareText(first, second)),
+    [cards],
+  );
+  const issuerOptions = useMemo(
+    () =>
+      [...new Set(cards.map((card) => card.issuer).filter(Boolean))]
+        .sort((first, second) => compareText(first, second)),
+    [cards],
+  );
+  const rewardProgramOptions = useMemo(
+    () =>
+      [
+        ...new Map(
+          cards
+            .filter((card) => card.reward_program)
+            .map((card) => [
+              String(card.reward_program?.id),
+              card.reward_program as RewardProgram,
+            ]),
+        ).values(),
+      ].sort((first, second) => compareText(first.name, second.name)),
+    [cards],
+  );
+
+  const visibleCards = useMemo(() => {
+    let filteredCards = cards.filter((card) => {
+      if (statusFilter === "active" && !card.is_active) {
+        return false;
+      }
+      if (statusFilter === "inactive" && card.is_active) {
+        return false;
+      }
+      if (networkFilter && card.network !== networkFilter) {
+        return false;
+      }
+      if (issuerFilter && card.issuer !== issuerFilter) {
+        return false;
+      }
+      if (
+        rewardProgramFilter &&
+        String(card.reward_program_id ?? "") !== rewardProgramFilter
+      ) {
+        return false;
+      }
+
+      return true;
+    });
 
     if (focus === "statement_balances") {
-      return filteredCards
+      filteredCards = filteredCards
         .filter(statementBalanceOutstanding)
         .sort((first, second) => {
           const firstUrgency = first.days_until_payment_due ?? 9999;
@@ -632,6 +764,7 @@ function CreditCardsContent() {
             Number(first.statement_remaining ?? first.statement_balance ?? 0)
           );
         });
+      return filteredCards;
     }
 
     if (focus === "utilization") {
@@ -642,8 +775,16 @@ function CreditCardsContent() {
       );
     }
 
-    return filteredCards;
-  }, [cards, focus]);
+    return sortCreditCards(filteredCards, sortKey);
+  }, [
+    cards,
+    focus,
+    issuerFilter,
+    networkFilter,
+    rewardProgramFilter,
+    sortKey,
+    statusFilter,
+  ]);
   const aggregateUtilizationPercent = useMemo(
     () => aggregateUtilization(cards.filter((card) => card.is_active)),
     [cards],
@@ -829,38 +970,6 @@ function CreditCardsContent() {
     setRewardRuleDrafts([]);
     setDeletedRewardRuleIds([]);
     setIsAdvancedRulesOpen(false);
-    setIsModalOpen(true);
-  }
-
-  function openEditModal(card: CreditCard) {
-    setEditingCard(card);
-    setForm({
-      nickname: card.nickname,
-      player_id: card.player_id === null ? "" : String(card.player_id),
-      issuer: card.issuer,
-      network: card.network ?? "",
-      last_four: card.last_four ?? "",
-      credit_limit: String(card.credit_limit),
-      current_balance:
-        card.current_balance === null ? "" : String(card.current_balance),
-      statement_close_day:
-        card.statement_close_day === null ? "" : String(card.statement_close_day),
-      payment_due_day:
-        card.payment_due_day === null ? "" : String(card.payment_due_day),
-      signup_bonus_spend:
-        card.signup_bonus_spend === null ? "" : String(card.signup_bonus_spend),
-      signup_bonus_deadline: card.signup_bonus_deadline ?? "",
-      current_spend_progress: String(card.current_spend_progress ?? 0),
-      reward_program_id:
-        card.reward_program_id === null ? "" : String(card.reward_program_id),
-      rewards_rate: card.rewards_rate === null ? "" : String(card.rewards_rate),
-      notes: card.notes ?? "",
-    });
-    setRewardRuleDrafts(
-      card.reward_rules.map((rule) => rewardRuleToDraft(rule, card.reward_program_id)),
-    );
-    setDeletedRewardRuleIds([]);
-    setIsAdvancedRulesOpen(card.reward_rules.some((rule) => isAdvancedRewardRule(rewardRuleToDraft(rule, card.reward_program_id))));
     setIsModalOpen(true);
   }
 
@@ -1122,261 +1231,375 @@ function CreditCardsContent() {
           </section>
         ) : null}
 
+        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1.2fr_0.8fr_0.9fr_0.9fr_1.1fr_auto] xl:items-end">
+            <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <span>Sort</span>
+              <select
+                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-medium normal-case tracking-normal text-slate-950"
+                onChange={(event) => setSortKey(event.target.value as CardSortKey)}
+                value={sortKey}
+              >
+                {CARD_SORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <span>Status</span>
+              <select
+                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-medium normal-case tracking-normal text-slate-950"
+                onChange={(event) => setStatusFilter(event.target.value as CardStatusFilter)}
+                value={statusFilter}
+              >
+                <option value="active">Active only</option>
+                <option value="inactive">Inactive only</option>
+                <option value="all">All cards</option>
+              </select>
+            </label>
+            <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <span>Network</span>
+              <select
+                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-medium normal-case tracking-normal text-slate-950"
+                onChange={(event) => setNetworkFilter(event.target.value)}
+                value={networkFilter}
+              >
+                <option value="">All networks</option>
+                {networkOptions.map((network) => (
+                  <option key={network} value={network}>
+                    {network}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <span>Issuer</span>
+              <select
+                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-medium normal-case tracking-normal text-slate-950"
+                onChange={(event) => setIssuerFilter(event.target.value)}
+                value={issuerFilter}
+              >
+                <option value="">All issuers</option>
+                {issuerOptions.map((issuer) => (
+                  <option key={issuer} value={issuer}>
+                    {issuer}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <span>Reward Program</span>
+              <select
+                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-medium normal-case tracking-normal text-slate-950"
+                onChange={(event) => setRewardProgramFilter(event.target.value)}
+                value={rewardProgramFilter}
+              >
+                <option value="">All reward programs</option>
+                {rewardProgramOptions.map((program) => (
+                  <option key={program.id} value={program.id}>
+                    {program.short_code} · {program.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex items-center justify-between gap-3 md:col-span-2 xl:col-span-1 xl:h-10 xl:justify-end">
+              <span className="whitespace-nowrap text-xs font-medium text-slate-500">
+                {visibleCards.length} of {cards.length} cards
+              </span>
+              <button
+                className="h-9 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                onClick={() => {
+                  setSortKey("statement_close");
+                  setStatusFilter("active");
+                  setNetworkFilter("");
+                  setIssuerFilter("");
+                  setRewardProgramFilter("");
+                }}
+                type="button"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+        </section>
+
         {isLoading ? (
           <div className="rounded-lg border border-slate-200 bg-white p-6 text-slate-600 shadow-sm">
             Loading credit cards...
           </div>
-        ) : activeCards.length === 0 ? (
+        ) : visibleCards.length === 0 ? (
           <div className="rounded-lg border border-slate-200 bg-white p-6 text-slate-600 shadow-sm">
-            No active credit cards yet.
+            No credit cards match the current filters.
           </div>
         ) : (
-          <section className="grid gap-4 lg:grid-cols-2">
-            {activeCards.map((card) => {
-              const progress = getProgress(card);
-              const utilizationWarning =
-                (card.utilization_percent ?? 0) > utilizationThreshold(card);
-              const statementSoon =
-                card.days_until_statement_close !== null &&
-                card.days_until_statement_close <= 5;
-              const paymentDueSoon = isPaymentDueSoon(card);
-              const paymentOverdue = isPaymentOverdue(card);
-              const deadlineSoon = isDeadlineSoon(card.signup_bonus_deadline);
+          <>
+            <section className="hidden overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm xl:block">
+              <div className="overflow-x-auto">
+                <table className="min-w-[1080px] divide-y divide-slate-200 text-left text-sm">
+                  <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    <tr>
+                      {[
+                        "Card",
+                        "Type",
+                        "Limit",
+                        "Balance",
+                        "Available",
+                        "Util %",
+                        "Dates",
+                        "Rewards",
+                        "Rule summary",
+                      ].map((heading) => (
+                        <th
+                          className={`px-3 py-2 ${
+                            ["Limit", "Balance", "Available", "Util %"].includes(heading)
+                              ? "text-right"
+                              : ""
+                          }`}
+                          key={heading}
+                        >
+                          {heading}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white">
+                    {visibleCards.map((card) => {
+                      const utilizationWarning =
+                        (card.utilization_percent ?? 0) > utilizationThreshold(card);
+                      const statementSoon =
+                        card.days_until_statement_close !== null &&
+                        card.days_until_statement_close <= 5;
+                      const paymentDueSoon = isPaymentDueSoon(card);
+                      const paymentOverdue = isPaymentOverdue(card);
 
-              return (
-                <article
-                  className={`space-y-4 rounded-lg border bg-white p-5 shadow-sm ${
-                    focus === "utilization" && utilizationWarning
-                      ? "border-amber-300 ring-2 ring-amber-100"
-                      : focus === "statement_balances" &&
-                          (paymentOverdue || paymentDueSoon)
-                        ? "border-red-300 ring-2 ring-red-100"
-                        : "border-slate-200"
-                  }`}
-                  key={card.id}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h2 className="text-xl font-semibold">{card.nickname}</h2>
-                      <p className="text-sm text-slate-500">
-                        {card.issuer}
-                        {card.network ? ` · ${card.network}` : ""}
-                        {card.last_four ? ` · ${card.last_four}` : ""}
-                      </p>
-                    </div>
-                    <button
-                      className="h-10 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
-                      onClick={() => openEditModal(card)}
-                      type="button"
-                    >
-                      Edit
-                    </button>
-                  </div>
-
-                  <dl className="grid gap-3 text-sm sm:grid-cols-4">
-                    <div>
-                      <dt className="font-medium text-slate-500">Limit</dt>
-                      <dd className="font-semibold">
-                        {formatAmount(card.credit_limit)}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="font-medium text-slate-500">
-                        Estimated Balance
-                      </dt>
-                      <dd className="font-semibold">
-                        {formatAmount(card.current_balance)}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="font-medium text-slate-500">Utilization</dt>
-                      <dd
-                        className={
-                          utilizationWarning
-                            ? "font-semibold text-red-700"
-                            : "font-semibold"
-                        }
-                      >
-                        {formatPercent(card.utilization_percent)}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="font-medium text-slate-500">Rewards</dt>
-                      <dd className="font-semibold">
-                        {card.reward_program
-                          ? card.reward_program.name
-                          : card.rewards_type}
-                      </dd>
-                    </div>
-                  </dl>
-
-                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
-                        <p className="font-medium text-slate-500">Rule Summary</p>
-                        <p className="mt-1 font-semibold text-slate-950">
-                          {rewardRuleSummary(card)}
-                        </p>
-                      </div>
-                      <Link
-                        className="inline-flex h-8 shrink-0 items-center justify-center rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-white"
-                        href={`/credit-cards/${card.id}`}
-                      >
-                        Manage Rules
-                      </Link>
-                    </div>
-                  </div>
-
-                  {focus === "utilization" ? (
-                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                      <div className="grid gap-3 sm:grid-cols-3">
-                        <div>
-                          <p className="font-medium text-slate-500">
-                            Preferred Utilization
-                          </p>
-                          <p className="font-semibold">
-                            {formatPercent(utilizationThreshold(card))}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="font-medium text-slate-500">
-                            Paydown to Preferred
-                          </p>
-                          <p className="font-semibold">
-                            {formatAmount(
-                              card.payment_needed_for_preferred_utilization,
+                      return (
+                        <tr
+                          className="border-b border-slate-200 align-top last:border-b-0 hover:bg-slate-50"
+                          key={card.id}
+                        >
+                          <td className="px-3 py-2">
+                            <Link
+                              className="font-semibold text-slate-950 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-950"
+                              href={`/credit-cards/${card.id}`}
+                            >
+                              {card.nickname}
+                            </Link>
+                            <div className="text-xs text-slate-500">
+                              {card.last_four ? `•••• ${card.last_four}` : "No last four"}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-slate-700">
+                            <span className="font-medium">{card.issuer}</span>
+                            <span className="block text-xs text-slate-500">
+                              {card.network || "-"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right font-medium tabular-nums">
+                            {formatWholeDollarAmount(card.credit_limit)}
+                          </td>
+                          <td className="px-3 py-2 text-right font-medium tabular-nums">
+                            {formatWholeDollarAmount(card.current_balance)}
+                          </td>
+                          <td className="px-3 py-2 text-right font-medium tabular-nums">
+                            {formatWholeDollarAmount(
+                              card.calculated_available_credit ?? card.available_credit,
                             )}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="font-medium text-slate-500">
-                            Current Exposure
-                          </p>
-                          <p
-                            className={
-                              utilizationWarning
-                                ? "font-semibold text-amber-700"
-                                : "font-semibold"
-                            }
+                          </td>
+                          <td
+                            className={`px-3 py-2 text-right font-semibold tabular-nums ${
+                              utilizationWarning ? "text-red-700" : "text-slate-950"
+                            }`}
                           >
                             {formatPercent(card.utilization_percent)}
-                          </p>
-                        </div>
+                            {utilizationWarning ? (
+                              <span className="ml-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800">
+                                High
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className="px-3 py-2 text-xs font-medium">
+                            <span
+                              className={statementSoon ? "text-amber-700" : "text-slate-700"}
+                            >
+                              {compactUpcomingLabel(
+                                "Close",
+                                card.days_until_statement_close,
+                              )}
+                              {statementSoon ? (
+                                <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                                  Soon
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="mx-1 text-slate-300">·</span>
+                            <span
+                              className={
+                                paymentOverdue
+                                  ? "text-red-700"
+                                  : paymentDueSoon
+                                    ? "text-amber-700"
+                                    : "text-slate-700"
+                              }
+                            >
+                              {compactUpcomingLabel("Due", card.days_until_payment_due)}
+                              {paymentOverdue || paymentDueSoon ? (
+                                <span
+                                  className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                                    paymentOverdue
+                                      ? "bg-red-100 text-red-800"
+                                      : "bg-amber-100 text-amber-800"
+                                  }`}
+                                >
+                                  {paymentOverdue ? "Late" : "Soon"}
+                                </span>
+                              ) : null}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-slate-700">
+                            {compactRewardProgramLabel(card)}
+                          </td>
+                          <td className="max-w-sm px-3 py-2 text-xs font-medium text-slate-700">
+                            <span className="block truncate" title={rewardRuleSummary(card)}>
+                              {rewardRuleSummary(card)}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section className="grid gap-3 xl:hidden">
+              {visibleCards.map((card) => {
+                const utilizationWarning =
+                  (card.utilization_percent ?? 0) > utilizationThreshold(card);
+                const statementSoon =
+                  card.days_until_statement_close !== null &&
+                  card.days_until_statement_close <= 5;
+                const paymentDueSoon = isPaymentDueSoon(card);
+                const paymentOverdue = isPaymentOverdue(card);
+
+                return (
+                  <article
+                    className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+                    key={card.id}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <Link
+                          className="font-semibold text-slate-950 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-950"
+                          href={`/credit-cards/${card.id}`}
+                        >
+                          {card.nickname}
+                        </Link>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {card.issuer}
+                          {card.network ? ` · ${card.network}` : ""}
+                          {card.last_four ? ` · ${card.last_four}` : ""}
+                        </p>
                       </div>
                     </div>
-                  ) : null}
-
-                  {focus === "statement_balances" ? (
-                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                      <div className="grid gap-3 sm:grid-cols-4">
-                        <div>
-                          <p className="font-medium text-slate-500">
-                            Statement Balance
-                          </p>
-                          <p className="font-semibold">
-                            {formatAmount(card.statement_balance)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="font-medium text-slate-500">
-                            Amount Paid
-                          </p>
-                          <p className="font-semibold">
-                            {formatAmount(card.statement_paid_amount)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="font-medium text-slate-500">
-                            Remaining
-                          </p>
-                          <p className="font-semibold">
-                            {formatAmount(card.statement_remaining)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="font-medium text-slate-500">Due</p>
-                          <p
+                    <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                      <div>
+                        <dt className="text-xs font-medium text-slate-500">Limit</dt>
+                        <dd className="font-semibold">
+                          {formatWholeDollarAmount(card.credit_limit)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs font-medium text-slate-500">Balance</dt>
+                        <dd className="font-semibold">
+                          {formatWholeDollarAmount(card.current_balance)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs font-medium text-slate-500">Available</dt>
+                        <dd className="font-semibold">
+                          {formatWholeDollarAmount(
+                            card.calculated_available_credit ?? card.available_credit,
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs font-medium text-slate-500">Utilization</dt>
+                        <dd
+                          className={
+                            utilizationWarning
+                              ? "font-semibold text-red-700"
+                              : "font-semibold"
+                          }
+                        >
+                          {formatPercent(card.utilization_percent)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs font-medium text-slate-500">Statement</dt>
+                        <dd className={statementSoon ? "font-semibold text-amber-700" : "font-semibold"}>
+                          {upcomingLabel(
+                            card.days_until_statement_close,
+                            card.next_statement_close_date,
+                            card.statement_close_day,
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs font-medium text-slate-500">Payment</dt>
+                        <dd
+                          className={
+                            paymentOverdue
+                              ? "font-semibold text-red-700"
+                              : paymentDueSoon
+                                ? "font-semibold text-amber-700"
+                                : "font-semibold"
+                          }
+                        >
+                          {upcomingLabel(
+                            card.days_until_payment_due,
+                            card.payment_due_date,
+                            card.payment_due_day,
+                          )}
+                        </dd>
+                      </div>
+                      <div className="sm:col-span-2">
+                        <dt className="text-xs font-medium text-slate-500">Rewards</dt>
+                        <dd className="font-semibold">{compactRewardProgramLabel(card)}</dd>
+                      </div>
+                      <div className="sm:col-span-2">
+                        <dt className="text-xs font-medium text-slate-500">Dates</dt>
+                        <dd className="font-semibold">
+                          <span className={statementSoon ? "text-amber-700" : ""}>
+                            {compactUpcomingLabel(
+                              "Close",
+                              card.days_until_statement_close,
+                            )}
+                          </span>
+                          <span className="mx-1 text-slate-300">·</span>
+                          <span
                             className={
                               paymentOverdue
-                                ? "font-semibold text-red-700"
+                                ? "text-red-700"
                                 : paymentDueSoon
-                                  ? "font-semibold text-amber-700"
-                                  : "font-semibold"
+                                  ? "text-amber-700"
+                                  : ""
                             }
                           >
-                            {card.payment_due_date ?? "Day "}
-                            {card.payment_due_date
-                              ? ""
-                              : card.payment_due_day ?? "-"}
-                          </p>
-                        </div>
+                            {compactUpcomingLabel("Due", card.days_until_payment_due)}
+                          </span>
+                        </dd>
                       </div>
-                      <p
-                        className={`mt-2 text-xs font-semibold ${
-                          paymentOverdue
-                            ? "text-red-700"
-                            : paymentDueSoon
-                              ? "text-amber-700"
-                              : "text-slate-500"
-                        }`}
-                      >
-                        Payment due in {card.days_until_payment_due ?? "-"} days
-                        {Number(card.minimum_payment_due ?? 0) > 0
-                          ? ` · Minimum due ${formatAmount(
-                              card.minimum_payment_due,
-                            )}`
-                          : ""}
-                      </p>
-                    </div>
-                  ) : null}
-
-                  {card.signup_bonus_spend ? (
-                    <div>
-                      <div className="flex justify-between text-sm">
-                        <span className="font-medium text-slate-600">
-                          MSR Progress
-                        </span>
-                        <span>
-                          {formatAmount(card.current_spend_progress)} /{" "}
-                          {formatAmount(card.signup_bonus_spend)}
-                        </span>
-                      </div>
-                      <div className="mt-2 h-3 overflow-hidden rounded-full bg-slate-100">
-                        <div
-                          className="h-full rounded-full bg-emerald-600"
-                          style={{ width: `${progress}%` }}
-                        />
-                      </div>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Remaining: {formatAmount(card.msr_remaining)}
-                      </p>
-                    </div>
-                  ) : null}
-
-                  <div className="flex flex-wrap gap-2 text-xs font-semibold">
-                    <span
-                      className={`rounded-full px-2 py-1 ${
-                        statementSoon
-                          ? "bg-amber-100 text-amber-800"
-                          : "bg-slate-100 text-slate-700"
-                      }`}
-                    >
-                      Statement closes in{" "}
-                      {card.days_until_statement_close ?? "-"} days
-                    </span>
-                    <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
-                      Payment due in {card.days_until_payment_due ?? "-"} days
-                    </span>
-                    {deadlineSoon ? (
-                      <span className="rounded-full bg-red-100 px-2 py-1 text-red-800">
-                        MSR deadline soon
-                      </span>
-                    ) : null}
-                  </div>
-                </article>
-              );
-            })}
-          </section>
+                    </dl>
+                    <p className="mt-3 truncate rounded-md border border-slate-200 bg-slate-50 p-2 text-xs font-medium text-slate-700">
+                      {rewardRuleSummary(card)}
+                    </p>
+                  </article>
+                );
+              })}
+            </section>
+          </>
         )}
       </div>
 
