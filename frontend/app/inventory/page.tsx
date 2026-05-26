@@ -120,10 +120,56 @@ const sections = [
   { title: "Available", statuses: ["VERIFIED_AVAILABLE"] },
   {
     title: "Awaiting Payment",
-    statuses: ["SOLD_PENDING_PAYMENT", "PARTIALLY_SETTLED", "SOLD"],
+    statuses: ["SOLD_PENDING_PAYMENT", "PARTIALLY_SETTLED"],
   },
-  { title: "Settled/Sold", statuses: ["SETTLED"] },
+  { title: "Settled/Sold", statuses: ["SOLD", "SETTLED"] },
 ];
+
+const inventoryLifecycleFilters = [
+  {
+    value: "open",
+    label: "Open Inventory",
+    statuses: [
+      "NEEDS_VERIFICATION",
+      "VERIFIED_AVAILABLE",
+      "SOLD_PENDING_PAYMENT",
+      "PARTIALLY_SETTLED",
+    ],
+  },
+  {
+    value: "needs_verification",
+    label: "Needs Verification",
+    statuses: ["NEEDS_VERIFICATION"],
+  },
+  {
+    value: "available",
+    label: "Available",
+    statuses: ["VERIFIED_AVAILABLE"],
+  },
+  {
+    value: "awaiting_payment",
+    label: "Awaiting Payment",
+    statuses: ["SOLD_PENDING_PAYMENT", "PARTIALLY_SETTLED"],
+  },
+  {
+    value: "sold",
+    label: "Sold",
+    statuses: ["SOLD"],
+  },
+  {
+    value: "settled",
+    label: "Settled",
+    statuses: ["SETTLED"],
+  },
+  {
+    value: "all",
+    label: "All",
+    statuses: null,
+  },
+] as const;
+
+type InventoryLifecycleFilter =
+  (typeof inventoryLifecycleFilters)[number]["value"];
 
 const inventoryFilterLabels: Record<string, string> = {
   available: "Available Inventory",
@@ -137,6 +183,27 @@ const inventoryFilterLabels: Record<string, string> = {
 const inventoryMetricLabels: Record<string, string> = {
   turnover: "Inventory Turnover",
 };
+
+function lifecycleFilterForStatus(
+  statusFilter: string | null,
+): InventoryLifecycleFilter | null {
+  if (
+    statusFilter === "awaiting_verification" ||
+    statusFilter === "needs_verification"
+  ) {
+    return "needs_verification";
+  }
+  if (statusFilter === "available") {
+    return "available";
+  }
+  if (statusFilter === "awaiting_payment") {
+    return "awaiting_payment";
+  }
+  if (statusFilter === "settled") {
+    return "settled";
+  }
+  return null;
+}
 
 function todayString() {
   return new Date().toISOString().slice(0, 10);
@@ -302,8 +369,12 @@ function statusLabel(status: string) {
     return "Available";
   }
 
-  if (status === "SOLD_PENDING_PAYMENT" || status === "SOLD") {
+  if (status === "SOLD_PENDING_PAYMENT") {
     return "Awaiting Payment";
+  }
+
+  if (status === "SOLD") {
+    return "Sold";
   }
 
   if (status === "SETTLED") {
@@ -570,6 +641,8 @@ function InventoryContent() {
   const [saleFuelSelections, setSaleFuelSelections] = useState<FuelSelection[]>([]);
   const [includeFuelInSale, setIncludeFuelInSale] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [lifecycleFilter, setLifecycleFilter] =
+    useState<InventoryLifecycleFilter>("open");
   const [isBulkMode, setIsBulkMode] = useState(false);
   const [isSellModalOpen, setIsSellModalOpen] = useState(false);
   const [sellerExportCards, setSellerExportCards] = useState<GiftCard[]>([]);
@@ -683,8 +756,23 @@ function InventoryContent() {
     const normalizedSearch = searchQuery.trim().toLowerCase();
     const statusFilter = searchParams.get("status");
     const metricFilter = searchParams.get("metric");
+    const urlLifecycleFilter = lifecycleFilterForStatus(statusFilter);
+    const effectiveLifecycleFilter =
+      urlLifecycleFilter ??
+      (statusFilter || metricFilter ? "all" : lifecycleFilter);
+    const lifecycleStatuses =
+      inventoryLifecycleFilters.find(
+        (filter) => filter.value === effectiveLifecycleFilter,
+      )?.statuses ?? null;
 
     const cards = giftCards.filter((card) => {
+        if (
+          lifecycleStatuses &&
+          !lifecycleStatuses.some((status) => status === card.status)
+        ) {
+          return false;
+        }
+
         if (
           (statusFilter === "awaiting_verification" ||
             statusFilter === "needs_verification") &&
@@ -699,7 +787,7 @@ function InventoryContent() {
 
         if (
           statusFilter === "awaiting_payment" &&
-          !["SOLD_PENDING_PAYMENT", "PARTIALLY_SETTLED", "SOLD"].includes(
+          !["SOLD_PENDING_PAYMENT", "PARTIALLY_SETTLED"].includes(
             card.status,
           )
         ) {
@@ -751,12 +839,20 @@ function InventoryContent() {
     }
 
     return cards;
-  }, [giftCards, searchParams, searchQuery]);
+  }, [giftCards, lifecycleFilter, searchParams, searchQuery]);
   const statusFilter = searchParams.get("status");
   const metricFilter = searchParams.get("metric");
   const activeInventoryFilterLabel =
     (statusFilter ? inventoryFilterLabels[statusFilter] : null) ??
     (metricFilter ? inventoryMetricLabels[metricFilter] : null);
+  const visibleSectionData = sections
+    .map((section) => ({
+      ...section,
+      cards: filteredCards.filter((card) =>
+        section.statuses.includes(card.status),
+      ),
+    }))
+    .filter((section) => section.cards.length > 0);
 
   function openSellSelected() {
     setSaleCardIds(selectedIds);
@@ -967,6 +1063,28 @@ function InventoryContent() {
           </label>
         </header>
 
+        <section className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <label className="flex flex-col gap-2 text-sm font-medium text-slate-700 sm:flex-row sm:items-center">
+            <span>Lifecycle</span>
+            <select
+              className="h-10 min-w-48 rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              onChange={(event) =>
+                setLifecycleFilter(event.target.value as InventoryLifecycleFilter)
+              }
+              value={lifecycleFilter}
+            >
+              {inventoryLifecycleFilters.map((filter) => (
+                <option key={filter.value} value={filter.value}>
+                  {filter.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-sm font-medium text-slate-500">
+            {filteredCards.length} of {giftCards.length} cards
+          </p>
+        </section>
+
         {isBulkMode ? (
           <section className="sticky top-2 z-20 flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between md:static">
             <div>
@@ -1022,16 +1140,20 @@ function InventoryContent() {
           <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
             Loading inventory...
           </div>
+        ) : filteredCards.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
+            <h2 className="text-lg font-semibold">No cards found</h2>
+            <p className="mt-2 text-sm text-slate-500">
+              No inventory matches the current lifecycle, search, or dashboard
+              filter.
+            </p>
+          </div>
         ) : (
           <div className="space-y-6">
-            {sections.map((section) => {
-              const cards = filteredCards.filter((card) =>
-                section.statuses.includes(card.status),
-              );
-
+            {visibleSectionData.map((section) => {
               return (
                 <InventorySection
-                  cards={cards}
+                  cards={section.cards}
                   isSaving={isSaving}
                   isBulkMode={isBulkMode}
                   key={section.title}
