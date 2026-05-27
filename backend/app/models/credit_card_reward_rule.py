@@ -8,6 +8,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 
+DEFAULT_REWARD_RULE_START_DATE = date(1970, 1, 1)
+
+
 class CreditCardRewardRule(Base):
     __tablename__ = "credit_card_reward_rules"
 
@@ -33,7 +36,11 @@ class CreditCardRewardRule(Base):
     multiplier: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
     value: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
     priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
-    effective_start_date: Mapped[date] = mapped_column(Date, default=date.today, nullable=False)
+    effective_start_date: Mapped[date] = mapped_column(
+        Date,
+        default=lambda: DEFAULT_REWARD_RULE_START_DATE,
+        nullable=False,
+    )
     effective_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
