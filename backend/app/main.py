@@ -52,7 +52,6 @@ app = FastAPI(title="MS Tracker API")
 DEFAULT_CORS_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "http://192.168.4.134:3000",
 ]
 
 
