@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.card_brands import router as card_brands_router
+from app.api.auth import router as auth_router
 from app.api.card_issuers import router as card_issuers_router
 from app.api.card_networks import router as card_networks_router
 from app.api.buyers import router as buyers_router
@@ -73,6 +74,7 @@ app.add_middleware(
 )
 
 app.include_router(purchase_batches_router)
+app.include_router(auth_router)
 app.include_router(gift_cards_router)
 app.include_router(stores_router)
 app.include_router(card_brands_router)
