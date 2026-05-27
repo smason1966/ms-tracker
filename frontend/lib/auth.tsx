@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 
-import { API_BASE_URL } from "@/lib/api";
+import { API_BASE_URL, installAuthenticatedFetch } from "@/lib/api";
 
 type AdminSession = {
   id: number;
@@ -82,6 +82,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     AUTH_ENABLED ? "loading" : "disabled",
   );
   const [admin, setAdmin] = useState<AdminSession | null>(null);
+
+  useEffect(() => {
+    installAuthenticatedFetch();
+  }, []);
 
   const refreshSession = useCallback(async () => {
     if (!AUTH_ENABLED) {

@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     sqlalchemy_echo: bool = False
     auth_enabled: bool = False
     auth_dev_bypass: bool = False
+    auth_public_docs: bool = False
     session_secret: str | None = None
     session_cookie_name: str = "dotopoly_session"
     session_cookie_secure: bool = True

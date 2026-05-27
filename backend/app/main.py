@@ -32,6 +32,7 @@ from app.api.reward_programs import router as reward_programs_router
 from app.api.data_transfer import router as data_transfer_router
 from app.api.retention import router as retention_router
 from app.db.session import SessionLocal
+from app.middleware.auth_guard import AuthGuardMiddleware
 from app.services.attachment_schema import ensure_attachment_schema
 from app.services.card_brand_defaults import ensure_card_brand_defaults
 from app.services.card_image_schema import ensure_card_image_schema
@@ -72,6 +73,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AuthGuardMiddleware)
 
 app.include_router(purchase_batches_router)
 app.include_router(auth_router)
