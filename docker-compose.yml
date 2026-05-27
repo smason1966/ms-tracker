@@ -9,7 +9,7 @@ services:
       - web_node_modules:/app/node_modules
       - web_next_cache:/app/.next
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://192.168.4.134:8000
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     command: npm run dev -- --hostname 0.0.0.0
     depends_on:
       - api
@@ -29,6 +29,9 @@ services:
       STORAGE_BACKEND: local
       UPLOAD_ROOT: /app/uploads
       UPLOADS_DIR: /app/uploads
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
+      REQUIRE_FIELD_ENCRYPTION_KEY: ${REQUIRE_FIELD_ENCRYPTION_KEY:-true}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       - db
