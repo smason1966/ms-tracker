@@ -328,7 +328,7 @@ export default function FuelAccountBarcodePage() {
   const loyaltyId = account?.alt_id || account?.email || barcodeValue || "No ID";
 
   return (
-    <main className="min-h-screen bg-white px-3 py-1.5 text-slate-950 sm:py-3">
+    <main className="min-h-screen bg-white px-3 py-1.5 pb-[calc(4.75rem+env(safe-area-inset-bottom))] text-slate-950 sm:py-3 sm:pb-3">
       <div className="mx-auto flex min-h-[calc(100svh-0.75rem)] max-w-md flex-col sm:min-h-[calc(100svh-1.5rem)]">
         {isLoading ? (
           <div className="flex flex-1 items-center justify-center text-lg font-semibold text-slate-600">
@@ -397,7 +397,7 @@ export default function FuelAccountBarcodePage() {
               </div>
             </section>
 
-            <nav className="sticky bottom-0 mt-1.5 grid grid-cols-2 gap-2 bg-white pb-[env(safe-area-inset-bottom)] pt-1">
+            <nav className="fixed inset-x-0 bottom-0 z-20 mx-auto grid w-full max-w-md grid-cols-2 gap-2 border-t border-slate-200 bg-white/95 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-2 shadow-2xl shadow-slate-900/10 backdrop-blur sm:static sm:mt-1.5 sm:border-t-0 sm:bg-white sm:px-0 sm:pb-0 sm:pt-1 sm:shadow-none sm:backdrop-blur-none">
               <Link
                 className="flex h-12 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-base font-bold text-slate-800 transition hover:bg-slate-100 active:bg-slate-200"
                 href={
