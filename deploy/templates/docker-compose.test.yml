@@ -1,0 +1,45 @@
+services:
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://test.dotopoly.com/api}
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://test.dotopoly.com/api}
+    ports:
+      - "127.0.0.1:3002:3000"
+    command: sh -c "npm run build && npm run start"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+    env_file:
+      - ${TEST_ENV_FILE:-/opt/dotopoly/env/test.env}
+    ports:
+      - "127.0.0.1:8002:8000"
+    volumes:
+      - type: bind
+        source: /opt/dotopoly/data/dev/uploads
+        target: /app/uploads
+    depends_on:
+      - db
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+
+  db:
+    image: postgres:16
+    env_file:
+      - ${TEST_ENV_FILE:-/opt/dotopoly/env/test.env}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - dotopoly_test_postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  dotopoly_test_postgres_data:
