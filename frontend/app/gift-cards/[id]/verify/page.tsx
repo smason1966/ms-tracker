@@ -4461,9 +4461,9 @@ export default function GiftCardVerificationPage() {
                       <span className="sr-only">Rotate Right</span>
                     </button>
                     <button
-                        className={`h-10 cursor-pointer rounded-md px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:bg-slate-400 ${
-                          hasUnsavedPreviewRotation
-                            ? "border border-amber-400 bg-slate-950 text-amber-200 shadow-[0_0_0_3px_rgba(251,191,36,0.2)] hover:border-amber-300 hover:bg-amber-950/40 hover:text-amber-100"
+                      className={`h-10 cursor-pointer rounded-md px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:bg-slate-400 ${
+                        hasUnsavedPreviewRotation
+                            ? "border border-amber-500/70 bg-amber-950/40 text-amber-100 shadow-[0_0_0_1px_rgba(245,158,11,0.18)] hover:border-amber-400 hover:bg-amber-900/45 hover:text-amber-50"
                             : "bg-slate-950 text-white hover:bg-slate-800"
                         }`}
                       disabled={isRescanningImage || isSavingOcrOrientation}
@@ -4502,7 +4502,7 @@ export default function GiftCardVerificationPage() {
                     <span
                       className={`inline-flex h-10 items-center rounded-full border px-2.5 text-xs font-semibold ${
                         hasUnsavedPreviewRotation
-                          ? "border-amber-300 bg-amber-100 text-amber-950"
+                          ? "border-amber-500/60 bg-amber-950/45 text-amber-100"
                           : canonicalReady
                             ? "border-emerald-200 bg-emerald-50 text-emerald-800"
                             : "border-slate-200 bg-slate-50 text-slate-600"
@@ -4665,7 +4665,7 @@ export default function GiftCardVerificationPage() {
                           ) : null}
                         </div>
                       ) : hasUnsavedPreviewRotation ? (
-                        <div className="absolute inset-x-2 bottom-2 rounded-md border border-amber-300 bg-amber-50/95 px-2 py-1.5 text-xs font-semibold text-amber-900 shadow">
+                        <div className="absolute inset-x-2 bottom-2 rounded-md border border-amber-500/60 bg-amber-950/80 px-2 py-1.5 text-xs font-semibold text-amber-100 shadow-lg backdrop-blur-sm">
                           Unsaved rotation. Set as OCR orientation to persist.
                         </div>
                       ) : null}
