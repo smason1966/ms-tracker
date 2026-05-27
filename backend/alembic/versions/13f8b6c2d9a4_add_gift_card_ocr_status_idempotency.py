@@ -21,14 +21,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "gift_cards",
-        sa.Column(
-            "ocr_status",
-            sa.String(length=50),
-            server_default="pending",
-            nullable=False,
-        ),
+    op.execute(
+        "ALTER TABLE gift_cards "
+        "ADD COLUMN IF NOT EXISTS ocr_status VARCHAR(50) DEFAULT 'pending' NOT NULL"
     )
     op.add_column(
         "gift_cards",
@@ -49,4 +44,3 @@ def downgrade() -> None:
         type_="unique",
     )
     op.drop_column("gift_cards", "intake_idempotency_key")
-    op.drop_column("gift_cards", "ocr_status")
