@@ -1,3 +1,4 @@
+import os
 import threading
 
 from fastapi import FastAPI
@@ -47,12 +48,25 @@ from app.services.upload_storage import (
 ensure_upload_directories()
 app = FastAPI(title="MS Tracker API")
 
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://192.168.4.134:3000",
+]
+
+
+def cors_origins() -> list[str]:
+    configured_origins = [
+        origin.strip()
+        for origin in os.getenv("CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    return list(dict.fromkeys([*DEFAULT_CORS_ORIGINS, *configured_origins]))
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://192.168.4.134:3000",
-    ],
+    allow_origins=cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
