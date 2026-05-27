@@ -23,6 +23,27 @@ These files are sanitized templates for the Dotopoly test/staging VPS. They are 
   - Copy to `/opt/dotopoly/env/test.env`.
   - Replace every `change-me` / placeholder value with server-local secrets.
 
+- `docker-compose.prod.yml`
+  - Copy to `/opt/dotopoly/app/docker-compose.prod.yml`.
+  - Runs production web on `127.0.0.1:3001`, API on `127.0.0.1:8001`, Postgres 16 with `dotopoly_prod_postgres_data`, and binds uploads from `/opt/dotopoly/data/prod/uploads` to `/app/uploads`.
+
+- `nginx-dotopoly-prod.conf`
+  - Copy to `/etc/nginx/sites-available/dotopoly-prod`.
+  - Symlink into `/etc/nginx/sites-enabled/`.
+  - Proxies `https://dotopoly.com/` to the frontend and `https://dotopoly.com/api/` plus optional `https://api.dotopoly.com/` to the API.
+  - References optional Basic Auth at `/etc/nginx/.htpasswd-dotopoly-prod`.
+  - Basic Auth is only a temporary outer gate; long-term production should use real app auth and MFA.
+
+- `backup-prod.sh`
+  - Copy to `/opt/dotopoly/backup-prod.sh`.
+  - Make executable with `chmod 700 /opt/dotopoly/backup-prod.sh`.
+  - Backs up the production Postgres database and uploads directory into `/opt/dotopoly/data/backups/prod`.
+
+- `prod.env.example`
+  - Copy to `/opt/dotopoly/env/prod.env`.
+  - Replace every `change-me` / placeholder value with production secrets.
+  - The production `FIELD_ENCRYPTION_KEY` must be generated separately and must not match staging or local keys.
+
 ## Setup Sketch
 
 ```sh
@@ -43,4 +64,11 @@ cd /opt/dotopoly/app
 docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml up -d --build
 ```
 
-Never commit `/opt/dotopoly/env/test.env`, `.env`, htpasswd files, TLS private keys, database dumps, or generated backups.
+For production, use the production env file:
+
+```sh
+cd /opt/dotopoly/app
+docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml up -d --build
+```
+
+Never commit `/opt/dotopoly/env/test.env`, `/opt/dotopoly/env/prod.env`, `.env`, htpasswd files, TLS private keys, database dumps, generated backups, uploaded card images, receipt images, or OCR artifacts. Uploaded images and backups are sensitive production data.
