@@ -63,7 +63,7 @@ def test_missing_acquisition_cost_defaults_to_face_value(monkeypatch):
         )
     )
 
-    assert card.acquisition_cost == Decimal("500")
+    assert card["acquisition_cost"] == Decimal("500")
 
 
 def test_explicit_acquisition_cost_is_preserved(monkeypatch):
@@ -83,7 +83,7 @@ def test_explicit_acquisition_cost_is_preserved(monkeypatch):
         )
     )
 
-    assert card.acquisition_cost == Decimal("79.99")
+    assert card["acquisition_cost"] == Decimal("79.99")
 
 
 def test_unsold_card_value_cost_correction_is_allowed(monkeypatch):
