@@ -610,9 +610,10 @@ export default function RapidCardIntakePage() {
     Boolean(brandsError) ||
     cardBrands.length === 0 ||
     !form.acquisition_cost.trim();
+  const saveButtonLabel = isSubmitting ? "Saving..." : "Save Gift Card";
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-6 pb-28 text-slate-950 sm:pb-6">
+    <main className="min-h-screen bg-slate-50 px-4 py-6 pb-[calc(9.5rem+env(safe-area-inset-bottom))] text-slate-950 sm:pb-6">
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col">
         <header className="pb-5">
           <p className="text-sm font-medium text-slate-500">Card Intake</p>
@@ -881,6 +882,26 @@ export default function RapidCardIntakePage() {
                 placeholder="Optional"
               />
             </label>
+
+            <div className="hidden border-t border-slate-200 pt-5 sm:flex sm:items-center sm:justify-between sm:gap-3">
+              {giftCards.length > 0 ? (
+                <Link
+                  className="flex h-12 items-center justify-center rounded-md border border-slate-300 bg-white px-5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100 hover:text-slate-950"
+                  href={`/purchases/${purchaseId}`}
+                >
+                  Finish Intake
+                </Link>
+              ) : (
+                <span />
+              )}
+              <button
+                className="h-12 min-w-48 rounded-md bg-slate-900 px-5 text-base font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                disabled={isSubmitDisabled}
+                type="submit"
+              >
+                {saveButtonLabel}
+              </button>
+            </div>
           </section>
 
           <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -1015,22 +1036,24 @@ export default function RapidCardIntakePage() {
             )}
           </section>
 
-          <div className="sticky bottom-0 mt-auto border-t border-slate-200 bg-slate-50/95 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur sm:border-t-0 sm:bg-slate-50 sm:pt-4 sm:backdrop-blur-none">
-            <button
-              className="h-12 w-full rounded-md bg-slate-900 px-5 text-base font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-              type="submit"
-              disabled={isSubmitDisabled}
-            >
-              {isSubmitting ? "Saving..." : "Save Gift Card"}
-            </button>
-            {giftCards.length > 0 ? (
-              <Link
-                className="mt-2 flex h-11 w-full items-center justify-center rounded-md border border-slate-400 bg-white px-4 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-100 hover:text-slate-950"
-                href={`/purchases/${purchaseId}`}
+          <div className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-700 bg-slate-950/95 px-4 pb-[calc(0.875rem+env(safe-area-inset-bottom))] pt-3 shadow-2xl shadow-slate-950/30 backdrop-blur sm:hidden">
+            <div className="mx-auto max-w-md">
+              <button
+                className="h-12 w-full rounded-md bg-white px-5 text-base font-semibold text-slate-950 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-slate-600 disabled:text-slate-300"
+                type="submit"
+                disabled={isSubmitDisabled}
               >
-                Finish Intake
-              </Link>
-            ) : null}
+                {saveButtonLabel}
+              </button>
+              {giftCards.length > 0 ? (
+                <Link
+                  className="mt-2 flex h-11 w-full items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-4 text-sm font-semibold text-slate-100 shadow-sm transition hover:bg-slate-800 hover:text-white"
+                  href={`/purchases/${purchaseId}`}
+                >
+                  Finish Intake
+                </Link>
+              ) : null}
+            </div>
           </div>
         </form>
       </div>
