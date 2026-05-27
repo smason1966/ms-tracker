@@ -683,6 +683,9 @@ export default function PurchaseIntakePage() {
     hasPaymentMismatch ||
     hasMissingCreditCardPayment ||
     hasBlankPaymentRows;
+  const continueButtonLabel = isSubmitting
+    ? "Saving..."
+    : "Continue to Card Intake";
 
   function submitFromMobileCta() {
     if (isSubmitDisabled || touchSubmitRequestedRef.current) {
@@ -697,7 +700,7 @@ export default function PurchaseIntakePage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-6 pb-36 text-slate-950 sm:pb-6">
+    <main className="min-h-screen bg-slate-50 px-4 py-6 pb-[calc(8rem+env(safe-area-inset-bottom))] text-slate-950 sm:pb-6">
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col sm:max-w-2xl">
         <header className="pb-5">
           <p className="text-sm font-medium text-slate-500">Purchase Intake</p>
@@ -1275,6 +1278,15 @@ export default function PurchaseIntakePage() {
               />
             </label>
 
+            <div className="hidden border-t border-slate-200 pt-5 sm:flex sm:justify-end">
+              <button
+                className="h-12 min-w-56 rounded-md bg-slate-900 px-5 text-base font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                disabled={isSubmitDisabled}
+                type="submit"
+              >
+                {continueButtonLabel}
+              </button>
+            </div>
           </section>
 
           {submitError ? (
@@ -1289,10 +1301,10 @@ export default function PurchaseIntakePage() {
             </div>
           ) : null}
 
-          <div className="fixed inset-x-0 bottom-0 z-20 mt-auto border-t border-slate-200 bg-slate-50/95 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur sm:sticky sm:border-t-0 sm:bg-slate-50 sm:px-0 sm:pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pt-4 sm:backdrop-blur-none">
-            <div className="mx-auto max-w-md sm:max-w-none">
+          <div className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-700 bg-slate-950/95 px-4 pb-[calc(0.875rem+env(safe-area-inset-bottom))] pt-3 shadow-2xl shadow-slate-950/30 backdrop-blur sm:hidden">
+            <div className="mx-auto max-w-md">
               <button
-                className="h-12 w-full rounded-md bg-slate-900 px-5 text-base font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                className="h-12 w-full rounded-md bg-white px-5 text-base font-semibold text-slate-950 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-slate-600 disabled:text-slate-300"
                 disabled={isSubmitDisabled}
                 onClick={(event) => {
                   if (touchSubmitRequestedRef.current) {
@@ -1309,7 +1321,7 @@ export default function PurchaseIntakePage() {
                 }}
                 type="submit"
               >
-                {isSubmitting ? "Saving..." : "Continue to Card Intake"}
+                {continueButtonLabel}
               </button>
             </div>
           </div>
