@@ -1,3 +1,5 @@
+name dotopoly-prod
+
 services:
   web:
     build:

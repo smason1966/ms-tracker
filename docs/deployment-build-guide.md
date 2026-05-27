@@ -196,3 +196,10 @@ Production must have separate values for:
 Do not reuse staging or local encryption/session keys in production. Losing `FIELD_ENCRYPTION_KEY` means existing encrypted sensitive fields cannot be decrypted. Exposing it compromises all encrypted data.
 
 Basic Auth can remain as a temporary outer gate, but production should rely on real app authentication and should add MFA/TOTP before broad use with real data.
+
+
+Both staging and production compose files must define unique project names:
+- staging: name: dotopoly-test
+- production: name: dotopoly-prod
+
+This prevents docker compose from defaulting to the app directory name and replacing the wrong containers.
