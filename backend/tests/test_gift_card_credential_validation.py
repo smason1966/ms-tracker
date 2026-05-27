@@ -2,6 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -25,6 +26,18 @@ from app.models.sale import Sale
 from app.models.sale_gift_card import SaleGiftCard
 from app.models.spending_category import SpendingCategory
 from app.models.store import Store
+from app.services.field_encryption import (
+    ENCRYPTED_FIELD_PREFIX,
+    _fernet,
+)
+
+
+@pytest.fixture(autouse=True)
+def field_encryption_key(monkeypatch):
+    monkeypatch.setenv("FIELD_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    _fernet.cache_clear()
+    yield
+    _fernet.cache_clear()
 
 
 def make_session_factory():
@@ -78,6 +91,14 @@ def test_best_buy_16_digit_card_and_4_digit_pin_pass(monkeypatch):
 
     assert updated["confirmed_card_number"] == "6332260074021047"
     assert updated["confirmed_pin"] == "1350"
+
+    db = session_factory()
+    stored = db.get(GiftCard, card_id)
+    assert stored.confirmed_card_number != "6332260074021047"
+    assert stored.confirmed_pin != "1350"
+    assert stored.confirmed_card_number.startswith(ENCRYPTED_FIELD_PREFIX)
+    assert stored.confirmed_pin.startswith(ENCRYPTED_FIELD_PREFIX)
+    db.close()
 
 
 def test_best_buy_wrong_card_length_fails(monkeypatch):
@@ -137,6 +158,14 @@ def test_nike_19_digit_card_and_6_digit_pin_pass(monkeypatch):
 
     assert updated["confirmed_card_number"] == "6060106122253740414"
     assert updated["confirmed_pin"] == "562132"
+
+    db = session_factory()
+    stored = db.get(GiftCard, card_id)
+    assert stored.confirmed_card_number != "6060106122253740414"
+    assert stored.confirmed_pin != "562132"
+    assert stored.confirmed_card_number.startswith(ENCRYPTED_FIELD_PREFIX)
+    assert stored.confirmed_pin.startswith(ENCRYPTED_FIELD_PREFIX)
+    db.close()
 
 
 def test_nike_wrong_card_length_fails(monkeypatch):

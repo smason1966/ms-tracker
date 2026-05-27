@@ -6,7 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,7 @@ from app.models.purchase_batch import PurchaseBatch
 from app.models.sale import Sale
 from app.models.sale_event import SaleEvent
 from app.models.sale_gift_card import SaleGiftCard
+from app.services.field_encryption import decrypt_field, encrypt_field
 from app.services.purchase_allocation import recalculate_purchase_allocation
 
 
@@ -108,6 +109,15 @@ def normalize_card_source(value: str | None) -> str:
     return "physical"
 
 
+def encrypt_credential_value(value: str | None) -> str | None:
+    cleaned = clean_credential_value(value)
+    return encrypt_field(cleaned) if cleaned is not None else None
+
+
+def decrypt_credential_value(value: str | None) -> str | None:
+    return clean_credential_value(decrypt_field(value))
+
+
 @router.post("/")
 def create_gift_card(payload: GiftCardCreate):
     db: Session = SessionLocal()
@@ -149,11 +159,15 @@ def create_gift_card(payload: GiftCardCreate):
             status="VERIFIED_AVAILABLE"
             if card_source == "digital" and has_manual_credential
             else "NEEDS_VERIFICATION",
-            card_number_encrypted=confirmed_redemption_code or confirmed_card_number,
-            pin_encrypted=confirmed_pin,
-            confirmed_card_number=confirmed_card_number,
-            confirmed_pin=confirmed_pin,
-            confirmed_redemption_code=confirmed_redemption_code,
+            card_number_encrypted=encrypt_credential_value(
+                confirmed_redemption_code or confirmed_card_number
+            ),
+            pin_encrypted=encrypt_credential_value(confirmed_pin),
+            confirmed_card_number=encrypt_credential_value(confirmed_card_number),
+            confirmed_pin=encrypt_credential_value(confirmed_pin),
+            confirmed_redemption_code=encrypt_credential_value(
+                confirmed_redemption_code
+            ),
             confirmed_at=datetime.utcnow()
             if card_source == "digital" and has_manual_credential
             else None,
@@ -191,7 +205,7 @@ def create_gift_card(payload: GiftCardCreate):
         db.commit()
         db.refresh(card)
 
-        return card
+        return serialize_gift_card(card, db)
 
     finally:
         db.close()
@@ -496,19 +510,19 @@ def validate_brand_credentials(
 
 
 def locked_card_number(card: GiftCard) -> str | None:
-    return clean_credential_value(card.confirmed_card_number) or clean_credential_value(
+    return decrypt_credential_value(card.confirmed_card_number) or decrypt_credential_value(
         card.card_number_encrypted
     )
 
 
 def locked_pin(card: GiftCard) -> str | None:
-    return clean_credential_value(card.confirmed_pin) or clean_credential_value(
+    return decrypt_credential_value(card.confirmed_pin) or decrypt_credential_value(
         card.pin_encrypted
     )
 
 
 def locked_redemption_code(card: GiftCard) -> str | None:
-    return clean_credential_value(card.confirmed_redemption_code)
+    return decrypt_credential_value(card.confirmed_redemption_code)
 
 
 def locked_primary_credential(card: GiftCard) -> str | None:
@@ -619,14 +633,14 @@ def serialize_gift_card(card: GiftCard, db: Session | None = None) -> dict:
         "rejected_extraction_candidate_count": rejected_extraction_candidate_count,
         "card_number_encrypted": locked_primary_credential(card),
         "pin_encrypted": locked_pin(card),
-        "confirmed_card_number": clean_credential_value(card.confirmed_card_number)
+        "confirmed_card_number": decrypt_credential_value(card.confirmed_card_number)
         or (
-            clean_credential_value(card.card_number_encrypted)
+            decrypt_credential_value(card.card_number_encrypted)
             if not locked_redemption_code(card)
             else None
         ),
-        "confirmed_pin": clean_credential_value(card.confirmed_pin)
-        or clean_credential_value(card.pin_encrypted),
+        "confirmed_pin": decrypt_credential_value(card.confirmed_pin)
+        or decrypt_credential_value(card.pin_encrypted),
         "confirmed_redemption_code": locked_redemption_code(card),
         "confirmed_at": card.confirmed_at,
         "confirmed_source": card.confirmed_source,
@@ -897,28 +911,37 @@ def find_duplicate_card_number(
     card: GiftCard,
     card_number: str,
 ) -> GiftCard | None:
-    return (
+    normalized_card_number = normalize_card_number(card_number)
+    if normalized_card_number is None:
+        return None
+
+    candidate_cards = (
         db.query(GiftCard)
         .filter(GiftCard.id != card.id)
         .filter(GiftCard.brand == card.brand)
-        .filter(
-            or_(
-                func.trim(GiftCard.confirmed_card_number) == card_number,
-                func.trim(GiftCard.confirmed_redemption_code) == card_number,
-                func.trim(GiftCard.card_number_encrypted) == card_number,
-                func.trim(GiftCard.detected_card_number) == card_number,
-            )
-        )
         .order_by(GiftCard.id.asc())
-        .first()
+        .all()
     )
+
+    for candidate_card in candidate_cards:
+        candidate_values = [
+            locked_redemption_code(candidate_card),
+            locked_card_number(candidate_card),
+            candidate_card.detected_card_number,
+        ]
+        if any(
+            normalize_card_number(candidate_value) == normalized_card_number
+            for candidate_value in candidate_values
+        ):
+            return candidate_card
+
+    return None
 
 
 def duplicate_card_number_payload(duplicate_card: GiftCard) -> dict:
     duplicate_number = (
-        normalize_card_number(duplicate_card.confirmed_redemption_code)
-        or normalize_card_number(duplicate_card.confirmed_card_number)
-        or normalize_card_number(duplicate_card.card_number_encrypted)
+        normalize_card_number(locked_redemption_code(duplicate_card))
+        or normalize_card_number(locked_card_number(duplicate_card))
         or normalize_card_number(duplicate_card.detected_card_number)
         or ""
     )
@@ -1584,8 +1607,9 @@ def verify_gift_card(gift_card_id: int, payload: GiftCardVerify):
                     content=duplicate_card_number_payload(duplicate_card),
                 )
         if confirmed_card_number is not None:
-            card.card_number_encrypted = confirmed_card_number
-            card.confirmed_card_number = confirmed_card_number
+            encrypted_card_number = encrypt_credential_value(confirmed_card_number)
+            card.card_number_encrypted = encrypted_card_number
+            card.confirmed_card_number = encrypted_card_number
         elif "confirmed_card_number" in payload_fields:
             card.confirmed_card_number = None
 
@@ -1606,13 +1630,17 @@ def verify_gift_card(gift_card_id: int, payload: GiftCardVerify):
             or "pin" in payload_fields
             or "confirmed_pin" in payload_fields
         ):
-            card.pin_encrypted = confirmed_pin
-            card.confirmed_pin = confirmed_pin
+            encrypted_pin = encrypt_credential_value(confirmed_pin)
+            card.pin_encrypted = encrypted_pin
+            card.confirmed_pin = encrypted_pin
 
         if confirmed_redemption_code is not None or "confirmed_redemption_code" in payload_fields:
-            card.confirmed_redemption_code = confirmed_redemption_code
+            encrypted_redemption_code = encrypt_credential_value(
+                confirmed_redemption_code
+            )
+            card.confirmed_redemption_code = encrypted_redemption_code
             if confirmed_redemption_code is not None:
-                card.card_number_encrypted = confirmed_redemption_code
+                card.card_number_encrypted = encrypted_redemption_code
 
         if payload.verified_balance is not None and not sale_locked:
             card.verified_balance = payload.verified_balance

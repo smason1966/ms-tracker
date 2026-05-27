@@ -35,6 +35,7 @@ from app.services.attachment_schema import ensure_attachment_schema
 from app.services.card_brand_defaults import ensure_card_brand_defaults
 from app.services.card_image_schema import ensure_card_image_schema
 from app.services.gift_card_credential_schema import ensure_gift_card_credential_schema
+from app.services.field_encryption import validate_field_encryption_configuration
 from app.services.ocr_debug import cleanup_ocr_debug_files
 from app.services.retention_schema import ensure_retention_schema
 from app.services.reward_program_categories import load_reward_program_categories
@@ -108,6 +109,7 @@ def health_check():
 
 @app.on_event("startup")
 def ensure_reward_program_defaults():
+    validate_field_encryption_configuration()
     ensure_upload_directories()
     threading.Thread(
         target=cleanup_ocr_debug_files,

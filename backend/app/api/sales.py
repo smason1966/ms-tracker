@@ -25,6 +25,7 @@ from app.models.sale import Sale
 from app.models.sale_event import SaleEvent
 from app.models.sale_fuel_account import SaleFuelAccount
 from app.models.sale_gift_card import SaleGiftCard
+from app.services.field_encryption import decrypt_field, encrypt_field
 from app.services.operational_queues import get_awaiting_payment_sales
 from app.services.upload_storage import physical_upload_path
 from app.services.storage import normalize_object_key, storage
@@ -255,11 +256,12 @@ def card_image_archive_stem(card: GiftCard) -> str:
 
 
 def fuel_account_export_text(row: SaleFuelAccount, account: FuelRewardAccount) -> str:
+    login_password = decrypt_field(account.login_password) or ""
     lines = [
         f"retailer: {account.retailer}",
         f"points_sold: {row.points_sold}",
         f"email_login: {account.email or ''}",
-        f"password: {account.login_password or ''}",
+        f"password: {login_password}",
         f"alt_id: {account.alt_id or ''}",
     ]
     return "\n".join(lines) + "\n"
@@ -370,12 +372,13 @@ def render_asset_export(
 def card_export_values(card: GiftCard) -> dict[str, str]:
     card_number = locked_card_number(card)
     pin = locked_pin(card)
+    redemption_code = decrypt_field(card.confirmed_redemption_code) or ""
     return {
         "brand": card.brand,
         "face_value": str(card.face_value),
         "card_number": card_number,
         "pin": pin,
-        "redemption_code": card.confirmed_redemption_code or "",
+        "redemption_code": redemption_code,
         "confirmed_source": card.confirmed_source or "",
         "export_value_source": "confirmed_credentials" if card_number else "unconfirmed",
         "card_id": str(card.id),
@@ -429,14 +432,15 @@ def fuel_export_values(
     row: SaleFuelAccount,
     account: FuelRewardAccount,
 ) -> dict[str, str]:
+    login_password = decrypt_field(account.login_password) or ""
     return {
         "retailer": account.retailer,
         "points_sold": str(row.points_sold),
         "email_login": account.email or "",
         "email": account.email or "",
         "login": account.email or "",
-        "password": account.login_password or "",
-        "login_password": account.login_password or "",
+        "password": login_password,
+        "login_password": login_password,
         "alt_id": account.alt_id or "",
         "fuel_account_id": str(account.id),
         "account_id": str(account.id),
@@ -739,15 +743,15 @@ def ending(value: str | None, length: int = 4) -> str | None:
 
 def locked_card_number(card: GiftCard) -> str:
     return (
-        card.confirmed_redemption_code
-        or card.confirmed_card_number
-        or card.card_number_encrypted
+        decrypt_field(card.confirmed_redemption_code)
+        or decrypt_field(card.confirmed_card_number)
+        or decrypt_field(card.card_number_encrypted)
         or ""
     )
 
 
 def locked_pin(card: GiftCard) -> str:
-    return card.confirmed_pin or card.pin_encrypted or ""
+    return decrypt_field(card.confirmed_pin) or decrypt_field(card.pin_encrypted) or ""
 
 
 def serialize_card(card: GiftCard, include_secret: bool = False) -> dict:
@@ -778,9 +782,11 @@ def serialize_card(card: GiftCard, include_secret: bool = False) -> dict:
     if include_secret:
         data["card_number_encrypted"] = card_number
         data["pin_encrypted"] = pin
-        data["confirmed_card_number"] = card.confirmed_card_number
-        data["confirmed_pin"] = card.confirmed_pin
-        data["confirmed_redemption_code"] = card.confirmed_redemption_code
+        data["confirmed_card_number"] = decrypt_field(card.confirmed_card_number)
+        data["confirmed_pin"] = decrypt_field(card.confirmed_pin)
+        data["confirmed_redemption_code"] = decrypt_field(
+            card.confirmed_redemption_code
+        )
 
     return data
 
@@ -791,7 +797,7 @@ def serialize_fuel_account(account: FuelRewardAccount, row: SaleFuelAccount | No
         "retailer": account.retailer,
         "email": account.email,
         "alt_id": account.alt_id,
-        "login_password": account.login_password,
+        "login_password": decrypt_field(account.login_password),
         "barcode_image_url": account.barcode_image_url,
         "barcode_value": account.barcode_value,
         "status": account.status,
@@ -1106,7 +1112,7 @@ def sale_matches_query(db: Session, sale: Sale, query: str) -> bool:
                 card.brand,
                 str(card.face_value),
                 str(card.purchase_batch_id),
-                ending(card.card_number_encrypted) or "",
+                ending(locked_card_number(card)) or "",
                 card.notes or "",
             ]
         )
@@ -1508,7 +1514,11 @@ def create_sale(payload: SaleCreate):
             account.expected_payment_date = expected_payment_date
             account.sale_price = expected_value
             if fuel_payload.login_password is not None:
-                account.login_password = fuel_payload.login_password
+                account.login_password = (
+                    encrypt_field(fuel_payload.login_password)
+                    if fuel_payload.login_password
+                    else None
+                )
             account.sale_notes = payload.notes
             if fuel_payload.fuel_overage_override and overage_points > 1000:
                 overage_note = (

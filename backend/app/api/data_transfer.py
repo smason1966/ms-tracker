@@ -26,6 +26,7 @@ from app.models.receipt import Receipt
 from app.models.sale import Sale
 from app.models.sale_fuel_account import SaleFuelAccount
 from app.models.sale_gift_card import SaleGiftCard
+from app.services.field_encryption import encrypt_field
 from app.services.upload_storage import (
     physical_upload_path,
     upload_dir,
@@ -510,12 +511,20 @@ async def apply_transfer(file: UploadFile = File(...), allow_duplicates: bool = 
                 face_value=source.get("face_value") or 0,
                 acquisition_cost=source.get("acquisition_cost"),
                 status=source.get("status") or "NEEDS_VERIFICATION",
-                card_number_encrypted=source.get("card_number_encrypted"),
-                pin_encrypted=source.get("pin_encrypted"),
-                confirmed_card_number=source.get("confirmed_card_number")
-                or source.get("card_number_encrypted"),
-                confirmed_pin=source.get("confirmed_pin") or source.get("pin_encrypted"),
-                confirmed_redemption_code=source.get("confirmed_redemption_code"),
+                card_number_encrypted=encrypt_field(
+                    source.get("card_number_encrypted")
+                ),
+                pin_encrypted=encrypt_field(source.get("pin_encrypted")),
+                confirmed_card_number=encrypt_field(
+                    source.get("confirmed_card_number")
+                    or source.get("card_number_encrypted")
+                ),
+                confirmed_pin=encrypt_field(
+                    source.get("confirmed_pin") or source.get("pin_encrypted")
+                ),
+                confirmed_redemption_code=encrypt_field(
+                    source.get("confirmed_redemption_code")
+                ),
                 confirmed_at=parse_datetime(source.get("confirmed_at")),
                 confirmed_source=source.get("confirmed_source"),
                 sold_to=source.get("sold_to"),
@@ -621,7 +630,7 @@ async def apply_transfer(file: UploadFile = File(...), allow_duplicates: bool = 
                     target_points=source.get("target_points"),
                     barcode_image_url=source.get("barcode_image_url"),
                     barcode_value=source.get("barcode_value"),
-                    login_password=source.get("login_password"),
+                    login_password=encrypt_field(source.get("login_password")),
                     buyer_id=buyer.id if buyer else None,
                     sold_to=source.get("sold_to"),
                     sold_date=parse_date(source.get("sold_date")),

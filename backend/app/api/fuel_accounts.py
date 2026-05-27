@@ -13,6 +13,7 @@ from app.models.fuel_reward_account import FuelRewardAccount
 from app.models.purchase_batch import PurchaseBatch
 from app.services.attachments import record_attachment
 from app.services.barcode import decode_barcodes
+from app.services.field_encryption import decrypt_field, encrypt_field
 from app.services.storage import object_key_for, storage
 from app.services.upload_storage import upload_dir
 
@@ -112,7 +113,7 @@ def account_to_dict(
     }
 
     if include_sensitive:
-        payload["login_password"] = account.login_password
+        payload["login_password"] = decrypt_field(account.login_password)
 
     return payload
 
@@ -218,7 +219,9 @@ def create_fuel_account(payload: FuelRewardAccountCreate):
             retailer=payload.retailer,
             email=payload.email,
             alt_id=payload.alt_id,
-            login_password=payload.login_password,
+            login_password=encrypt_field(payload.login_password)
+            if payload.login_password
+            else None,
             status=payload.status,
             target_points=payload.target_points,
             barcode_image_url=payload.barcode_image_url,
@@ -327,7 +330,10 @@ def update_fuel_account(account_id: int, payload: FuelRewardAccountUpdate):
             raise HTTPException(status_code=404, detail="Fuel account not found")
 
         for field in get_payload_fields(payload):
-            setattr(account, field, getattr(payload, field))
+            value = getattr(payload, field)
+            if field == "login_password":
+                value = encrypt_field(value) if value else None
+            setattr(account, field, value)
 
         account.updated_at = datetime.utcnow()
 

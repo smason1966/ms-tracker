@@ -22,6 +22,7 @@ from app.models.sale import Sale
 from app.models.sale_event import SaleEvent
 from app.models.sale_gift_card import SaleGiftCard
 from app.services.card_image_schema import ensure_card_image_schema
+from app.services.field_encryption import decrypt_field
 from app.services.ocr_debug import cleanup_ocr_debug_files, purge_temp_ocr_crops
 from app.services.retention_schema import ensure_retention_schema
 from app.services.upload_storage import (
@@ -79,9 +80,9 @@ def credential_ending(card: GiftCard | None) -> str | None:
     if not card:
         return None
     value = (
-        (card.confirmed_redemption_code or "").strip()
-        or (card.confirmed_card_number or "").strip()
-        or (card.card_number_encrypted or "").strip()
+        (decrypt_field(card.confirmed_redemption_code) or "").strip()
+        or (decrypt_field(card.confirmed_card_number) or "").strip()
+        or (decrypt_field(card.card_number_encrypted) or "").strip()
     )
     return value[-4:] if value else None
 
@@ -129,7 +130,11 @@ def metadata_for_card_image(db: Session, image: CardImage) -> dict:
             .all()
         ],
         "confirmed_card_ending": credential_ending(card),
-        "confirmed_pin_present": bool((card.confirmed_pin or card.pin_encrypted) if card else False),
+        "confirmed_pin_present": bool(
+            (decrypt_field(card.confirmed_pin) or decrypt_field(card.pin_encrypted))
+            if card
+            else False
+        ),
         "original_filename": image.original_filename,
         "file_path": image.original_image_url,
         "processed_file_path": image.processed_image_url,
