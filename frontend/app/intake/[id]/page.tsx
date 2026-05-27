@@ -29,7 +29,13 @@ type GiftCard = {
   face_value: string | number;
   acquisition_cost: string | number | null;
   status: string;
+  verification_status?: string | null;
+  confirmed_at?: string | null;
   ocr_status?: string | null;
+  card_number_encrypted?: string | null;
+  confirmed_card_number?: string | null;
+  confirmed_pin?: string | null;
+  confirmed_redemption_code?: string | null;
   notes: string | null;
 };
 
@@ -142,6 +148,18 @@ function isRuleEffective(rule: RewardRule, purchaseDate: string) {
   }
 
   return true;
+}
+
+function isGiftCardVerified(giftCard: GiftCard) {
+  return (
+    giftCard.verification_status === "VERIFIED" ||
+    Boolean(giftCard.confirmed_at) ||
+    Boolean(
+      giftCard.confirmed_card_number ||
+        giftCard.confirmed_redemption_code ||
+        giftCard.card_number_encrypted,
+    )
+  );
 }
 
 export default function RapidCardIntakePage() {
@@ -1024,10 +1042,14 @@ export default function RapidCardIntakePage() {
                         {formatAmount(giftCard.face_value)}
                       </p>
                       <Link
-                        className="flex h-9 items-center rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 hover:text-slate-950"
+                        className={`flex h-9 items-center rounded-md px-3 text-xs font-semibold transition ${
+                          isGiftCardVerified(giftCard)
+                            ? "border border-slate-300 text-slate-700 hover:bg-slate-100 hover:text-slate-950"
+                            : "bg-red-700 text-white hover:bg-red-800"
+                        }`}
                         href={`/gift-cards/${giftCard.id}/verify?returnTo=/intake/${purchaseId}`}
                       >
-                        Verify
+                        {isGiftCardVerified(giftCard) ? "Details" : "Verify"}
                       </Link>
                     </div>
                   </li>

@@ -23,8 +23,13 @@ type GiftCard = {
   expected_payment_date: string | null;
   settlement_received_at: string | null;
   status: string;
+  verification_status?: string | null;
+  confirmed_at?: string | null;
   card_number_encrypted: string | null;
   pin_encrypted: string | null;
+  confirmed_card_number?: string | null;
+  confirmed_pin?: string | null;
+  confirmed_redemption_code?: string | null;
   notes: string | null;
   sale_history?: Array<{
     sale_id: number;
@@ -407,6 +412,18 @@ function cardEnding(value: string | null) {
 
   const normalizedValue = value.replace(/\s/g, "");
   return normalizedValue.slice(-4);
+}
+
+function isGiftCardVerified(card: GiftCard) {
+  return (
+    card.verification_status === "VERIFIED" ||
+    Boolean(card.confirmed_at) ||
+    Boolean(
+      card.confirmed_card_number ||
+        card.confirmed_redemption_code ||
+        card.card_number_encrypted,
+    )
+  );
 }
 
 function cardNumberStatus(value: string | null) {
@@ -1420,13 +1437,15 @@ function InventorySection({
                       <div className="flex justify-end gap-2">
                         <Link
                           className={
-                            card.status === "NEEDS_VERIFICATION"
+                            card.status === "NEEDS_VERIFICATION" &&
+                            !isGiftCardVerified(card)
                               ? "inline-flex h-8 cursor-pointer items-center rounded-md bg-red-700 px-3 text-xs font-semibold text-white hover:bg-red-800 active:bg-red-900"
                               : "inline-flex h-8 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-xs font-semibold hover:bg-slate-100 active:bg-slate-200"
                           }
                           href={`/gift-cards/${card.id}/verify?returnTo=/inventory`}
                         >
-                          {card.status === "NEEDS_VERIFICATION"
+                          {card.status === "NEEDS_VERIFICATION" &&
+                          !isGiftCardVerified(card)
                             ? "Verify"
                             : "Details"}
                         </Link>
@@ -1875,13 +1894,15 @@ function InventoryMobileCard({
       <div className="grid grid-cols-2 gap-2">
         <Link
           className={
-            card.status === "NEEDS_VERIFICATION"
+            card.status === "NEEDS_VERIFICATION" && !isGiftCardVerified(card)
               ? "inline-flex h-10 cursor-pointer items-center justify-center rounded-md bg-red-700 px-3 text-sm font-semibold text-white hover:bg-red-800 active:bg-red-900"
               : "inline-flex h-10 cursor-pointer items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200"
           }
           href={`/gift-cards/${card.id}/verify?returnTo=/inventory`}
         >
-          {card.status === "NEEDS_VERIFICATION" ? "Verify" : "Details"}
+          {card.status === "NEEDS_VERIFICATION" && !isGiftCardVerified(card)
+            ? "Verify"
+            : "Details"}
         </Link>
         {card.status === "VERIFIED_AVAILABLE" ? (
           <button

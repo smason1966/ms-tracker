@@ -86,7 +86,12 @@ type GiftCard = {
   acquisition_cost: string | number | null;
   sale_price: string | number | null;
   status: string;
+  verification_status?: string | null;
+  confirmed_at?: string | null;
   card_number_encrypted: string | null;
+  confirmed_card_number?: string | null;
+  confirmed_pin?: string | null;
+  confirmed_redemption_code?: string | null;
   notes: string | null;
 };
 
@@ -2225,15 +2230,14 @@ export default function PurchaseDetailPage() {
                       <td className="whitespace-nowrap px-6 py-4">
                         <div className="flex flex-wrap gap-2">
                           <Link
-                            className={`inline-flex h-9 items-center rounded-md px-4 text-xs font-semibold text-white transition ${giftCard.status === "VERIFIED_AVAILABLE"
-                                ? "bg-emerald-700 hover:bg-emerald-800"
-                                : "bg-red-700 hover:bg-red-800"
-                              }`}
+                            className={`inline-flex h-9 items-center rounded-md px-4 text-xs font-semibold transition ${
+                              isGiftCardVerified(giftCard)
+                                ? "border border-slate-300 text-slate-700 hover:bg-slate-100"
+                                : "bg-red-700 text-white hover:bg-red-800"
+                            }`}
                             href={`/gift-cards/${giftCard.id}/verify?returnTo=/purchases/${purchaseId}`}
                           >
-                            {giftCard.status === "VERIFIED_AVAILABLE"
-                              ? "Verified"
-                              : "Verify"}
+                            {isGiftCardVerified(giftCard) ? "Details" : "Verify"}
                           </Link>
                           <button
                             className="inline-flex h-9 items-center rounded-md border border-slate-300 px-4 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
@@ -2642,6 +2646,18 @@ export default function PurchaseDetailPage() {
         </div>
       ) : null}
     </main>
+  );
+}
+
+function isGiftCardVerified(giftCard: GiftCard) {
+  return (
+    giftCard.verification_status === "VERIFIED" ||
+    Boolean(giftCard.confirmed_at) ||
+    Boolean(
+      giftCard.confirmed_card_number ||
+        giftCard.confirmed_redemption_code ||
+        giftCard.card_number_encrypted,
+    )
   );
 }
 
