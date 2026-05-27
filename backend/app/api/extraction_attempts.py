@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.extraction_attempt import ExtractionAttempt
+from app.services.field_encryption import decrypt_field, encrypt_field
 
 
 router = APIRouter(prefix="/extraction-attempts", tags=["extraction-attempts"])
@@ -18,6 +19,19 @@ class ExtractionAttemptCreate(BaseModel):
     raw_text: str | None = None
 
 
+def serialize_extraction_attempt(attempt: ExtractionAttempt) -> dict:
+    return {
+        "id": attempt.id,
+        "gift_card_id": attempt.gift_card_id,
+        "method": attempt.method,
+        "extracted_card_number": decrypt_field(attempt.extracted_card_number),
+        "extracted_pin": decrypt_field(attempt.extracted_pin),
+        "confidence_score": attempt.confidence_score,
+        "raw_text": decrypt_field(attempt.raw_text),
+        "created_at": attempt.created_at,
+    }
+
+
 @router.post("/")
 def create_extraction_attempt(payload: ExtractionAttemptCreate):
     db: Session = SessionLocal()
@@ -26,17 +40,17 @@ def create_extraction_attempt(payload: ExtractionAttemptCreate):
         attempt = ExtractionAttempt(
             gift_card_id=payload.gift_card_id,
             method=payload.method,
-            extracted_card_number=payload.extracted_card_number,
-            extracted_pin=payload.extracted_pin,
+            extracted_card_number=encrypt_field(payload.extracted_card_number),
+            extracted_pin=encrypt_field(payload.extracted_pin),
             confidence_score=payload.confidence_score,
-            raw_text=payload.raw_text,
+            raw_text=encrypt_field(payload.raw_text),
         )
 
         db.add(attempt)
         db.commit()
         db.refresh(attempt)
 
-        return attempt
+        return serialize_extraction_attempt(attempt)
 
     finally:
         db.close()
@@ -47,12 +61,13 @@ def list_extraction_attempts(gift_card_id: int):
     db: Session = SessionLocal()
 
     try:
-        return (
+        attempts = (
             db.query(ExtractionAttempt)
             .filter(ExtractionAttempt.gift_card_id == gift_card_id)
             .order_by(ExtractionAttempt.created_at.desc())
             .all()
         )
+        return [serialize_extraction_attempt(attempt) for attempt in attempts]
 
     finally:
         db.close()

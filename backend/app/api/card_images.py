@@ -30,6 +30,7 @@ from app.services.extraction_candidates import (
     build_extraction_candidates,
     validate_brand_card_number_candidate,
 )
+from app.services.field_encryption import encrypt_field
 from app.services.image_preprocessing import (
     find_card_contour,
     four_point_transform,
@@ -1546,6 +1547,10 @@ def clear_gift_card_ocr_artifacts(db: Session, gift_card_id: int) -> None:
         gift_card.detected_pin = None
 
 
+def encrypt_ocr_value(value: str | None) -> str | None:
+    return encrypt_field(value.strip()) if value and value.strip() else None
+
+
 def set_gift_card_ocr_state(db: Session, gift_card_id: int, state: str) -> None:
     gift_card = db.query(GiftCard).filter(GiftCard.id == gift_card_id).first()
     if gift_card:
@@ -1728,10 +1733,10 @@ def run_card_image_extraction(
     extraction = ExtractionAttempt(
         gift_card_id=image.gift_card_id,
         method="ocr_tesseract_barcode_auto_rotate",
-        extracted_card_number=selected_card_number,
-        extracted_pin=selected_pin,
+        extracted_card_number=encrypt_ocr_value(selected_card_number),
+        extracted_pin=encrypt_ocr_value(selected_pin),
         confidence_score=selected_confidence,
-        raw_text=(
+        raw_text=encrypt_field(
             f"OCR_SELECTED_ROTATION_DEGREES: {selected_rotation}\n"
             f"OCR_SELECTED_IMAGE_SOURCE: {selected_image_source}\n"
             f"OCR_SELECTED_TEMPLATE_LAYOUT: {selected_layout_name}\n"
@@ -1838,9 +1843,9 @@ def run_card_image_extraction(
             gift_card_id=image.gift_card_id,
             candidate_type=candidate.candidate_type,
             source=candidate.source,
-            value=candidate.value,
+            value=encrypt_ocr_value(candidate.value) or "",
             confidence_score=candidate.confidence_score,
-            notes=candidate.notes,
+            notes=encrypt_field(candidate.notes),
         )
 
         db.add(candidate_row)

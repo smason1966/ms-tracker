@@ -927,7 +927,7 @@ def find_duplicate_card_number(
         candidate_values = [
             locked_redemption_code(candidate_card),
             locked_card_number(candidate_card),
-            candidate_card.detected_card_number,
+            decrypt_credential_value(candidate_card.detected_card_number),
         ]
         if any(
             normalize_card_number(candidate_value) == normalized_card_number
@@ -942,7 +942,9 @@ def duplicate_card_number_payload(duplicate_card: GiftCard) -> dict:
     duplicate_number = (
         normalize_card_number(locked_redemption_code(duplicate_card))
         or normalize_card_number(locked_card_number(duplicate_card))
-        or normalize_card_number(duplicate_card.detected_card_number)
+        or normalize_card_number(
+            decrypt_credential_value(duplicate_card.detected_card_number)
+        )
         or ""
     )
 

@@ -53,6 +53,8 @@ def initialize_model_registry() -> None:
 initialize_model_registry()
 
 from app.db.session import SessionLocal
+from app.models.extraction_attempt import ExtractionAttempt
+from app.models.extraction_candidate import ExtractionCandidate
 from app.models.fuel_reward_account import FuelRewardAccount
 from app.models.gift_card import GiftCard
 from app.services.field_encryption import encrypt_field, is_encrypted_field_value
@@ -64,9 +66,22 @@ GIFT_CARD_FIELDS = (
     "confirmed_card_number",
     "confirmed_pin",
     "confirmed_redemption_code",
+    "detected_card_number",
+    "detected_pin",
 )
 
 FUEL_ACCOUNT_FIELDS = ("login_password",)
+
+EXTRACTION_ATTEMPT_FIELDS = (
+    "extracted_card_number",
+    "extracted_pin",
+    "raw_text",
+)
+
+EXTRACTION_CANDIDATE_FIELDS = (
+    "value",
+    "notes",
+)
 
 
 def needs_encryption(value: str | None) -> bool:
@@ -107,11 +122,47 @@ def main() -> int:
 
         fuel_account_field_count = 0
         affected_fuel_accounts = 0
-        for account in db.query(FuelRewardAccount).order_by(FuelRewardAccount.id.asc()).all():
+        for account in (
+            db.query(FuelRewardAccount)
+            .order_by(FuelRewardAccount.id.asc())
+            .all()
+        ):
             changed = encrypt_row_fields(account, FUEL_ACCOUNT_FIELDS, apply=args.apply)
             if changed:
                 affected_fuel_accounts += 1
                 fuel_account_field_count += changed
+
+        extraction_attempt_field_count = 0
+        affected_extraction_attempts = 0
+        for attempt in (
+            db.query(ExtractionAttempt)
+            .order_by(ExtractionAttempt.id.asc())
+            .all()
+        ):
+            changed = encrypt_row_fields(
+                attempt,
+                EXTRACTION_ATTEMPT_FIELDS,
+                apply=args.apply,
+            )
+            if changed:
+                affected_extraction_attempts += 1
+                extraction_attempt_field_count += changed
+
+        extraction_candidate_field_count = 0
+        affected_extraction_candidates = 0
+        for candidate in (
+            db.query(ExtractionCandidate)
+            .order_by(ExtractionCandidate.id.asc())
+            .all()
+        ):
+            changed = encrypt_row_fields(
+                candidate,
+                EXTRACTION_CANDIDATE_FIELDS,
+                apply=args.apply,
+            )
+            if changed:
+                affected_extraction_candidates += 1
+                extraction_candidate_field_count += changed
 
         if args.apply:
             db.commit()
@@ -123,6 +174,16 @@ def main() -> int:
         print(f"{mode}: gift card fields to encrypt: {gift_card_field_count}")
         print(f"{mode}: fuel accounts affected: {affected_fuel_accounts}")
         print(f"{mode}: fuel account fields to encrypt: {fuel_account_field_count}")
+        print(f"{mode}: extraction attempts affected: {affected_extraction_attempts}")
+        print(
+            f"{mode}: extraction attempt fields to encrypt: "
+            f"{extraction_attempt_field_count}"
+        )
+        print(f"{mode}: extraction candidates affected: {affected_extraction_candidates}")
+        print(
+            f"{mode}: extraction candidate fields to encrypt: "
+            f"{extraction_candidate_field_count}"
+        )
         if not args.apply:
             print("No changes written. Set FIELD_ENCRYPTION_KEY and rerun with --apply.")
         return 0
