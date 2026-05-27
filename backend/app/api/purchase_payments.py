@@ -1,4 +1,5 @@
 from datetime import datetime
+from app.utils.time import utc_now
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException
@@ -69,7 +70,7 @@ def apply_credit_card_payment_delta(
 
     card.current_spend_progress = Decimal(card.current_spend_progress or 0) + amount
     card.current_balance = Decimal(card.current_balance or 0) + amount
-    card.updated_at = datetime.utcnow()
+    card.updated_at = utc_now()
 
 
 def calculate_reward_estimate(
@@ -340,7 +341,7 @@ def replace_purchase_payments(
             if len(credit_card_payments) == 1
             else None
         )
-        purchase.updated_at = datetime.utcnow()
+        purchase.updated_at = utc_now()
         recalculate_purchase_allocation(db, purchase_batch_id)
 
         db.commit()

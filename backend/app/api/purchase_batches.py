@@ -1,6 +1,8 @@
 import logging
 import calendar
 from datetime import date, datetime
+from app.utils.pydantic import model_fields_set as get_model_fields_set
+from app.utils.time import utc_now
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException
@@ -104,13 +106,7 @@ class RewardTransactionOverride(BaseModel):
 
 
 def get_payload_fields(payload: BaseModel) -> set[str]:
-    return set(
-        getattr(
-            payload,
-            "model_fields_set",
-            getattr(payload, "__fields_set__", set()),
-        )
-    )
+    return get_model_fields_set(payload)
 
 
 def apply_credit_card_purchase_delta(
@@ -128,7 +124,7 @@ def apply_credit_card_purchase_delta(
 
     card.current_spend_progress = Decimal(card.current_spend_progress or 0) + amount
     card.current_balance = Decimal(card.current_balance or 0) + amount
-    card.updated_at = datetime.utcnow()
+    card.updated_at = utc_now()
 
 
 def apply_purchase_discount_rule(
@@ -204,7 +200,7 @@ def purchase_earned_date(batch: PurchaseBatch) -> date:
         return batch.purchase_date.date()
     if isinstance(batch.purchase_date, date):
         return batch.purchase_date
-    return datetime.utcnow().date()
+    return utc_now().date()
 
 
 def default_fuel_expiration(earned_date: date) -> date:
@@ -940,7 +936,7 @@ def update_purchase_batch(purchase_batch_id: int, payload: PurchaseBatchUpdate):
         if "credit_card_id" in payload_fields and "player_id" not in payload_fields:
             batch.player_id = infer_player_id_from_credit_card(db, payload.credit_card_id)
 
-        batch.updated_at = datetime.utcnow()
+        batch.updated_at = utc_now()
 
         if "purchase_total_paid" in payload_fields:
             recalculate_purchase_allocation(db, purchase_batch_id)
@@ -1061,7 +1057,7 @@ def update_purchase_fuel_info(
             for extra_entry in existing_entries[1:]:
                 db.delete(extra_entry)
 
-        batch.updated_at = datetime.utcnow()
+        batch.updated_at = utc_now()
         db.flush()
 
         new_entries = (

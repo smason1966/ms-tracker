@@ -1,4 +1,6 @@
 from datetime import datetime
+
+from app.utils.time import utc_now
 from decimal import Decimal
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, Text, UniqueConstraint
@@ -37,4 +39,4 @@ class SaleFuelAccount(Base):
     adjustment_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     adjustment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     settlement_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

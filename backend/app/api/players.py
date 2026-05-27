@@ -1,4 +1,5 @@
 from datetime import datetime
+from app.utils.time import utc_now
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -80,7 +81,7 @@ def set_bool_setting(db: Session, key: str, value: bool) -> AppSetting:
         db.add(setting)
     else:
         setting.value = "true" if value else "false"
-        setting.updated_at = datetime.utcnow()
+        setting.updated_at = utc_now()
 
     return setting
 
@@ -102,7 +103,7 @@ def set_string_setting(db: Session, key: str, value: str) -> AppSetting:
         db.add(setting)
     else:
         setting.value = value
-        setting.updated_at = datetime.utcnow()
+        setting.updated_at = utc_now()
 
     return setting
 
@@ -146,7 +147,7 @@ def disable_multiplayer_if_no_active_players(db: Session) -> None:
 
 def deactivate_player(db: Session, player: Player) -> int:
     player.active = False
-    player.updated_at = datetime.utcnow()
+    player.updated_at = utc_now()
     unassigned_cards = (
         db.query(CreditCard)
         .filter(CreditCard.player_id == player.id)
@@ -285,7 +286,7 @@ def update_player(player_id: int, payload: PlayerUpdate):
         for field, value in update_data.items():
             setattr(player, field, value.strip() if field == "label" and value else value)
 
-        player.updated_at = datetime.utcnow()
+        player.updated_at = utc_now()
         if "active" in update_data and update_data["active"] is False:
             deactivate_player(db, player)
         elif "active" in update_data and update_data["active"] is True:

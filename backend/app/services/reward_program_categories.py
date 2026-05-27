@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from app.utils.time import utc_now
 
 from sqlalchemy.orm import Session
 
@@ -81,7 +82,7 @@ def save_reward_program_categories(db: Session, categories: list[dict]) -> list[
         db.add(setting)
     else:
         setting.value = value
-        setting.updated_at = datetime.utcnow()
+        setting.updated_at = utc_now()
 
     db.flush()
     return normalized

@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
+from app.utils.time import utc_now
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -60,5 +61,5 @@ class CreditCard(Base):
     reports_to_tu: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     reports_to_eq: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

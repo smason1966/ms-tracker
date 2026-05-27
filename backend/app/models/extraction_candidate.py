@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from app.utils.time import utc_now
+
 from sqlalchemy import DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,6 +29,6 @@ class ExtractionCandidate(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utc_now,
         nullable=False,
     )

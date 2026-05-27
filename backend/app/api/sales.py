@@ -1,5 +1,6 @@
 import json
 from datetime import date, datetime, timedelta
+from app.utils.time import utc_now
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 from pathlib import Path
@@ -598,11 +599,11 @@ def apply_expected_payout_change(
             row.expected_payout = allocated
             asset.expected_payout = allocated
             asset.sale_price = allocated
-            asset.updated_at = datetime.utcnow()
+            asset.updated_at = utc_now()
         else:
             row.expected_value = allocated
             asset.sale_price = allocated
-            asset.updated_at = datetime.utcnow()
+            asset.updated_at = utc_now()
 
     sale.expected_payout = new_expected_payout
 
@@ -713,7 +714,7 @@ def voided_sale_export_access_revoked(
     if retention_window is None:
         return True
 
-    return datetime.utcnow() - voided_at > retention_window
+    return utc_now() - voided_at > retention_window
 
 
 def ensure_sale_export_access(db: Session, sale: Sale) -> None:
@@ -883,7 +884,7 @@ def fuel_account_has_nonvoid_sale(db: Session, account_id: int, sale_id: int) ->
 def update_sale_settlement_status(db: Session, sale: Sale) -> None:
     if sale.status == "VOIDED":
         sale.payout_received = None
-        sale.updated_at = datetime.utcnow()
+        sale.updated_at = utc_now()
         return
 
     card_rows = (
@@ -901,7 +902,7 @@ def update_sale_settlement_status(db: Session, sale: Sale) -> None:
     if not rows:
         sale.status = "ACTIVE"
         sale.payout_received = None
-        sale.updated_at = datetime.utcnow()
+        sale.updated_at = utc_now()
         return
 
     settled_rows = [
@@ -918,7 +919,7 @@ def update_sale_settlement_status(db: Session, sale: Sale) -> None:
     else:
         sale.status = "ACTIVE"
 
-    sale.updated_at = datetime.utcnow()
+    sale.updated_at = utc_now()
 
 
 def serialize_sale(db: Session, sale: Sale, include_secret: bool = False) -> dict:
@@ -1294,7 +1295,7 @@ def create_sale(payload: SaleCreate):
             or (
                 datetime.combine(payload.sold_date, datetime.min.time())
                 if payload.sold_date
-                else datetime.utcnow()
+                else utc_now()
             )
         )
 
@@ -1489,7 +1490,7 @@ def create_sale(payload: SaleCreate):
             card.sale_price = expected_payout
             card.status = "SOLD_PENDING_PAYMENT"
             card.sale_notes = payload.notes
-            card.updated_at = datetime.utcnow()
+            card.updated_at = utc_now()
 
         for fuel_payload in payload.fuel_accounts:
             account = fuel_accounts_by_id[fuel_payload.fuel_reward_account_id]
@@ -1528,7 +1529,7 @@ def create_sale(payload: SaleCreate):
                 sale.notes = append_note(sale.notes, overage_note)
                 account.sale_notes = append_note(account.sale_notes, overage_note)
             account.status = "SOLD"
-            account.updated_at = datetime.utcnow()
+            account.updated_at = utc_now()
 
         record_sale_event(
             db,
@@ -1619,7 +1620,7 @@ def edit_sale(sale_id: int, payload: SaleEdit):
                 ):
                     card.buyer_id = buyer.id
                     card.sold_to = buyer.name
-                    card.updated_at = datetime.utcnow()
+                    card.updated_at = utc_now()
                 for account in (
                     db.query(FuelRewardAccount)
                     .join(
@@ -1632,7 +1633,7 @@ def edit_sale(sale_id: int, payload: SaleEdit):
                 ):
                     account.buyer_id = buyer.id
                     account.sold_to = buyer.name
-                    account.updated_at = datetime.utcnow()
+                    account.updated_at = utc_now()
                 record_sale_field_change(
                     db,
                     sale,
@@ -1677,7 +1678,7 @@ def edit_sale(sale_id: int, payload: SaleEdit):
                     .all()
                 ):
                     card.expected_payment_date = payload.expected_payment_date
-                    card.updated_at = datetime.utcnow()
+                    card.updated_at = utc_now()
                 for account in (
                     db.query(FuelRewardAccount)
                     .join(
@@ -1689,7 +1690,7 @@ def edit_sale(sale_id: int, payload: SaleEdit):
                     .all()
                 ):
                     account.expected_payment_date = payload.expected_payment_date
-                    account.updated_at = datetime.utcnow()
+                    account.updated_at = utc_now()
                 record_sale_field_change(
                     db,
                     sale,
@@ -1771,7 +1772,7 @@ def edit_sale(sale_id: int, payload: SaleEdit):
                 ):
                     card.sold_at = new_sold_at
                     card.sold_date = new_sold_at.date()
-                    card.updated_at = datetime.utcnow()
+                    card.updated_at = utc_now()
                 for account in (
                     db.query(FuelRewardAccount)
                     .join(
@@ -1783,7 +1784,7 @@ def edit_sale(sale_id: int, payload: SaleEdit):
                     .all()
                 ):
                     account.sold_date = new_sold_at.date()
-                    account.updated_at = datetime.utcnow()
+                    account.updated_at = utc_now()
                 record_sale_field_change(
                     db,
                     sale,
@@ -1839,7 +1840,7 @@ def edit_sale(sale_id: int, payload: SaleEdit):
             )
 
         if edited_fields:
-            sale.updated_at = datetime.utcnow()
+            sale.updated_at = utc_now()
         db.commit()
         db.refresh(sale)
         return serialize_sale(db, sale)
@@ -1871,7 +1872,7 @@ def settle_sale(sale_id: int, payload: SaleSettle):
         if settlement_payment_account_id is not None:
             get_payment_account_or_404(db, settlement_payment_account_id)
             sale.payment_account_id = settlement_payment_account_id
-        settled_at = payload.settlement_received_at or datetime.utcnow()
+        settled_at = payload.settlement_received_at or utc_now()
 
         sale_card_rows = (
             db.query(SaleGiftCard, GiftCard)
@@ -1933,7 +1934,7 @@ def settle_sale(sale_id: int, payload: SaleSettle):
             card.settlement_payment_account_id = settlement_payment_account_id
             card.settlement_received_at = settled_at
             card.status = "SETTLED"
-            card.updated_at = datetime.utcnow()
+            card.updated_at = utc_now()
 
         for row, account in sale_fuel_rows:
             row_index += 1
@@ -1964,7 +1965,7 @@ def settle_sale(sale_id: int, payload: SaleSettle):
             )
             row.adjustment_reason = payload.notes
             row.settlement_notes = payload.notes
-            account.updated_at = datetime.utcnow()
+            account.updated_at = utc_now()
 
         update_sale_settlement_status(db, sale)
         record_sale_event(
@@ -2055,7 +2056,7 @@ def settle_sale_assets(sale_id: int, payload: SaleAssetSettle):
             for row, account in sale_fuel_rows
         ]
         expected_total = sum(expected for _, _, _, expected in selected_assets)
-        settled_at = payload.settlement_received_at or datetime.utcnow()
+        settled_at = payload.settlement_received_at or utc_now()
         allocated_total = Decimal("0")
 
         if payload.notes:
@@ -2106,9 +2107,9 @@ def settle_sale_assets(sale_id: int, payload: SaleAssetSettle):
                 asset.settlement_payment_account_id = settlement_payment_account_id
                 asset.settlement_received_at = settled_at
                 asset.status = "SETTLED"
-                asset.updated_at = datetime.utcnow()
+                asset.updated_at = utc_now()
             else:
-                asset.updated_at = datetime.utcnow()
+                asset.updated_at = utc_now()
 
         update_sale_settlement_status(db, sale)
         record_sale_event(
@@ -2191,7 +2192,7 @@ def void_sale(sale_id: int, payload: SaleVoid | None = None):
             card.payout_received = None
             card.settlement_payment_account_id = None
             card.settlement_received_at = None
-            card.updated_at = datetime.utcnow()
+            card.updated_at = utc_now()
 
         for row, account in sale_fuel_rows:
             skip_asset_restore = was_already_voided and fuel_account_has_nonvoid_sale(
@@ -2219,11 +2220,11 @@ def void_sale(sale_id: int, payload: SaleVoid | None = None):
             account.expected_payment_date = None
             account.sale_price = None
             account.sale_notes = None
-            account.updated_at = datetime.utcnow()
+            account.updated_at = utc_now()
 
         sale.status = "VOIDED"
         sale.payout_received = None
-        sale.updated_at = datetime.utcnow()
+        sale.updated_at = utc_now()
         void_note = payload.notes if payload else None
         if void_note and not was_already_voided:
             sale.notes = append_note(sale.notes, f"Sale voided: {void_note}")

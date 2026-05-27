@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
+from app.utils.time import utc_now
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +65,7 @@ class OrphanedUploadCleanupPayload(BaseModel):
 
 
 def retention_cutoff(months: int) -> datetime:
-    return datetime.utcnow() - timedelta(days=max(months, 1) * RETENTION_DAYS_PER_MONTH)
+    return utc_now() - timedelta(days=max(months, 1) * RETENTION_DAYS_PER_MONTH)
 
 
 def local_path(path_value: str | None) -> Path | None:
@@ -213,7 +214,7 @@ def preview_retention(db: Session, payload: RetentionRunPayload) -> list[dict]:
     ensure_card_image_schema(db)
     ensure_retention_schema(db)
 
-    now = datetime.utcnow()
+    now = utc_now()
     card_cutoff = retention_cutoff(payload.card_image_months)
     digital_cutoff = retention_cutoff(payload.digital_pdf_months)
     receipt_cutoff = retention_cutoff(payload.receipt_image_months)
@@ -300,7 +301,7 @@ def record_retention_event(db: Session, candidate: dict, action: str, reason: st
             "file_path": candidate["file_path"],
             "reason": reason,
             "metadata": json.dumps(candidate["metadata"], default=str),
-            "created_at": datetime.utcnow(),
+            "created_at": utc_now(),
         },
     )
 
@@ -312,7 +313,7 @@ def delete_file(path_value: str | None) -> bool:
 
 
 def purge_candidate(db: Session, candidate: dict) -> dict:
-    now = datetime.utcnow()
+    now = utc_now()
     deleted_original = delete_file(candidate["file_path"])
     deleted_processed = False
 

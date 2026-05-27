@@ -1,4 +1,6 @@
 from datetime import datetime
+
+from app.utils.time import utc_now
 from decimal import Decimal
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text
@@ -50,6 +52,6 @@ class PurchasePayment(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utc_now,
         nullable=False,
     )

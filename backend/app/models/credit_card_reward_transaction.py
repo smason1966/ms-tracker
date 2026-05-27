@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
+from app.utils.time import utc_now
 from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -54,4 +55,4 @@ class CreditCardRewardTransaction(Base):
     calculation_source: Mapped[str] = mapped_column(String(80), nullable=False)
     credit_card_product_snapshot: Mapped[str | None] = mapped_column(String(160), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

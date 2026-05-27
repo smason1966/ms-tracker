@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 from datetime import date, datetime
+from app.utils.time import utc_now
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
@@ -256,7 +257,7 @@ def export_transfer(purchases: str | None = None, sales: str | None = None):
         data = collect_transfer_data(db, purchase_ids, sale_ids)
         manifest = {
             "export_version": EXPORT_VERSION,
-            "exported_at": datetime.utcnow().isoformat(),
+            "exported_at": utc_now().isoformat(),
             "source_environment": os.getenv("MS_TRACKER_ENV", "test"),
             "source_record_ids": {
                 "purchases": purchase_ids,
@@ -455,7 +456,7 @@ async def apply_transfer(file: UploadFile = File(...), allow_duplicates: bool = 
         card_map: dict[int, int] = {}
         sale_map: dict[int, int] = {}
         created_purchase_count = 0
-        imported_at = datetime.utcnow()
+        imported_at = utc_now()
         source_environment = package["manifest"].get("source_environment")
 
         for source in package["purchases"]:

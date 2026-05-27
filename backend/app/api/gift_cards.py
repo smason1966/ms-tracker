@@ -1,6 +1,8 @@
 import logging
 import re
 from datetime import date, datetime, timedelta
+from app.utils.pydantic import model_fields_set as get_model_fields_set
+from app.utils.time import utc_now
 from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, HTTPException
@@ -70,13 +72,7 @@ BLOCKED_VALUE_CORRECTION_STATUSES = {
 
 
 def get_payload_fields(payload: BaseModel) -> set[str]:
-    return set(
-        getattr(
-            payload,
-            "model_fields_set",
-            getattr(payload, "__fields_set__", set()),
-        )
-    )
+    return get_model_fields_set(payload)
 
 
 def ensure_safe_value_cost_correction(db: Session, card: GiftCard) -> None:
@@ -168,11 +164,11 @@ def create_gift_card(payload: GiftCardCreate):
             confirmed_redemption_code=encrypt_credential_value(
                 confirmed_redemption_code
             ),
-            confirmed_at=datetime.utcnow()
+            confirmed_at=utc_now()
             if card_source == "digital" and has_manual_credential
             else None,
             confirmed_source=confirmed_source if has_manual_credential else None,
-            verified_at=datetime.utcnow()
+            verified_at=utc_now()
             if card_source == "digital" and has_manual_credential
             else None,
             verification_source=confirmed_source if has_manual_credential else None,
@@ -676,7 +672,7 @@ def serialize_gift_card(card: GiftCard, db: Session | None = None) -> dict:
         if card.payout_received is not None
         else None,
         "outstanding_receivables": receivable,
-        "inventory_aging_days": (datetime.utcnow() - card.created_at).days,
+        "inventory_aging_days": (utc_now() - card.created_at).days,
         "sale_history": get_sale_history(db, card),
     }
 
@@ -1019,13 +1015,13 @@ def apply_liquidation_sale(
     card.sold_to = buyer.name
     card.expected_payout = expected_payout
     card.sale_price = expected_payout
-    card.sold_at = sold_at or datetime.utcnow()
+    card.sold_at = sold_at or utc_now()
     card.sold_date = card.sold_at.date()
     card.expected_payment_date = expected_payment_date
     card.sale_notes = sale_notes
     card.internal_notes = internal_notes
     card.status = "SOLD_PENDING_PAYMENT"
-    card.updated_at = datetime.utcnow()
+    card.updated_at = utc_now()
 
     face_value = to_decimal(card.face_value)
     if face_value > 0:
@@ -1061,7 +1057,7 @@ def sell_gift_card(gift_card_id: int, payload: GiftCardSell):
         card.sale_notes = payload.sale_notes
         card.sold_at = datetime.combine(payload.sold_date, datetime.min.time())
         card.status = "SOLD_PENDING_PAYMENT"
-        card.updated_at = datetime.utcnow()
+        card.updated_at = utc_now()
 
         db.commit()
         db.refresh(card)
@@ -1130,10 +1126,10 @@ def settle_gift_card(gift_card_id: int, payload: GiftCardSettle):
         card.settlement_received_at = (
             payload.settlement_received_at
             or combine_optional_date(payload.settlement_received_date)
-            or datetime.utcnow()
+            or utc_now()
         )
         card.status = "SETTLED"
-        card.updated_at = datetime.utcnow()
+        card.updated_at = utc_now()
 
         if payload.internal_notes is not None:
             card.internal_notes = payload.internal_notes
@@ -1217,7 +1213,7 @@ def bulk_sell_gift_cards(payload: GiftCardBulkSell):
             card.sale_notes = payload.sale_notes
             card.sold_at = datetime.combine(payload.sold_date, datetime.min.time())
             card.status = "SOLD_PENDING_PAYMENT"
-            card.updated_at = datetime.utcnow()
+            card.updated_at = utc_now()
 
         db.commit()
 
@@ -1328,7 +1324,7 @@ def redeem_gift_card(gift_card_id: int):
             raise HTTPException(status_code=404, detail="Gift card not found")
 
         card.status = "REDEEMED"
-        card.updated_at = datetime.utcnow()
+        card.updated_at = utc_now()
 
         db.commit()
         db.refresh(card)
@@ -1385,7 +1381,7 @@ def void_gift_card(gift_card_id: int, payload: GiftCardVoid | None = None):
                 f"{card.notes}\n{reference_note}" if card.notes else reference_note
             )
 
-        card.updated_at = datetime.utcnow()
+        card.updated_at = utc_now()
         db.flush()
         recalculate_purchase_allocation(db, card.purchase_batch_id)
         db.commit()
@@ -1531,7 +1527,7 @@ def move_gift_card(gift_card_id: int, payload: GiftCardMove):
 
         source_purchase_id = card.purchase_batch_id
         card.purchase_batch_id = target_purchase.id
-        card.updated_at = datetime.utcnow()
+        card.updated_at = utc_now()
         db.flush()
         recalculate_purchase_allocation(db, source_purchase_id)
         recalculate_purchase_allocation(db, target_purchase.id)
@@ -1661,12 +1657,12 @@ def verify_gift_card(gift_card_id: int, payload: GiftCardVerify):
         card.confirmed_source = source
 
         card.verification_status = "VERIFIED"
-        card.verified_at = card.verified_at or datetime.utcnow()
-        card.confirmed_at = datetime.utcnow()
+        card.verified_at = card.verified_at or utc_now()
+        card.confirmed_at = utc_now()
         if not sale_locked:
             card.status = "VERIFIED_AVAILABLE"
 
-        card.updated_at = datetime.utcnow()
+        card.updated_at = utc_now()
         if sale_locked:
             record_credential_update_audit(
                 db,
@@ -1710,7 +1706,7 @@ def update_gift_card(gift_card_id: int, payload: GiftCardUpdate):
         for field in payload_fields:
             setattr(card, field, getattr(payload, field))
 
-        card.updated_at = datetime.utcnow()
+        card.updated_at = utc_now()
 
         if value_cost_changed:
             recalculate_purchase_allocation(db, card.purchase_batch_id)

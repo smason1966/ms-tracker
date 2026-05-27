@@ -3,6 +3,7 @@ from pydantic import BaseModel
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from app.utils.pydantic import model_fields_set as get_model_fields_set
 from app.db.session import SessionLocal
 from app.models.credit_card_reward_rule import CreditCardRewardRule
 from app.models.purchase_payment import PurchasePayment
@@ -31,13 +32,7 @@ def normalize_key(value: str) -> str:
 
 
 def payload_fields(payload: BaseModel) -> set[str]:
-    return set(
-        getattr(
-            payload,
-            "model_fields_set",
-            getattr(payload, "__fields_set__", set()),
-        )
-    )
+    return get_model_fields_set(payload)
 
 
 def ensure_spending_category_schema(db: Session) -> None:

@@ -1,4 +1,6 @@
 from datetime import datetime
+
+from app.utils.time import utc_now
 from decimal import Decimal
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text
@@ -32,8 +34,8 @@ class PurchaseBatch(Base):
         nullable=True,
     )
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     imported_from_environment: Mapped[str | None] = mapped_column(String(100), nullable=True)
     imported_source_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     imported_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

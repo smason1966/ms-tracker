@@ -1,4 +1,5 @@
 from datetime import datetime
+from app.utils.time import utc_now
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -145,7 +146,7 @@ def update_payment_account(account_id: int, payload: PaymentAccountUpdate):
             elif field == "account_identifier":
                 account.payment_identifier = cleaned_value
 
-        account.updated_at = datetime.utcnow()
+        account.updated_at = utc_now()
         db.commit()
         db.refresh(account)
         return serialize_payment_account(account)

@@ -1,6 +1,7 @@
 from pathlib import Path
 from uuid import uuid4
 from datetime import datetime, timedelta
+from app.utils.time import utc_now
 
 from fastapi import APIRouter, File, Form, UploadFile
 from sqlalchemy.orm import Session
@@ -40,13 +41,13 @@ async def upload_receipt(
 
     try:
         ensure_retention_schema(db)
-        retention_until = datetime.utcnow() + timedelta(days=ATTACHMENT_RETENTION_DAYS)
+        retention_until = utc_now() + timedelta(days=ATTACHMENT_RETENTION_DAYS)
         receipt = Receipt(
             purchase_batch_id=purchase_batch_id,
             image_url=storage.generate_view_url(stored.object_key),
             original_filename=file.filename,
             attachment_type="receipt_image",
-            uploaded_at=datetime.utcnow(),
+            uploaded_at=utc_now(),
             retention_until=retention_until,
             retention_status="active",
         )

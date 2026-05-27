@@ -1,4 +1,6 @@
 from datetime import datetime
+
+from app.utils.time import utc_now
 from decimal import Decimal
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
@@ -40,7 +42,7 @@ class Buyer(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class BuyerExternalIdentifier(Base):
@@ -55,4 +57,4 @@ class BuyerExternalIdentifier(Base):
     platform_source: Mapped[str] = mapped_column(String(100), nullable=False)
     identifier: Mapped[str] = mapped_column(String(255), nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

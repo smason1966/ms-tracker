@@ -1,4 +1,6 @@
 from datetime import date, datetime
+from app.utils.pydantic import model_fields_set as get_model_fields_set
+from app.utils.time import utc_now
 from pathlib import Path
 from uuid import uuid4
 
@@ -48,13 +50,7 @@ class FuelRewardAccountUpdate(BaseModel):
 
 
 def get_payload_fields(payload: BaseModel) -> set[str]:
-    return set(
-        getattr(
-            payload,
-            "model_fields_set",
-            getattr(payload, "__fields_set__", set()),
-        )
-    )
+    return get_model_fields_set(payload)
 
 
 def account_to_dict(
@@ -269,7 +265,7 @@ async def upload_fuel_account_barcode_image(
             raise HTTPException(status_code=404, detail="Fuel account not found")
 
         account.barcode_image_url = storage.generate_view_url(stored.object_key)
-        account.updated_at = datetime.utcnow()
+        account.updated_at = utc_now()
         record_attachment(
             db,
             owner_type="fuel_reward_account",
@@ -335,7 +331,7 @@ def update_fuel_account(account_id: int, payload: FuelRewardAccountUpdate):
                 value = encrypt_field(value) if value else None
             setattr(account, field, value)
 
-        account.updated_at = datetime.utcnow()
+        account.updated_at = utc_now()
 
         db.commit()
         db.refresh(account)

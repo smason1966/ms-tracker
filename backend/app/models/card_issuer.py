@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from app.utils.time import utc_now
+
 from sqlalchemy import Boolean, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,5 +19,5 @@ class CardIssuer(Base):
     website: Mapped[str | None] = mapped_column(String(255), nullable=True)
     support_phone: Mapped[str | None] = mapped_column(String(60), nullable=True)
     issuer_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

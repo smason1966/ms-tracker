@@ -6,7 +6,7 @@ Create Date: 2026-05-24
 """
 
 from alembic import op
-from datetime import datetime
+from datetime import UTC, datetime
 import sqlalchemy as sa
 
 
@@ -45,7 +45,7 @@ def seed_spending_category(key: str, name: str, notes: str | None = None) -> Non
                 "key": key,
                 "name": name,
                 "notes": notes,
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.now(UTC).replace(tzinfo=None),
             },
         )
 

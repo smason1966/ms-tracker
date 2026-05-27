@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from app.utils.time import utc_now
+
 from sqlalchemy import Boolean, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,11 +24,11 @@ class PaymentAccount(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utc_now,
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utc_now,
         nullable=False,
     )

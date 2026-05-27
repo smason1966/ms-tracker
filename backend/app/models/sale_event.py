@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from app.utils.time import utc_now
+
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,4 +21,4 @@ class SaleEvent(Base):
     new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

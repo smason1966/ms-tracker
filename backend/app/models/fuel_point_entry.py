@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
+from app.utils.time import utc_now
 from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,4 +28,4 @@ class FuelPointEntry(Base):
     entry_type: Mapped[str] = mapped_column(Text, default="PURCHASE", nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

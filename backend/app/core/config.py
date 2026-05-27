@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str
+    sqlalchemy_echo: bool = False
     storage_backend: str = "local"
     uploads_dir: str = "/app/uploads"
     ms_tracker_uploads_dir: str | None = None

@@ -1,4 +1,6 @@
 from datetime import datetime
+
+from app.utils.time import utc_now
 from sqlalchemy import DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
@@ -18,7 +20,7 @@ class Attachment(Base):
     content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     checksum: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     retention_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     purged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

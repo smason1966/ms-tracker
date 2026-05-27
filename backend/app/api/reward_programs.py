@@ -1,4 +1,5 @@
 from datetime import datetime
+from app.utils.time import utc_now
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException
@@ -367,7 +368,7 @@ def update_reward_program(program_id: int, payload: RewardProgramUpdate):
                 value = normalize_category(db, value)
             setattr(program, field, value)
 
-        program.updated_at = datetime.utcnow()
+        program.updated_at = utc_now()
         db.commit()
         db.refresh(program)
         return serialize_program(program, db)

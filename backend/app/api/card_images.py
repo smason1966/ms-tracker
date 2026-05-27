@@ -6,6 +6,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from app.utils.time import utc_now
 from pathlib import Path
 from uuid import uuid4
 
@@ -2037,14 +2038,14 @@ async def upload_card_image(
     try:
         ensure_card_image_columns(db)
         db.commit()
-        retention_until = datetime.utcnow() + timedelta(days=ATTACHMENT_RETENTION_DAYS)
+        retention_until = utc_now() + timedelta(days=ATTACHMENT_RETENTION_DAYS)
         image = CardImage(
             gift_card_id=gift_card_id,
             image_type=image_type,
             original_image_url=storage.generate_view_url(stored.object_key),
             original_filename=file.filename,
             attachment_type=attachment_type,
-            uploaded_at=datetime.utcnow(),
+            uploaded_at=utc_now(),
             retention_until=retention_until,
             retention_status="active",
             retain_attachment=retain_attachment,

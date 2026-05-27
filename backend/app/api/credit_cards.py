@@ -1,5 +1,7 @@
 from calendar import monthrange
 from datetime import date, datetime, timedelta
+from app.utils.pydantic import model_fields_set as get_model_fields_set
+from app.utils.time import utc_now
 from decimal import Decimal
 import logging
 
@@ -167,13 +169,7 @@ class ProductChangeCreate(BaseModel):
 
 
 def get_payload_fields(payload: BaseModel) -> set[str]:
-    return set(
-        getattr(
-            payload,
-            "model_fields_set",
-            getattr(payload, "__fields_set__", set()),
-        )
-    )
+    return get_model_fields_set(payload)
 
 
 def days_until_day(day: int | None) -> int | None:
@@ -851,7 +847,7 @@ def update_credit_card(card_id: int, payload: CreditCardUpdate):
 
             setattr(card, field, value)
 
-        card.updated_at = datetime.utcnow()
+        card.updated_at = utc_now()
         db.commit()
         db.refresh(card)
         return serialize_card(card)
@@ -1251,7 +1247,7 @@ def record_product_change(card_id: int, payload: ProductChangeCreate):
         db.add(change)
         card.nickname = payload.new_product_name.strip()
         card.date_last_product_change = payload.effective_date
-        card.updated_at = datetime.utcnow()
+        card.updated_at = utc_now()
         recalculate_rewards_for_credit_card(db, card_id)
         db.commit()
         db.refresh(card)

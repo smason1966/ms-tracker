@@ -1,5 +1,6 @@
 from datetime import date, datetime
 
+from app.utils.time import utc_now
 from sqlalchemy import Date, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,4 +19,4 @@ class CreditCardProductChange(Base):
     new_product_name: Mapped[str] = mapped_column(String(160), nullable=False)
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

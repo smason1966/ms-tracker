@@ -1,4 +1,6 @@
 from datetime import datetime
+from app.utils.pydantic import model_fields_set as get_model_fields_set
+from app.utils.time import utc_now
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -28,13 +30,7 @@ class CardNetworkUpdate(BaseModel):
 
 
 def get_payload_fields(payload: BaseModel) -> set[str]:
-    return set(
-        getattr(
-            payload,
-            "model_fields_set",
-            getattr(payload, "__fields_set__", set()),
-        )
-    )
+    return get_model_fields_set(payload)
 
 
 def serialize_network(network: CardNetwork) -> dict:
@@ -105,7 +101,7 @@ def update_card_network(network_id: int, payload: CardNetworkUpdate):
         if not network.name or not network.code:
             raise HTTPException(status_code=400, detail="Network name and code are required")
 
-        network.updated_at = datetime.utcnow()
+        network.updated_at = utc_now()
         db.commit()
         db.refresh(network)
         return serialize_network(network)
@@ -128,7 +124,7 @@ def delete_card_network(network_id: int):
         linked_cards = db.query(CreditCard).filter(CreditCard.network_id == network_id).count()
         if linked_cards:
             network.active = False
-            network.updated_at = datetime.utcnow()
+            network.updated_at = utc_now()
             db.commit()
             return {"deleted": False, "deactivated": True, "linked_cards": linked_cards}
 

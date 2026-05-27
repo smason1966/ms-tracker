@@ -6,7 +6,7 @@ Create Date: 2026-05-21 00:00:00.000000
 """
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from alembic import op
@@ -115,7 +115,7 @@ def upgrade() -> None:
             {
                 **category,
                 "notes": None,
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.now(UTC).replace(tzinfo=None),
             }
             for category in categories
         ],

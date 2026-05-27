@@ -6,6 +6,7 @@ import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.utils.pydantic import model_fields_set as get_model_fields_set
 from app.db.session import SessionLocal
 from app.models.reward_program import RewardProgram
 from app.models.spending_category import SpendingCategory
@@ -46,13 +47,7 @@ class StoreUpdate(BaseModel):
 
 
 def payload_fields(payload: BaseModel) -> set[str]:
-    return set(
-        getattr(
-            payload,
-            "model_fields_set",
-            getattr(payload, "__fields_set__", set()),
-        )
-    )
+    return get_model_fields_set(payload)
 
 
 def normalize_token(value: str | None) -> str | None:

@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
+from app.utils.time import utc_now
 from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
@@ -73,8 +74,8 @@ class GiftCard(Base):
     internal_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     void_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     intake_idempotency_key: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
     imported_from_environment: Mapped[str | None] = mapped_column(String(100), nullable=True)
     imported_source_id: Mapped[str | None] = mapped_column(String(100), nullable=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from datetime import datetime, timedelta
+from app.utils.time import utc_now
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -223,7 +224,7 @@ def serialize_orphaned_file(path: Path, upload_root: Path = UPLOAD_ROOT) -> dict
         "size_bytes": file_size(path),
         "modified_at": modified_at.isoformat() if modified_at else None,
         "age_hours": (
-            round((datetime.utcnow() - modified_at).total_seconds() / 3600, 2)
+            round((utc_now() - modified_at).total_seconds() / 3600, 2)
             if modified_at
             else None
         ),
@@ -256,7 +257,7 @@ def preview_orphaned_upload_cleanup(
     ensure_upload_directories(upload_root)
     orphaned_files, references, referenced_file_set = orphaned_upload_files(db, upload_root)
     cutoff_hours = max(older_than_days * 24, minimum_age_hours)
-    cutoff = datetime.utcnow() - timedelta(hours=cutoff_hours)
+    cutoff = utc_now() - timedelta(hours=cutoff_hours)
     eligible_files: list[Path] = []
     recent_files: list[Path] = []
     next_eligible_at: datetime | None = None

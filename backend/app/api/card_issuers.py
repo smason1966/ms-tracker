@@ -1,4 +1,6 @@
 from datetime import datetime
+from app.utils.pydantic import model_fields_set as get_model_fields_set
+from app.utils.time import utc_now
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -36,13 +38,7 @@ class CardIssuerUpdate(BaseModel):
 
 
 def get_payload_fields(payload: BaseModel) -> set[str]:
-    return set(
-        getattr(
-            payload,
-            "model_fields_set",
-            getattr(payload, "__fields_set__", set()),
-        )
-    )
+    return get_model_fields_set(payload)
 
 
 def normalize_issuer_type(value: str | None) -> str | None:
@@ -129,7 +125,7 @@ def update_card_issuer(issuer_id: int, payload: CardIssuerUpdate):
         if not issuer.name:
             raise HTTPException(status_code=400, detail="Issuer name is required")
 
-        issuer.updated_at = datetime.utcnow()
+        issuer.updated_at = utc_now()
         db.commit()
         db.refresh(issuer)
         return serialize_issuer(issuer)
@@ -152,7 +148,7 @@ def delete_card_issuer(issuer_id: int):
         linked_cards = db.query(CreditCard).filter(CreditCard.issuer_id == issuer_id).count()
         if linked_cards:
             issuer.active = False
-            issuer.updated_at = datetime.utcnow()
+            issuer.updated_at = utc_now()
             db.commit()
             return {"deleted": False, "deactivated": True, "linked_cards": linked_cards}
 
