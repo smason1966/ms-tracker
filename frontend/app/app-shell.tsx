@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Component,
   ErrorInfo,
@@ -11,6 +11,8 @@ import {
   useRef,
   useState,
 } from "react";
+
+import { useAuth } from "@/lib/auth";
 
 type NavigationItem = {
   label: string;
@@ -212,9 +214,15 @@ function NavLink({
 }
 
 function SidebarContent({
+  adminUsername,
+  authEnabled,
+  onLogout,
   pathname,
   onNavigate,
 }: {
+  adminUsername?: string | null;
+  authEnabled?: boolean;
+  onLogout?: () => void;
   pathname: string;
   onNavigate?: () => void;
 }) {
@@ -246,22 +254,73 @@ function SidebarContent({
         ))}
       </nav>
 
-      <div className="px-4 py-5 text-xs text-slate-500">
-        Daily ops console
+      <div className="space-y-3 px-4 py-5 text-xs text-slate-500">
+        {authEnabled ? (
+          <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+            <div className="truncate text-slate-400">
+              {adminUsername ?? "Signed in"}
+            </div>
+            <button
+              className="mt-2 inline-flex h-8 items-center rounded-md border border-white/10 px-3 text-xs font-semibold text-slate-200 transition hover:border-red-300/40 hover:bg-red-500/10 hover:text-red-100"
+              onClick={() => {
+                onNavigate?.();
+                onLogout?.();
+              }}
+              type="button"
+            >
+              Logout
+            </button>
+          </div>
+        ) : null}
+        <div>Daily ops console</div>
       </div>
     </div>
   );
 }
 
+function ShellLoading() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4 text-slate-100">
+      <div className="rounded-lg border border-white/10 bg-white/[0.04] px-5 py-4 text-sm text-slate-300">
+        Checking session...
+      </div>
+    </main>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "/";
+  const router = useRouter();
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const { admin, authEnabled, logout, status } = useAuth();
   useRenderLoopDiagnostics("AppShell", { pathname });
 
   const title = useMemo(() => pageTitle(pathname), [pathname]);
+  const isLoginRoute = pathname === "/login";
+  const isAuthenticated = status === "authenticated" || status === "disabled";
 
   const isFocusedBarcodeMode =
     pathname.startsWith("/fuel-accounts/") && pathname.endsWith("/barcode");
+
+  useEffect(() => {
+    if (!authEnabled || status === "loading") {
+      return;
+    }
+
+    if (status === "authenticated" && isLoginRoute) {
+      router.replace("/");
+      return;
+    }
+
+    if (status === "unauthenticated" && !isLoginRoute) {
+      router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+    }
+  }, [authEnabled, isLoginRoute, pathname, router, status]);
+
+  async function handleLogout() {
+    await logout();
+    router.replace("/login");
+  }
 
   useEffect(() => {
     console.info("[AppShell] route transition", { pathname });
@@ -288,7 +347,23 @@ export function AppShell({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  if (isFocusedBarcodeMode) {
+  if (authEnabled && status === "loading") {
+    return <ShellLoading />;
+  }
+
+  if (authEnabled && status === "unauthenticated" && !isLoginRoute) {
+    return <ShellLoading />;
+  }
+
+  if (authEnabled && status === "authenticated" && isLoginRoute) {
+    return <ShellLoading />;
+  }
+
+  if (isLoginRoute) {
+    return <AppShellErrorBoundary>{children}</AppShellErrorBoundary>;
+  }
+
+  if (isFocusedBarcodeMode && isAuthenticated) {
     return <>{children}</>;
   }
 
@@ -299,7 +374,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         data-app-shell
       >
         <aside className="fixed inset-y-0 left-0 z-40 hidden w-72 border-r border-white/10 bg-slate-950/65 shadow-2xl shadow-black/30 backdrop-blur-xl lg:block">
-          <SidebarContent pathname={pathname} />
+          <SidebarContent
+            adminUsername={admin?.username}
+            authEnabled={authEnabled}
+            onLogout={handleLogout}
+            pathname={pathname}
+          />
         </aside>
 
       {isDrawerOpen ? (
@@ -312,7 +392,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           />
           <aside className="relative h-full w-[min(22rem,88vw)] border-r border-white/10 bg-[#050b16] shadow-2xl">
             <SidebarContent
+              adminUsername={admin?.username}
+              authEnabled={authEnabled}
               onNavigate={() => setIsDrawerOpen(false)}
+              onLogout={handleLogout}
               pathname={pathname}
             />
           </aside>
