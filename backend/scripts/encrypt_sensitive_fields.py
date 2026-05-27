@@ -16,6 +16,42 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+def initialize_model_registry() -> None:
+    """Import all mapped models so SQLAlchemy can resolve relationships/FKs."""
+    import app.models.app_setting  # noqa: F401
+    import app.models.attachment  # noqa: F401
+    import app.models.buyer  # noqa: F401
+    import app.models.card_brand  # noqa: F401
+    import app.models.card_image  # noqa: F401
+    import app.models.card_issuer  # noqa: F401
+    import app.models.card_network  # noqa: F401
+    import app.models.credit_card  # noqa: F401
+    import app.models.credit_card_product_change  # noqa: F401
+    import app.models.credit_card_reward_rule  # noqa: F401
+    import app.models.credit_card_reward_transaction  # noqa: F401
+    import app.models.extraction_attempt  # noqa: F401
+    import app.models.extraction_candidate  # noqa: F401
+    import app.models.extraction_profile_metric  # noqa: F401
+    import app.models.fuel_point_entry  # noqa: F401
+    import app.models.fuel_reward_account  # noqa: F401
+    import app.models.gift_card  # noqa: F401
+    import app.models.payment_account  # noqa: F401
+    import app.models.player  # noqa: F401
+    import app.models.purchase_batch  # noqa: F401
+    import app.models.purchase_payment  # noqa: F401
+    import app.models.receipt  # noqa: F401
+    import app.models.reward_program  # noqa: F401
+    import app.models.sale  # noqa: F401
+    import app.models.sale_event  # noqa: F401
+    import app.models.sale_fuel_account  # noqa: F401
+    import app.models.sale_gift_card  # noqa: F401
+    import app.models.spending_category  # noqa: F401
+    import app.models.store  # noqa: F401
+
+
+initialize_model_registry()
+
 from app.db.session import SessionLocal
 from app.models.fuel_reward_account import FuelRewardAccount
 from app.models.gift_card import GiftCard
