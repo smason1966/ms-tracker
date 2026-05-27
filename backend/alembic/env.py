@@ -38,6 +38,8 @@ from app.models.fuel_point_entry import FuelPointEntry
 from app.models.credit_card import CreditCard
 from app.models.purchase_payment import PurchasePayment
 from app.models.attachment import Attachment
+from app.models.admin_user import AdminUser
+from app.models.auth_session import AuthSession
 
 target_metadata = Base.metadata
 
