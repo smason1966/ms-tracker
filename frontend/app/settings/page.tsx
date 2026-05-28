@@ -20,14 +20,7 @@ type MfaSetupResponse = {
   provisioning_uri: string;
 };
 
-const settingsCards = [
-  {
-    id: "card-brands",
-    title: "Card Brands",
-    description:
-      "Manage card types, barcode/magstripe metadata, and verification rules.",
-    href: "/card-brands",
-  },
+const operationalSettingsCards = [
   {
     id: "buyers",
     title: "Buyers",
@@ -43,12 +36,36 @@ const settingsCards = [
     href: "/settings/stores",
   },
   {
+    id: "payment-accounts",
+    title: "Payment Accounts",
+    description:
+      "Manage expected deposit destinations for buyer payments and reconciliation.",
+    href: "/settings/payment-accounts",
+  },
+  {
+    id: "card-brands",
+    title: "Card Brands",
+    description:
+      "Manage card types, barcode/magstripe metadata, and verification rules.",
+    href: "/card-brands",
+  },
+  {
     id: "spending-categories",
     title: "Spending Categories",
     description:
       "Manage categories like grocery, wholesale, office_supply, dining, and gas.",
     href: "/settings/spending-categories",
   },
+  {
+    id: "reward-programs",
+    title: "Reward Programs",
+    description:
+      "Manage rewards currencies like UR, MR, cashback, airline miles, and fuel points.",
+    href: "/settings/reward-programs",
+  },
+];
+
+const advancedSettingsCards = [
   {
     id: "card-issuers",
     title: "Card Issuers",
@@ -64,25 +81,11 @@ const settingsCards = [
     href: "/settings/card-networks",
   },
   {
-    id: "payment-accounts",
-    title: "Payment Accounts",
-    description:
-      "Manage expected deposit destinations for buyer payments and reconciliation.",
-    href: "/settings/payment-accounts",
-  },
-  {
     id: "players",
     title: "Players",
     description:
       "Manage P1/P2/P3 ownership for multi-player credit card tracking.",
     href: "/settings/players",
-  },
-  {
-    id: "reward-programs",
-    title: "Reward Programs",
-    description:
-      "Manage rewards currencies like UR, MR, cashback, airline miles, and fuel points.",
-    href: "/settings/reward-programs",
   },
   {
     id: "reward-program-categories",
@@ -340,6 +343,7 @@ function MfaSettingsPanel() {
   }
 
   if (!authEnabled) {
+    // MFA controls require an auth-enabled admin session; local dev can run with auth disabled.
     return null;
   }
 
@@ -643,7 +647,51 @@ function SettingsContent() {
           </p>
         </header>
 
-        <MfaSettingsPanel />
+        <section>
+          <div className="mb-3">
+            <h2 className="text-lg font-semibold">Operational Settings</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Frequently used setup for intake, sales, payments, and verification.
+            </p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {operationalSettingsCards.map((card) => (
+              <Link
+                className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md active:translate-y-0"
+                href={card.href}
+                key={card.id}
+              >
+                <h2 className="text-lg font-semibold">{card.title}</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  {card.description}
+                </p>
+              </Link>
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <div className="mb-3">
+            <h2 className="text-lg font-semibold">Advanced & System Defaults</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Lower-change reference lists, import tools, retention, and security.
+            </p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {advancedSettingsCards.map((card) => (
+              <Link
+                className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md active:translate-y-0"
+                href={card.href}
+                key={card.id}
+              >
+                <h2 className="text-lg font-semibold">{card.title}</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  {card.description}
+                </p>
+              </Link>
+            ))}
+          </div>
+        </section>
 
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -698,20 +746,7 @@ function SettingsContent() {
           </div>
         </section>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {settingsCards.map((card) => (
-            <Link
-              className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md active:translate-y-0"
-              href={card.href}
-              key={card.id}
-            >
-              <h2 className="text-lg font-semibold">{card.title}</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                {card.description}
-              </p>
-            </Link>
-          ))}
-        </section>
+        <MfaSettingsPanel />
       </div>
     </main>
   );

@@ -725,19 +725,31 @@ function BuyerModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4">
       <form
         className="max-h-[90vh] w-full max-w-3xl space-y-4 overflow-y-auto rounded-lg bg-white p-5 shadow-xl"
+        id="buyer-settings-form"
         onSubmit={onSubmit}
       >
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-xl font-semibold">
             {editingBuyer ? "Edit Buyer" : "Create Buyer"}
           </h2>
-          <button
-            className="h-10 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100"
-            onClick={onClose}
-            type="button"
-          >
-            Close
-          </button>
+          <div className="flex shrink-0 gap-2">
+            <button
+              className="h-9 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isSaving}
+              onClick={onClose}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button
+              className="h-9 cursor-pointer rounded-md bg-slate-950 px-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isSaving || hasInvalidPayoutRate}
+              form="buyer-settings-form"
+              type="submit"
+            >
+              {isSaving ? "Saving..." : "Save"}
+            </button>
+          </div>
         </div>
 
         <FormSection title="General">
@@ -1153,23 +1165,6 @@ function BuyerModal({
           />
         </label>
 
-        <div className="flex justify-end gap-2">
-          <button
-            className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-semibold hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={isSaving}
-            onClick={onClose}
-            type="button"
-          >
-            Cancel
-          </button>
-          <button
-            className="h-11 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={isSaving || hasInvalidPayoutRate}
-            type="submit"
-          >
-            {isSaving ? "Saving..." : "Save Buyer"}
-          </button>
-        </div>
       </form>
     </div>
   );

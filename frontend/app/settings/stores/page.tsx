@@ -922,15 +922,30 @@ function StoresSettingsContent() {
               <h2 className="text-xl font-semibold">
                 {editingStore ? "Edit Store" : "Add Store"}
               </h2>
-              <button
-                className="h-9 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100"
-                onClick={closeStoreModal}
-                type="button"
-              >
-                Close
-              </button>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  className="h-9 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isSaving}
+                  onClick={closeStoreModal}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="h-9 cursor-pointer rounded-md bg-slate-950 px-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isSaving}
+                  form="store-settings-form"
+                  type="submit"
+                >
+                  {isSaving ? "Saving..." : "Save"}
+                </button>
+              </div>
             </div>
-            <form className="mt-5 grid gap-4 sm:grid-cols-2" onSubmit={saveStore}>
+            <form
+              className="mt-5 grid gap-4 sm:grid-cols-2"
+              id="store-settings-form"
+              onSubmit={saveStore}
+            >
               <label className="space-y-2 text-sm font-medium text-slate-700">
                 <span>Store Name</span>
                 <input
@@ -1058,22 +1073,6 @@ function StoresSettingsContent() {
                   value={form.notes}
                 />
               </label>
-              <div className="flex justify-end gap-2 sm:col-span-2">
-                <button
-                  className="h-10 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-semibold hover:bg-slate-100"
-                  onClick={closeStoreModal}
-                  type="button"
-                >
-                  Cancel
-                </button>
-                <button
-                  className="h-10 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={isSaving}
-                  type="submit"
-                >
-                  {isSaving ? "Saving..." : "Save Store"}
-                </button>
-              </div>
             </form>
           </div>
           </StoreModalBoundary>

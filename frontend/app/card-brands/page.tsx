@@ -495,19 +495,31 @@ function CardBrandModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4">
       <form
         className="max-h-[90vh] w-full max-w-2xl space-y-4 overflow-y-auto rounded-lg bg-white p-5 shadow-xl"
+        id="card-brand-settings-form"
         onSubmit={onSubmit}
       >
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-xl font-semibold">
             {editingBrand ? "Edit Card Brand" : "Add Card Brand"}
           </h2>
-          <button
-            className="h-10 rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100"
-            onClick={onClose}
-            type="button"
-          >
-            Close
-          </button>
+          <div className="flex shrink-0 gap-2">
+            <button
+              className="h-9 rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isSaving}
+              onClick={onClose}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button
+              className="h-9 rounded-md bg-slate-950 px-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isSaving}
+              form="card-brand-settings-form"
+              type="submit"
+            >
+              {isSaving ? "Saving..." : "Save"}
+            </button>
+          </div>
         </div>
 
         <label className="block space-y-2 text-sm font-medium text-slate-700">
@@ -921,23 +933,6 @@ function CardBrandModal({
           </label>
         </section>
 
-        <div className="flex justify-end gap-2">
-          <button
-            className="h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={isSaving}
-            onClick={onClose}
-            type="button"
-          >
-            Cancel
-          </button>
-          <button
-            className="h-11 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={isSaving}
-            type="submit"
-          >
-            {isSaving ? "Saving..." : "Save Brand"}
-          </button>
-        </div>
       </form>
     </div>
   );
