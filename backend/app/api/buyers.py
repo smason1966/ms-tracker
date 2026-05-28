@@ -362,6 +362,9 @@ def delete_or_deactivate_buyer_record(db: Session, buyer_id: int) -> dict:
         "fuel_accounts": db.query(FuelRewardAccount)
         .filter(FuelRewardAccount.buyer_id == buyer_id)
         .count(),
+        "external_identifiers": db.query(BuyerExternalIdentifier)
+        .filter(BuyerExternalIdentifier.buyer_id == buyer_id)
+        .count(),
     }
     related_total = sum(related_counts.values())
     if related_total > 0:
@@ -372,7 +375,7 @@ def delete_or_deactivate_buyer_record(db: Session, buyer_id: int) -> dict:
             "deleted": False,
             "deactivated": True,
             "related_counts": related_counts,
-            "message": "Buyer deactivated because it is used by sales or asset history.",
+            "message": buyer_delete_message(related_counts),
             "buyer": serialize_buyer(db, buyer),
         }
 
@@ -387,6 +390,27 @@ def delete_or_deactivate_buyer_record(db: Session, buyer_id: int) -> dict:
         "related_counts": related_counts,
         "message": "Buyer deleted.",
     }
+
+
+def buyer_delete_message(related_counts: dict[str, int]) -> str:
+    labels = {
+        "sales": "sale record",
+        "gift_cards": "gift card",
+        "fuel_accounts": "fuel reward account",
+        "external_identifiers": "external identifier",
+    }
+    parts = [
+        f"{count} {labels[key]}{'s' if count != 1 else ''}"
+        for key, count in related_counts.items()
+        if count > 0
+    ]
+    if not parts:
+        return "Buyer deactivated."
+    if len(parts) == 1:
+        references = parts[0]
+    else:
+        references = f"{', '.join(parts[:-1])}, and {parts[-1]}"
+    return f"Buyer is referenced by {references} and was deactivated instead."
 
 
 @router.post("/{buyer_id}/delete-or-deactivate")

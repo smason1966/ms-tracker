@@ -48,6 +48,13 @@ type BuyerExternalIdentifier = {
   notes: string;
 };
 
+type BuyerDeleteResult = {
+  deleted?: boolean;
+  deactivated?: boolean;
+  message?: string;
+  related_counts?: Partial<Record<"sales" | "gift_cards" | "fuel_accounts" | "external_identifiers", number>>;
+};
+
 type PaymentAccount = {
   id: number;
   name: string;
@@ -258,6 +265,37 @@ function buyerToForm(buyer: Buyer): BuyerForm {
   };
 }
 
+function buyerDeleteFeedback(result: BuyerDeleteResult | null) {
+  if (!result) {
+    return "Buyer updated.";
+  }
+  if (result.message) {
+    return result.message;
+  }
+  if (result.deleted) {
+    return "Buyer deleted.";
+  }
+
+  const labels = {
+    sales: "sale record",
+    gift_cards: "gift card",
+    fuel_accounts: "fuel reward account",
+    external_identifiers: "external identifier",
+  };
+  const parts = Object.entries(result.related_counts ?? {})
+    .filter(([, count]) => Number(count) > 0)
+    .map(([key, count]) => {
+      const label = labels[key as keyof typeof labels] ?? key;
+      return `${count} ${label}${count === 1 ? "" : "s"}`;
+    });
+  if (parts.length === 0) {
+    return result.deactivated ? "Buyer deactivated." : "Buyer updated.";
+  }
+  const references =
+    parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)}`;
+  return `Buyer is referenced by ${references} and was deactivated instead.`;
+}
+
 export default function BuyersPage() {
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>([]);
@@ -455,7 +493,7 @@ export default function BuyersPage() {
         );
       }
 
-      setModalMessage(body?.message ?? "Buyer updated.");
+      setModalMessage(buyerDeleteFeedback(body as BuyerDeleteResult | null));
       setIsModalOpen(false);
       setEditingBuyer(null);
       await loadBuyers();
