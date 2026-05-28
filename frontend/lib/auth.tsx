@@ -15,6 +15,7 @@ import { API_BASE_URL, installAuthenticatedFetch } from "@/lib/api";
 type AdminSession = {
   id: number;
   username: string;
+  role?: "admin" | "tester";
   active: boolean;
   last_login_at: string | null;
   mfa_enabled?: boolean;

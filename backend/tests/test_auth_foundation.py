@@ -94,6 +94,7 @@ def test_create_admin_user_creates_and_rotates_without_printing_password(capsys)
     assert captured.out == ""
     assert captured.err == ""
     assert admin.username == "admin@example.com"
+    assert admin.role == "admin"
     assert "initial-password" not in admin.password_hash
     assert verify_password("initial-password", admin.password_hash)
 
@@ -109,6 +110,42 @@ def test_create_admin_user_creates_and_rotates_without_printing_password(capsys)
     assert captured.err == ""
     assert verify_password("rotated-password", rotated.password_hash)
     assert not verify_password("initial-password", rotated.password_hash)
+
+
+def test_create_admin_user_can_create_tester_and_preserve_role_on_rotation():
+    db = make_session()
+
+    tester = create_or_update_admin_user(
+        db,
+        username="Tester@Example.com",
+        password="tester-password",
+        role="tester",
+    )
+
+    assert tester.username == "tester@example.com"
+    assert tester.role == "tester"
+    assert verify_password("tester-password", tester.password_hash)
+
+    rotated = create_or_update_admin_user(
+        db,
+        username="tester@example.com",
+        password="rotated-password",
+    )
+
+    assert rotated.id == tester.id
+    assert rotated.role == "tester"
+    assert verify_password("rotated-password", rotated.password_hash)
+
+    promoted = create_or_update_admin_user(
+        db,
+        username="tester@example.com",
+        password="admin-password",
+        role="admin",
+    )
+
+    assert promoted.id == tester.id
+    assert promoted.role == "admin"
+    assert verify_password("admin-password", promoted.password_hash)
 
 
 def test_session_secret_required_when_auth_enabled_in_staging():

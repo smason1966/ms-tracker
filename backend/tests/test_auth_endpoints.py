@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from cryptography.fernet import Fernet
@@ -45,11 +46,18 @@ def make_client(monkeypatch, session_factory):
     return TestClient(app)
 
 
-def create_admin(session_factory, *, username="admin@example.com", password="password"):
+def create_admin(
+    session_factory,
+    *,
+    username="admin@example.com",
+    password="password",
+    role="admin",
+):
     db = session_factory()
     admin = AdminUser(
         username=username,
         password_hash=hash_password(password),
+        role=role,
         active=True,
     )
     db.add(admin)
@@ -124,6 +132,7 @@ def test_session_endpoint_returns_admin_for_valid_session(monkeypatch):
     assert response.status_code == 200
     assert response.json()["authenticated"] is True
     assert response.json()["admin"]["username"] == "admin@example.com"
+    assert response.json()["admin"]["role"] == "admin"
 
 
 def test_session_endpoint_returns_false_without_valid_session(monkeypatch):
@@ -241,6 +250,32 @@ def test_mfa_setup_start_returns_provisioning_details(monkeypatch):
     assert admin.pending_totp_secret_encrypted.startswith(ENCRYPTED_FIELD_PREFIX)
     assert body["manual_secret"] not in admin.pending_totp_secret_encrypted
     db.close()
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("/auth/mfa/setup/start", None),
+        ("/auth/mfa/setup/verify", {"code": "123456"}),
+        ("/auth/mfa/recovery-codes/regenerate", {"code": "123456"}),
+        ("/auth/mfa/disable", {"code": "123456"}),
+    ],
+)
+def test_tester_user_cannot_manage_mfa(monkeypatch, path, payload):
+    session_factory = make_session_factory()
+    create_admin(session_factory, role="tester")
+    client = make_client(monkeypatch, session_factory)
+    login_response = client.post(
+        "/auth/login",
+        json={"username": "admin@example.com", "password": "password"},
+    )
+
+    response = client.post(path, json=payload) if payload is not None else client.post(path)
+
+    assert login_response.status_code == 200
+    assert login_response.json()["admin"]["role"] == "tester"
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin role required"
 
 
 def test_mfa_setup_verify_enables_mfa_and_returns_recovery_codes(monkeypatch):

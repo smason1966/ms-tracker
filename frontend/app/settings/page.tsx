@@ -343,6 +343,22 @@ function MfaSettingsPanel() {
     return null;
   }
 
+  if (admin?.role === "tester") {
+    return (
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-lg font-semibold">Multi-factor Authentication</h2>
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+            Admin only
+          </span>
+        </div>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          Security settings are available to admins only.
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">

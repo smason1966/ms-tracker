@@ -21,23 +21,29 @@ def create_or_update_admin_user(
     *,
     username: str,
     password: str,
+    role: str | None = None,
 ) -> AdminUser:
     cleaned_username = username.strip().lower()
     if not cleaned_username:
         raise ValueError("Admin username is required")
     if not password:
         raise ValueError("Admin password is required")
+    if role is not None and role not in {"admin", "tester"}:
+        raise ValueError("Role must be admin or tester")
 
     admin = db.query(AdminUser).filter(AdminUser.username == cleaned_username).first()
     if admin is None:
         admin = AdminUser(
             username=cleaned_username,
             password_hash=hash_password(password),
+            role=role or "admin",
             active=True,
         )
         db.add(admin)
     else:
         admin.password_hash = hash_password(password)
+        if role is not None:
+            admin.role = role
         admin.active = True
         admin.failed_login_count = 0
         admin.locked_until = None
@@ -58,6 +64,12 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("ADMIN_PASSWORD"),
         help="Optional for automation. Prefer interactive prompt.",
     )
+    parser.add_argument(
+        "--role",
+        choices=["admin", "tester"],
+        default=os.getenv("ADMIN_ROLE"),
+        help="Optional role. Existing users keep their role unless this is provided.",
+    )
     return parser.parse_args()
 
 
@@ -77,11 +89,12 @@ def main() -> int:
             db,
             username=username,
             password=password,
+            role=args.role,
         )
     finally:
         db.close()
 
-    print(f"Admin user ready: {admin.username}")
+    print(f"Admin user ready: {admin.username} (role: {admin.role})")
     return 0
 
 

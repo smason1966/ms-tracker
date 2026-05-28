@@ -52,6 +52,7 @@ def admin_summary(admin: AdminUser) -> dict:
     return {
         "id": admin.id,
         "username": admin.username,
+        "role": admin.role,
         "active": admin.active,
         "last_login_at": admin.last_login_at,
         "mfa_enabled": admin.mfa_enabled,
@@ -197,6 +198,11 @@ def require_current_admin(db: Session, request: Request) -> AdminUser:
     return result[1]
 
 
+def require_admin_role(admin: AdminUser) -> None:
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+
+
 def create_mfa_challenge(db: Session, admin: AdminUser, request: Request) -> tuple[str, AdminMfaChallenge]:
     token = generate_session_token()
     challenge = AdminMfaChallenge(
@@ -337,6 +343,7 @@ def start_mfa_setup(request: Request):
     db: Session = SessionLocal()
     try:
         admin = require_current_admin(db, request)
+        require_admin_role(admin)
         secret = generate_totp_secret()
         admin.pending_totp_secret_encrypted = encrypt_totp_secret(secret)
         admin.mfa_updated_at = utc_now()
@@ -356,6 +363,7 @@ def verify_mfa_setup(payload: MfaCodePayload, request: Request):
     db: Session = SessionLocal()
     try:
         admin = require_current_admin(db, request)
+        require_admin_role(admin)
         if not admin.pending_totp_secret_encrypted:
             raise HTTPException(status_code=400, detail="MFA setup has not been started")
         if not verify_totp_code(admin.pending_totp_secret_encrypted, payload.code):
@@ -383,6 +391,7 @@ def regenerate_mfa_recovery_codes(payload: MfaCodePayload, request: Request):
     db: Session = SessionLocal()
     try:
         admin = require_current_admin(db, request)
+        require_admin_role(admin)
         if not admin.mfa_enabled or not admin.totp_secret_encrypted:
             raise HTTPException(status_code=400, detail="MFA is not enabled")
         if not verify_totp_code(admin.totp_secret_encrypted, payload.code):
@@ -404,6 +413,7 @@ def disable_mfa(payload: MfaChallengePayload, request: Request):
     db: Session = SessionLocal()
     try:
         admin = require_current_admin(db, request)
+        require_admin_role(admin)
         if not admin.mfa_enabled:
             return {"mfa_enabled": False}
 
