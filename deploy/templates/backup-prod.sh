@@ -1,33 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/opt/dotopoly/app}"
-ENV_FILE="${ENV_FILE:-/opt/dotopoly/env/prod.env}"
-BACKUP_DIR="${BACKUP_DIR:-/opt/dotopoly/data/backups/prod}"
-UPLOADS_DIR="${UPLOADS_DIR_ON_HOST:-/opt/dotopoly/data/prod/uploads}"
-COMPOSE_FILE="${COMPOSE_FILE:-$APP_DIR/docker-compose.prod.yml}"
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+APP_DIR="/opt/dotopoly/app"
+BACKUP_ROOT="/opt/dotopoly/data/backups/prod"
+UPLOADS_ROOT="/opt/dotopoly/data/prod"
+UPLOADS_DIR="${UPLOADS_ROOT}/uploads"
+STAMP="$(date +"%Y-%m-%d_%H-%M-%S")"
+BACKUP_DIR="${BACKUP_ROOT}/${STAMP}"
 
 mkdir -p "$BACKUP_DIR"
 
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+cd "$APP_DIR"
+
+docker compose \
+  --env-file /opt/dotopoly/env/prod.env \
+  -f docker-compose.prod.yml \
+  exec -T db pg_dump -U mstracker -d mstracker_prod > "$BACKUP_DIR/mstracker_prod.sql"
+
+if [ -d "$UPLOADS_DIR" ]; then
+  tar -czf "$BACKUP_DIR/uploads.tar.gz" -C "$UPLOADS_ROOT" uploads
+else
+  tar -czf "$BACKUP_DIR/uploads.tar.gz" --files-from /dev/null
 fi
 
-DB_NAME="${POSTGRES_DB:-mstracker_prod}"
-DB_USER="${POSTGRES_USER:-mstracker}"
+chmod 700 "$BACKUP_ROOT"
+chmod 700 "$BACKUP_DIR"
+chmod 600 "$BACKUP_DIR/mstracker_prod.sql" "$BACKUP_DIR/uploads.tar.gz"
 
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T db \
-  pg_dump -U "$DB_USER" "$DB_NAME" \
-  | gzip > "$BACKUP_DIR/${DB_NAME}-${STAMP}.sql.gz"
-
-if [[ -d "$UPLOADS_DIR" ]]; then
-  tar -C "$UPLOADS_DIR" -czf "$BACKUP_DIR/uploads-${STAMP}.tar.gz" .
-fi
-
-find "$BACKUP_DIR" -type f -name "*.gz" -mtime +30 -delete
+find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf {} \;
 
 echo "Production backup complete: $BACKUP_DIR"
