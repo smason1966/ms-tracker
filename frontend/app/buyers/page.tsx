@@ -700,6 +700,23 @@ function FormSection({
   );
 }
 
+function AdvancedFormSection({
+  children,
+  title,
+}: {
+  children: ReactNode;
+  title: string;
+}) {
+  return (
+    <details className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <summary className="cursor-pointer text-sm font-semibold text-slate-900">
+        {title}
+      </summary>
+      <div className="mt-3">{children}</div>
+    </details>
+  );
+}
+
 function BuyerModal({
   editingBuyer,
   form,
@@ -946,7 +963,7 @@ function BuyerModal({
           </div>
         </FormSection>
 
-        <FormSection title="Exports">
+        <AdvancedFormSection title="Advanced Export Template">
           <div className="mt-3 grid gap-4 sm:grid-cols-3">
             <label className="block space-y-2 text-sm font-medium text-slate-700">
               <span>Preferred Export Type</span>
@@ -1077,9 +1094,9 @@ function BuyerModal({
               </p>
             </label>
           </div>
-        </FormSection>
+        </AdvancedFormSection>
 
-        <FormSection title="External IDs">
+        <AdvancedFormSection title="Advanced External IDs">
           <div className="space-y-3">
             {form.external_identifiers.map((identifier, index) => (
               <div
@@ -1154,16 +1171,18 @@ function BuyerModal({
               Add External ID
             </button>
           </div>
-        </FormSection>
+        </AdvancedFormSection>
 
-        <label className="block space-y-2 text-sm font-medium text-slate-700">
-          <span>Notes</span>
-          <textarea
-            className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2"
-            onChange={(event) => setForm({ ...form, notes: event.target.value })}
-            value={form.notes}
-          />
-        </label>
+        <AdvancedFormSection title="Advanced Notes">
+          <label className="block space-y-2 text-sm font-medium text-slate-700">
+            <span>Notes</span>
+            <textarea
+              className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2"
+              onChange={(event) => setForm({ ...form, notes: event.target.value })}
+              value={form.notes}
+            />
+          </label>
+        </AdvancedFormSection>
 
       </form>
     </div>

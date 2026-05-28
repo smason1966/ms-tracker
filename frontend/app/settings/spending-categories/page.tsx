@@ -245,15 +245,30 @@ export default function SpendingCategoriesSettingsPage() {
               <h2 className="text-xl font-semibold">
                 {editingCategory ? "Edit Category" : "Add Category"}
               </h2>
-              <button
-                className="h-9 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100"
-                onClick={() => setIsModalOpen(false)}
-                type="button"
-              >
-                Close
-              </button>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  className="h-9 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isSaving}
+                  onClick={() => setIsModalOpen(false)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="h-9 cursor-pointer rounded-md bg-slate-950 px-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isSaving}
+                  form="spending-category-settings-form"
+                  type="submit"
+                >
+                  {isSaving ? "Saving..." : "Save"}
+                </button>
+              </div>
             </div>
-            <form className="mt-5 grid gap-4" onSubmit={saveCategory}>
+            <form
+              className="mt-5 grid gap-4"
+              id="spending-category-settings-form"
+              onSubmit={saveCategory}
+            >
               <label className="space-y-2 text-sm font-medium text-slate-700">
                 <span>Name</span>
                 <input
@@ -310,22 +325,6 @@ export default function SpendingCategoriesSettingsPage() {
                 />
                 <span>Active</span>
               </label>
-              <div className="flex justify-end gap-2">
-                <button
-                  className="h-10 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-semibold hover:bg-slate-100"
-                  onClick={() => setIsModalOpen(false)}
-                  type="button"
-                >
-                  Cancel
-                </button>
-                <button
-                  className="h-10 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={isSaving}
-                  type="submit"
-                >
-                  {isSaving ? "Saving..." : "Save Category"}
-                </button>
-              </div>
             </form>
           </div>
         </div>

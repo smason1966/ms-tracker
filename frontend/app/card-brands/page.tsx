@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
 import { API_BASE_URL } from "@/lib/api";
 
@@ -139,6 +140,31 @@ async function apiErrorMessage(
   return `Request failed: ${method} ${endpoint} (${response.status}). Response body: ${
     bodyText || response.statusText || "No response body"
   }`;
+}
+
+function AdvancedSection({
+  children,
+  defaultOpen = false,
+  description,
+  title,
+}: {
+  children: ReactNode;
+  defaultOpen?: boolean;
+  description: string;
+  title: string;
+}) {
+  return (
+    <details
+      className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+      open={defaultOpen}
+    >
+      <summary className="cursor-pointer text-sm font-semibold text-slate-900">
+        {title}
+      </summary>
+      <p className="mt-1 text-xs text-slate-500">{description}</p>
+      <div className="mt-4 space-y-4">{children}</div>
+    </details>
+  );
 }
 
 export default function CardBrandsPage() {
@@ -578,37 +604,6 @@ function CardBrandModal({
           </label>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block space-y-2 text-sm font-medium text-slate-700">
-            <span>Parser Type</span>
-            <input
-              className="h-11 w-full rounded-md border border-slate-300 px-3"
-              onChange={(event) =>
-                setForm({
-                  ...form,
-                  parser_type: event.target.value,
-                })
-              }
-              placeholder="barcode_ocr"
-              value={form.parser_type}
-            />
-          </label>
-          <label className="block space-y-2 text-sm font-medium text-slate-700">
-            <span>Parsing Profile</span>
-            <input
-              className="h-11 w-full rounded-md border border-slate-300 px-3"
-              onChange={(event) =>
-                setForm({
-                  ...form,
-                  parsing_profile: event.target.value,
-                })
-              }
-              placeholder="best_buy"
-              value={form.parsing_profile}
-            />
-          </label>
-        </div>
-
         <label className="block space-y-2 text-sm font-medium text-slate-700">
           <span>Notes</span>
           <textarea
@@ -624,7 +619,10 @@ function CardBrandModal({
         </label>
 
         {form.supports_magstripe ? (
-          <section className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <AdvancedSection
+            description="Optional magnetic stripe parsing metadata for brands that support swipes."
+            title="Advanced Magstripe Settings"
+          >
             <label className="block space-y-2 text-sm font-medium text-slate-700">
               <span>Magstripe Parser Type</span>
               <input
@@ -665,19 +663,13 @@ function CardBrandModal({
                 value={form.sample_magstripe_data}
               />
             </label>
-          </section>
+          </AdvancedSection>
         ) : null}
 
-        <section className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-900">
-              Parsing Rules
-            </h3>
-            <p className="mt-1 text-xs text-slate-500">
-              Optional OCR hints for card number and PIN detection. Use one
-              capture group when possible.
-            </p>
-          </div>
+        <AdvancedSection
+          description="Optional OCR hints for card number and PIN detection. Use one capture group when possible."
+          title="Advanced PIN/Card Number Detection"
+        >
           <label className="block space-y-2 text-sm font-medium text-slate-700">
             <span>Card Number Regex</span>
             <textarea
@@ -763,20 +755,17 @@ function CardBrandModal({
                   })
                 }
                 placeholder="four_digits_right_of_card_number"
-                value={form.pin_spatial_rule}
-              />
-            </label>
+              value={form.pin_spatial_rule}
+            />
+          </label>
           </div>
-          <div className="rounded-md border border-slate-200 bg-white p-3">
-            <h4 className="text-sm font-semibold text-slate-900">
-              Gift Code Template
-            </h4>
-            <p className="mt-1 text-xs text-slate-500">
-              Brand-aware formats for alphanumeric redemption codes like Uber
-              NAAD or DoorDash NAAW codes. Pattern matches are ranked above
-              generic OCR confidence.
-            </p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_160px]">
+        </AdvancedSection>
+
+        <AdvancedSection
+          description="Brand-aware formats for alphanumeric redemption codes like Uber NAAD or DoorDash NAAW codes."
+          title="Advanced Gift Code Template"
+        >
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_160px]">
               <label className="block space-y-2 text-sm font-medium text-slate-700">
                 <span>Gift Code Prefixes</span>
                 <input
@@ -806,8 +795,8 @@ function CardBrandModal({
                   value={form.gift_code_expected_length}
                 />
               </label>
-            </div>
-            <label className="mt-3 block space-y-2 text-sm font-medium text-slate-700">
+          </div>
+          <label className="block space-y-2 text-sm font-medium text-slate-700">
               <span>Gift Code Regex</span>
               <textarea
                 className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-xs"
@@ -818,10 +807,10 @@ function CardBrandModal({
                   })
                 }
                 placeholder="NAAD[\\s-]*[A-Z0-9]{4}[\\s-]*[A-Z0-9]{4}[\\s-]*[A-Z0-9]{4}"
-                value={form.gift_code_regex}
-              />
-            </label>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              value={form.gift_code_regex}
+            />
+          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
               <label className="block space-y-2 text-sm font-medium text-slate-700">
                 <span>Gift Code Normalization</span>
                 <input
@@ -850,19 +839,42 @@ function CardBrandModal({
                   value={form.ocr_confusion_map}
                 />
               </label>
-            </div>
           </div>
-        </section>
+        </AdvancedSection>
 
-        <section className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-900">
-              OCR Template
-            </h3>
-            <p className="mt-1 text-xs text-slate-500">
-              Percentage-based scan zones tell OCR where to look for the useful
-              credential and which areas to ignore.
-            </p>
+        <AdvancedSection
+          description="Parser profiles and percentage-based scan zones for brand-specific OCR tuning."
+          title="Advanced OCR Template"
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Parser Type</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 px-3"
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    parser_type: event.target.value,
+                  })
+                }
+                placeholder="barcode_ocr"
+                value={form.parser_type}
+              />
+            </label>
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Parsing Profile</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 px-3"
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    parsing_profile: event.target.value,
+                  })
+                }
+                placeholder="best_buy"
+                value={form.parsing_profile}
+              />
+            </label>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block space-y-2 text-sm font-medium text-slate-700">
@@ -931,7 +943,7 @@ function CardBrandModal({
               Coordinates are percentages of the image after rotation.
             </span>
           </label>
-        </section>
+        </AdvancedSection>
 
       </form>
     </div>
