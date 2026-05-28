@@ -228,6 +228,12 @@ type EditableSection =
   | "bonus"
   | "notes";
 
+type StatementCycleDateField = "payment_due_date" | "next_statement_close_date";
+
+type ParsedDateInput =
+  | { ok: true; value: string }
+  | { ok: false; message: string };
+
 const REWARD_TYPE_OPTIONS = [
   { value: "points", label: "Points Multiplier" },
   { value: "cashback_percent", label: "Cashback %" },
@@ -380,6 +386,54 @@ function formatDate(value: string | null) {
     day: "numeric",
     year: "numeric",
   }).format(date);
+}
+
+function formatIsoDateForInput(value: string | null | undefined) {
+  if (!value) {
+    return "";
+  }
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+
+  if (!match) {
+    return value;
+  }
+
+  return `${match[2]}/${match[3]}/${match[1]}`;
+}
+
+function parseDateInput(value: string, label: string): ParsedDateInput {
+  const trimmedValue = value.trim();
+
+  if (!trimmedValue) {
+    return { ok: true, value: "" };
+  }
+
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmedValue);
+  const usMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmedValue);
+
+  const year = isoMatch ? Number(isoMatch[1]) : usMatch ? Number(usMatch[3]) : null;
+  const month = isoMatch ? Number(isoMatch[2]) : usMatch ? Number(usMatch[1]) : null;
+  const day = isoMatch ? Number(isoMatch[3]) : usMatch ? Number(usMatch[2]) : null;
+
+  if (year === null || month === null || day === null) {
+    return { ok: false, message: `${label} must use MM/DD/YYYY.` };
+  }
+
+  const date = new Date(year, month - 1, day);
+  const isValid =
+    date.getFullYear() === year &&
+    date.getMonth() === month - 1 &&
+    date.getDate() === day;
+
+  if (!isValid) {
+    return { ok: false, message: `${label} must be a valid calendar date.` };
+  }
+
+  return {
+    ok: true,
+    value: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+  };
 }
 
 function formatStatementAmount(value: string | number | null) {
@@ -647,6 +701,12 @@ export default function CreditCardDetailPage() {
   const [isSavingRewardRule, setIsSavingRewardRule] = useState(false);
   const [isDeletingRewardRule, setIsDeletingRewardRule] = useState(false);
   const [isRecalculatingRewards, setIsRecalculatingRewards] = useState(false);
+  const [statementCycleDateInputs, setStatementCycleDateInputs] = useState<
+    Record<StatementCycleDateField, string>
+  >({
+    payment_due_date: "",
+    next_statement_close_date: "",
+  });
   const [error, setError] = useState<string | null>(null);
   const [sectionMessage, setSectionMessage] = useState<string | null>(null);
   const [rewardRuleMessage, setRewardRuleMessage] = useState<string | null>(null);
@@ -753,9 +813,16 @@ export default function CreditCardDetailPage() {
       }
 
       const data = (await cardResponse.json()) as CreditCard;
+      const cardForm = toForm(data);
       const settings = (await settingsResponse.json()) as AppSettings;
       setCard(data);
-      setForm(toForm(data));
+      setForm(cardForm);
+      setStatementCycleDateInputs({
+        payment_due_date: formatIsoDateForInput(cardForm.payment_due_date),
+        next_statement_close_date: formatIsoDateForInput(
+          cardForm.next_statement_close_date,
+        ),
+      });
       setCategories((await categoriesResponse.json()) as SpendingCategory[]);
       setIsMultiPlayerModeEnabled(settings.multi_player_mode_enabled);
       setPlayers((await playersResponse.json()) as Player[]);
@@ -782,8 +849,15 @@ export default function CreditCardDetailPage() {
     }
 
     const data = (await response.json()) as CreditCard;
+    const cardForm = toForm(data);
     setCard(data);
-    setForm(toForm(data));
+    setForm(cardForm);
+    setStatementCycleDateInputs({
+      payment_due_date: formatIsoDateForInput(cardForm.payment_due_date),
+      next_statement_close_date: formatIsoDateForInput(
+        cardForm.next_statement_close_date,
+      ),
+    });
     return data;
   }, [cardId]);
 
@@ -901,6 +975,8 @@ export default function CreditCardDetailPage() {
       return;
     }
 
+    let payloadForm = form;
+
     setIsSaving(true);
     setError(null);
     setSectionMessage(null);
@@ -916,13 +992,44 @@ export default function CreditCardDetailPage() {
       return;
     }
 
+    if (section === "cycle") {
+      const parsedPaymentDueDate = parseDateInput(
+        statementCycleDateInputs.payment_due_date,
+        "Payment Due Date",
+      );
+      const parsedStatementCloseDate = parseDateInput(
+        statementCycleDateInputs.next_statement_close_date,
+        "Next Statement Close Date",
+      );
+
+      if (!parsedPaymentDueDate.ok) {
+        setError(parsedPaymentDueDate.message);
+        setEditingSection(section);
+        setIsSaving(false);
+        return;
+      }
+
+      if (!parsedStatementCloseDate.ok) {
+        setError(parsedStatementCloseDate.message);
+        setEditingSection(section);
+        setIsSaving(false);
+        return;
+      }
+
+      payloadForm = {
+        ...form,
+        payment_due_date: parsedPaymentDueDate.value,
+        next_statement_close_date: parsedStatementCloseDate.value,
+      };
+    }
+
     try {
       const response = await fetch(`${API_BASE_URL}/credit-cards/${card.id}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(buildPayload(form)),
+        body: JSON.stringify(buildPayload(payloadForm)),
       });
 
       if (!response.ok) {
@@ -933,8 +1040,15 @@ export default function CreditCardDetailPage() {
       }
 
       const data = (await response.json()) as CreditCard;
+      const cardForm = toForm(data);
       setCard(data);
-      setForm(toForm(data));
+      setForm(cardForm);
+      setStatementCycleDateInputs({
+        payment_due_date: formatIsoDateForInput(cardForm.payment_due_date),
+        next_statement_close_date: formatIsoDateForInput(
+          cardForm.next_statement_close_date,
+        ),
+      });
       setEditingSection(null);
       setSectionMessage("Section saved.");
     } catch (err) {
@@ -1218,6 +1332,15 @@ export default function CreditCardDetailPage() {
     setEditingSection((currentSection) =>
       currentSection === section ? null : section,
     );
+
+    if (section === "cycle" && editingSection !== "cycle" && form) {
+      setStatementCycleDateInputs({
+        payment_due_date: formatIsoDateForInput(form.payment_due_date),
+        next_statement_close_date: formatIsoDateForInput(
+          form.next_statement_close_date,
+        ),
+      });
+    }
   }
 
   function renderInlineInput(
@@ -1276,6 +1399,46 @@ export default function CreditCardDetailPage() {
     );
   }
 
+  function renderStatementCycleDateInput(
+    field: StatementCycleDateField,
+    label: string,
+  ) {
+    return (
+      <label className="space-y-1 text-sm font-medium text-slate-700" key={field}>
+        <span>{label}</span>
+        <input
+          className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+          inputMode="numeric"
+          onBlur={() => {
+            const parsedValue = parseDateInput(
+              statementCycleDateInputs[field],
+              label,
+            );
+
+            if (parsedValue.ok) {
+              setStatementCycleDateInputs((currentInputs) => ({
+                ...currentInputs,
+                [field]: formatIsoDateForInput(parsedValue.value),
+              }));
+            }
+          }}
+          onChange={(event) =>
+            setStatementCycleDateInputs((currentInputs) => ({
+              ...currentInputs,
+              [field]: event.target.value,
+            }))
+          }
+          placeholder="MM/DD/YYYY"
+          type="text"
+          value={statementCycleDateInputs[field]}
+        />
+        <span className="block text-xs font-normal text-slate-500">
+          Use MM/DD/YYYY. Leave blank if not set.
+        </span>
+      </label>
+    );
+  }
+
   function renderPlayerSelect() {
     if (!form || !isMultiPlayerModeEnabled) {
       return null;
@@ -1311,7 +1474,16 @@ export default function CreditCardDetailPage() {
           className="h-10 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
           onClick={() => {
             if (card) {
-              setForm(toForm(card));
+              const resetForm = toForm(card);
+              setForm(resetForm);
+              setStatementCycleDateInputs({
+                payment_due_date: formatIsoDateForInput(
+                  resetForm.payment_due_date,
+                ),
+                next_statement_close_date: formatIsoDateForInput(
+                  resetForm.next_statement_close_date,
+                ),
+              });
             }
             setEditingSection(null);
           }}
@@ -1675,8 +1847,11 @@ export default function CreditCardDetailPage() {
                 {renderInlineInput("minimum_payment_due", "Minimum Payment Due", "number")}
                 {renderInlineCheckbox("minimum_payment_paid", "Minimum Payment Made")}
                 {renderInlineCheckbox("autopay_enabled", "Autopay Enabled")}
-                {renderInlineInput("payment_due_date", "Payment Due Date", "date")}
-                {renderInlineInput("next_statement_close_date", "Next Statement Close Date", "date")}
+                {renderStatementCycleDateInput("payment_due_date", "Payment Due Date")}
+                {renderStatementCycleDateInput(
+                  "next_statement_close_date",
+                  "Next Statement Close Date",
+                )}
                 <div className="sm:col-span-2 xl:col-span-3">
                   {renderSectionActions("cycle")}
                 </div>
