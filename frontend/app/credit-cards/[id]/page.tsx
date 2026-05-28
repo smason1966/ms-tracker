@@ -670,25 +670,29 @@ function DetailSection({
   items,
   isEditing,
   onEdit,
+  editActions,
   children,
 }: {
   title: string;
   items: DisplayItem[];
   isEditing?: boolean;
   onEdit?: () => void;
+  editActions?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold text-slate-950">{title}</h2>
-        {onEdit ? (
+        {isEditing && editActions ? (
+          editActions
+        ) : onEdit ? (
           <button
             className="h-9 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
             onClick={onEdit}
             type="button"
           >
-            {isEditing ? "Close" : "Edit"}
+            Edit
           </button>
         ) : null}
       </div>
@@ -1587,9 +1591,9 @@ export default function CreditCardDetailPage() {
 
   function renderSectionActions(section: EditableSection) {
     return (
-      <div className="flex justify-end gap-2">
+      <div className="flex shrink-0 justify-end gap-2">
         <button
-          className="h-10 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
+          className="h-9 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
           onClick={() => {
             if (card) {
               const resetForm = toForm(card);
@@ -1603,7 +1607,7 @@ export default function CreditCardDetailPage() {
           Cancel
         </button>
         <button
-          className="h-10 cursor-pointer rounded-md bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+          className="h-9 cursor-pointer rounded-md bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           disabled={isSaving}
           onClick={() => void saveCurrentSection(section)}
           type="button"
@@ -1701,6 +1705,7 @@ export default function CreditCardDetailPage() {
 
         <div className="grid gap-5">
             <DetailSection
+              editActions={renderSectionActions("overview")}
               isEditing={editingSection === "overview"}
               items={[
                 ...(isMultiPlayerModeEnabled
@@ -1759,10 +1764,10 @@ export default function CreditCardDetailPage() {
                 </label>
                 {renderInlineInput("last_four", "Last Four")}
                 {renderInlineCheckbox("is_active", "Active")}
-                {renderSectionActions("overview")}
               </div>
             </DetailSection>
             <DetailSection
+              editActions={renderSectionActions("defaults")}
               isEditing={editingSection === "defaults"}
               items={[
                 { label: "Credit Limit", value: formatCreditLimit(card.credit_limit) },
@@ -1851,12 +1856,10 @@ export default function CreditCardDetailPage() {
                     ))}
                   </select>
                 </label>
-                <div className="sm:col-span-2 xl:col-span-3">
-                  {renderSectionActions("defaults")}
-                </div>
               </div>
             </DetailSection>
             <DetailSection
+              editActions={renderSectionActions("cycle")}
               isEditing={editingSection === "cycle"}
               items={[
                 {
@@ -1963,13 +1966,11 @@ export default function CreditCardDetailPage() {
                   "next_statement_close_date",
                   "Next Statement Close Date",
                 )}
-                <div className="sm:col-span-2 xl:col-span-3">
-                  {renderSectionActions("cycle")}
-                </div>
               </div>
             </DetailSection>
             {signupBonus?.isActive ? (
               <DetailSection
+                editActions={renderSectionActions("bonus")}
                 isEditing={editingSection === "bonus"}
                 items={[
                   {
@@ -2034,9 +2035,6 @@ export default function CreditCardDetailPage() {
                   {renderInlineInput("current_spend_progress", "Current Spend Progress", "number")}
                   {renderInlineInput("signup_bonus_points", "Signup Bonus Points", "number")}
                   {renderInlineInput("signup_bonus_deadline", "Signup Bonus Deadline", "date")}
-                  <div className="sm:col-span-2 xl:col-span-3">
-                    {renderSectionActions("bonus")}
-                  </div>
                 </div>
               </DetailSection>
             ) : null}
@@ -2471,6 +2469,7 @@ export default function CreditCardDetailPage() {
               )}
             </section>
             <DetailSection
+              editActions={renderSectionActions("rewards")}
               isEditing={editingSection === "rewards"}
               items={[
                 {
@@ -2513,9 +2512,6 @@ export default function CreditCardDetailPage() {
                     ))}
                   </select>
                 </label>
-                <div className="sm:col-span-2 xl:col-span-3">
-                  {renderSectionActions("rewards")}
-                </div>
               </div>
             </DetailSection>
             <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -2562,6 +2558,7 @@ export default function CreditCardDetailPage() {
               )}
             </section>
             <DetailSection
+              editActions={renderSectionActions("notes")}
               isEditing={editingSection === "notes"}
               items={[
                 { label: "Payment Options", value: card.payment_options || "Not set" },
@@ -2591,7 +2588,6 @@ export default function CreditCardDetailPage() {
                     value={form.notes}
                   />
                 </label>
-                <div className="md:col-span-2">{renderSectionActions("notes")}</div>
               </div>
             </DetailSection>
             {signupBonus && !signupBonus.isActive ? (
@@ -2621,6 +2617,22 @@ export default function CreditCardDetailPage() {
                 </button>
                 {isArchivedBonusOpen ? (
                   <div className="mt-4">
+                    <div className="mb-4 flex justify-end">
+                      {editingSection === "bonus" ? (
+                        renderSectionActions("bonus")
+                      ) : (
+                        <button
+                          className="h-9 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
+                          onClick={() => {
+                            setIsArchivedBonusOpen(true);
+                            toggleSection("bonus");
+                          }}
+                          type="button"
+                        >
+                          Edit
+                        </button>
+                      )}
+                    </div>
                     <div className="mb-4 overflow-hidden rounded-full bg-slate-200">
                       <div
                         className="h-3 rounded-full bg-slate-500"
@@ -2670,25 +2682,12 @@ export default function CreditCardDetailPage() {
                         </div>
                       ))}
                     </dl>
-                    <button
-                      className="mt-4 h-9 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
-                      onClick={() => {
-                        setIsArchivedBonusOpen(true);
-                        toggleSection("bonus");
-                      }}
-                      type="button"
-                    >
-                      {editingSection === "bonus" ? "Close" : "Edit"}
-                    </button>
                     {editingSection === "bonus" ? (
                       <div className="mt-4 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-3">
                         {renderInlineInput("signup_bonus_spend", "Signup Bonus Spend", "number")}
                         {renderInlineInput("current_spend_progress", "Current Spend Progress", "number")}
                         {renderInlineInput("signup_bonus_points", "Signup Bonus Points", "number")}
                         {renderInlineInput("signup_bonus_deadline", "Signup Bonus Deadline", "date")}
-                        <div className="sm:col-span-2 xl:col-span-3">
-                          {renderSectionActions("bonus")}
-                        </div>
                       </div>
                     ) : null}
                   </div>
