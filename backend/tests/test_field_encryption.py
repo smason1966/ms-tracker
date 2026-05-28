@@ -1,4 +1,6 @@
 from cryptography.fernet import Fernet
+from decimal import Decimal
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -10,13 +12,17 @@ from app.models.fuel_point_entry import FuelPointEntry
 from app.models.fuel_reward_account import FuelRewardAccount
 from app.models.gift_card import GiftCard
 from app.models.purchase_batch import PurchaseBatch
+from app.models.sale import Sale
+from app.models.sale_gift_card import SaleGiftCard
 from app.services.field_encryption import (
     ENCRYPTED_FIELD_PREFIX,
+    UNDECRYPTABLE_CREDENTIAL_MESSAGE,
     _fernet,
     decrypt_field,
     encrypt_field,
     validate_field_encryption_configuration,
 )
+from app.utils.time import utc_now
 
 
 def make_session_factory():
@@ -162,6 +168,112 @@ def test_extraction_candidate_api_decrypts_encrypted_values(monkeypatch):
     assert candidates[0]["value"] == "1350"
     assert candidates[0]["notes"] == "PIN candidate from zone"
     _fernet.cache_clear()
+
+
+def encrypted_with_different_key(monkeypatch, value: str) -> str:
+    old_key = Fernet.generate_key().decode()
+    new_key = Fernet.generate_key().decode()
+    monkeypatch.setenv("FIELD_ENCRYPTION_KEY", old_key)
+    _fernet.cache_clear()
+    encrypted_value = encrypt_field(value)
+    monkeypatch.setenv("FIELD_ENCRYPTION_KEY", new_key)
+    _fernet.cache_clear()
+    return encrypted_value
+
+
+def setup_sale_with_bad_card_credential(monkeypatch):
+    from app.api import sales
+
+    session_factory = make_session_factory()
+    setup_db = session_factory()
+    buyer = Buyer(name="History Buyer")
+    setup_db.add(buyer)
+    setup_db.flush()
+    card = GiftCard(
+        purchase_batch_id=1,
+        brand="Best Buy",
+        face_value=100,
+        acquisition_cost=100,
+        card_number_encrypted=encrypted_with_different_key(
+            monkeypatch,
+            "6332260074021047",
+        ),
+        pin_encrypted=encrypted_with_different_key(monkeypatch, "1350"),
+        confirmed_card_number=None,
+        confirmed_pin=None,
+        status="SOLD_PENDING_PAYMENT",
+    )
+    sale = Sale(
+        buyer_id=buyer.id,
+        expected_payout=Decimal("90.00"),
+        status="PARTIALLY_SETTLED",
+    )
+    setup_db.add_all([card, sale])
+    setup_db.flush()
+    setup_db.add(
+        SaleGiftCard(
+            sale_id=sale.id,
+            gift_card_id=card.id,
+            expected_payout=Decimal("90.00"),
+            payout_received=Decimal("90.00"),
+            settlement_received_at=utc_now(),
+        )
+    )
+    setup_db.commit()
+    card_id = card.id
+    setup_db.close()
+    monkeypatch.setattr(sales, "SessionLocal", session_factory)
+    return session_factory, card_id
+
+
+def test_payment_history_handles_undecryptable_card_credentials(monkeypatch):
+    from app.api.sales import list_payment_history
+
+    setup_sale_with_bad_card_credential(monkeypatch)
+
+    rows = list_payment_history()
+
+    assert len(rows) == 1
+    assert rows[0]["sale_id"] == 1
+    assert ENCRYPTED_FIELD_PREFIX not in str(rows)
+
+
+def test_sales_list_serializer_returns_safe_unavailable_values(monkeypatch):
+    from app.api.sales import serialize_card
+
+    card = GiftCard(
+        purchase_batch_id=1,
+        brand="Best Buy",
+        face_value=100,
+        acquisition_cost=100,
+        card_number_encrypted=encrypted_with_different_key(
+            monkeypatch,
+            "6332260074021047",
+        ),
+        pin_encrypted=encrypted_with_different_key(monkeypatch, "1350"),
+        status="VERIFIED_AVAILABLE",
+    )
+
+    payload = serialize_card(card)
+
+    assert payload["credential_unavailable"] is True
+    assert payload["card_number_ending"] is None
+    assert payload["pin_ending"] is None
+    assert ENCRYPTED_FIELD_PREFIX not in str(payload)
+
+
+def test_sale_export_fails_safely_for_undecryptable_credentials(monkeypatch):
+    from app.api.sales import get_sale_export
+
+    setup_sale_with_bad_card_credential(monkeypatch)
+
+    try:
+        get_sale_export(1)
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail == UNDECRYPTABLE_CREDENTIAL_MESSAGE
+    else:
+        raise AssertionError("Expected sale export to fail safely")
 
 
 def test_sensitive_field_backfill_initializes_models_and_encrypts(

@@ -15,7 +15,13 @@ from app.models.fuel_reward_account import FuelRewardAccount
 from app.models.purchase_batch import PurchaseBatch
 from app.services.attachments import record_attachment
 from app.services.barcode import decode_barcodes
-from app.services.field_encryption import decrypt_field, encrypt_field
+from app.services.field_encryption import (
+    CredentialDecryptionError,
+    UNDECRYPTABLE_CREDENTIAL_MESSAGE,
+    decrypt_field,
+    encrypt_field,
+    try_decrypt_field,
+)
 from app.services.storage import object_key_for, storage
 from app.services.upload_storage import upload_dir
 
@@ -109,7 +115,16 @@ def account_to_dict(
     }
 
     if include_sensitive:
-        payload["login_password"] = decrypt_field(account.login_password)
+        try:
+            payload["login_password"] = decrypt_field(account.login_password)
+        except CredentialDecryptionError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=UNDECRYPTABLE_CREDENTIAL_MESSAGE,
+            ) from exc
+    else:
+        _, credential_unavailable = try_decrypt_field(account.login_password)
+        payload["credential_unavailable"] = credential_unavailable
 
     return payload
 

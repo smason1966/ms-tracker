@@ -23,7 +23,13 @@ from app.models.purchase_batch import PurchaseBatch
 from app.models.sale import Sale
 from app.models.sale_event import SaleEvent
 from app.models.sale_gift_card import SaleGiftCard
-from app.services.field_encryption import decrypt_field, encrypt_field
+from app.services.field_encryption import (
+    CredentialDecryptionError,
+    UNDECRYPTABLE_CREDENTIAL_MESSAGE,
+    decrypt_field,
+    encrypt_field,
+    try_decrypt_field,
+)
 from app.services.purchase_allocation import recalculate_purchase_allocation
 
 
@@ -112,6 +118,11 @@ def encrypt_credential_value(value: str | None) -> str | None:
 
 def decrypt_credential_value(value: str | None) -> str | None:
     return clean_credential_value(decrypt_field(value))
+
+
+def try_decrypt_credential_value(value: str | None) -> tuple[str | None, bool]:
+    decrypted, unavailable = try_decrypt_field(value)
+    return clean_credential_value(decrypted), unavailable
 
 
 @router.post("/")
@@ -273,7 +284,8 @@ def list_verification_queue(
         if purchase_batch_id is not None:
             query = query.filter(GiftCard.purchase_batch_id == purchase_batch_id)
 
-        return query.order_by(GiftCard.created_at.desc()).all()
+        cards = query.order_by(GiftCard.created_at.desc()).all()
+        return [serialize_gift_card(card, db) for card in cards]
 
     finally:
         db.close()
@@ -525,6 +537,30 @@ def locked_primary_credential(card: GiftCard) -> str | None:
     return locked_redemption_code(card) or locked_card_number(card)
 
 
+def safe_locked_card_number(card: GiftCard) -> tuple[str | None, bool]:
+    unavailable = False
+    for value in (card.confirmed_card_number, card.card_number_encrypted):
+        decrypted, field_unavailable = try_decrypt_credential_value(value)
+        unavailable = unavailable or field_unavailable
+        if decrypted:
+            return decrypted, unavailable
+    return None, unavailable
+
+
+def safe_locked_pin(card: GiftCard) -> tuple[str | None, bool]:
+    unavailable = False
+    for value in (card.confirmed_pin, card.pin_encrypted):
+        decrypted, field_unavailable = try_decrypt_credential_value(value)
+        unavailable = unavailable or field_unavailable
+        if decrypted:
+            return decrypted, unavailable
+    return None, unavailable
+
+
+def safe_locked_redemption_code(card: GiftCard) -> tuple[str | None, bool]:
+    return try_decrypt_credential_value(card.confirmed_redemption_code)
+
+
 def credential_source(payload: GiftCardVerify) -> str:
     source = clean_credential_value(payload.confirmed_source or payload.verification_source)
     normalized_source = (source or "manual").strip().lower()
@@ -616,6 +652,14 @@ def serialize_gift_card(card: GiftCard, db: Session | None = None) -> dict:
             .count()
         )
 
+    redemption_code, redemption_unavailable = safe_locked_redemption_code(card)
+    card_number, card_number_unavailable = safe_locked_card_number(card)
+    pin, pin_unavailable = safe_locked_pin(card)
+    primary_credential = redemption_code or card_number
+    credential_unavailable = (
+        redemption_unavailable or card_number_unavailable or pin_unavailable
+    )
+
     return {
         "id": card.id,
         "purchase_batch_id": card.purchase_batch_id,
@@ -627,21 +671,16 @@ def serialize_gift_card(card: GiftCard, db: Session | None = None) -> dict:
         "ocr_status": card.ocr_status,
         "extraction_candidate_count": extraction_candidate_count,
         "rejected_extraction_candidate_count": rejected_extraction_candidate_count,
-        "card_number_encrypted": locked_primary_credential(card),
-        "pin_encrypted": locked_pin(card),
-        "confirmed_card_number": decrypt_credential_value(card.confirmed_card_number)
-        or (
-            decrypt_credential_value(card.card_number_encrypted)
-            if not locked_redemption_code(card)
-            else None
-        ),
-        "confirmed_pin": decrypt_credential_value(card.confirmed_pin)
-        or decrypt_credential_value(card.pin_encrypted),
-        "confirmed_redemption_code": locked_redemption_code(card),
+        "card_number_encrypted": primary_credential,
+        "pin_encrypted": pin,
+        "confirmed_card_number": card_number if not redemption_code else None,
+        "confirmed_pin": pin,
+        "confirmed_redemption_code": redemption_code,
+        "credential_unavailable": credential_unavailable,
         "confirmed_at": card.confirmed_at,
         "confirmed_source": card.confirmed_source,
         "export_value_source": "confirmed_credentials"
-        if locked_primary_credential(card)
+        if primary_credential
         else "unconfirmed",
         "notes": card.notes,
         "digital_source_notes": card.digital_source_notes,
@@ -1677,6 +1716,11 @@ def verify_gift_card(gift_card_id: int, payload: GiftCardVerify):
         db.refresh(card)
 
         return serialize_gift_card(card, db)
+    except CredentialDecryptionError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=UNDECRYPTABLE_CREDENTIAL_MESSAGE,
+        ) from exc
 
     finally:
         db.close()

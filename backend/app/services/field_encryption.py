@@ -6,6 +6,11 @@ from cryptography.fernet import Fernet, InvalidToken
 
 ENCRYPTED_FIELD_PREFIX = "fernet:v1:"
 FIELD_ENCRYPTION_KEY_ENV = "FIELD_ENCRYPTION_KEY"
+UNDECRYPTABLE_CREDENTIAL_MESSAGE = "Credential cannot be decrypted in this environment."
+
+
+class CredentialDecryptionError(RuntimeError):
+    """Raised when encrypted credential ciphertext cannot be decrypted."""
 
 
 def is_encrypted_field_value(value: str | None) -> bool:
@@ -91,4 +96,14 @@ def decrypt_field(value: str | None) -> str | None:
     try:
         return cipher.decrypt(token.encode("utf-8")).decode("utf-8")
     except InvalidToken as exc:
-        raise RuntimeError("Encrypted credential could not be decrypted.") from exc
+        raise CredentialDecryptionError(
+            "Encrypted credential could not be decrypted."
+        ) from exc
+
+
+def try_decrypt_field(value: str | None) -> tuple[str | None, bool]:
+    """Return decrypted value plus an unavailable flag for non-secret summaries."""
+    try:
+        return decrypt_field(value), False
+    except CredentialDecryptionError:
+        return None, True

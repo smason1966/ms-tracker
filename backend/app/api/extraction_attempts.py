@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.extraction_attempt import ExtractionAttempt
-from app.services.field_encryption import decrypt_field, encrypt_field
+from app.services.field_encryption import encrypt_field, try_decrypt_field
 
 
 router = APIRouter(prefix="/extraction-attempts", tags=["extraction-attempts"])
@@ -20,14 +20,22 @@ class ExtractionAttemptCreate(BaseModel):
 
 
 def serialize_extraction_attempt(attempt: ExtractionAttempt) -> dict:
+    extracted_card_number, card_unavailable = try_decrypt_field(
+        attempt.extracted_card_number
+    )
+    extracted_pin, pin_unavailable = try_decrypt_field(attempt.extracted_pin)
+    raw_text, raw_text_unavailable = try_decrypt_field(attempt.raw_text)
     return {
         "id": attempt.id,
         "gift_card_id": attempt.gift_card_id,
         "method": attempt.method,
-        "extracted_card_number": decrypt_field(attempt.extracted_card_number),
-        "extracted_pin": decrypt_field(attempt.extracted_pin),
+        "extracted_card_number": extracted_card_number,
+        "extracted_pin": extracted_pin,
         "confidence_score": attempt.confidence_score,
-        "raw_text": decrypt_field(attempt.raw_text),
+        "raw_text": raw_text,
+        "credential_unavailable": (
+            card_unavailable or pin_unavailable or raw_text_unavailable
+        ),
         "created_at": attempt.created_at,
     }
 

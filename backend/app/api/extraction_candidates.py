@@ -5,21 +5,24 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.extraction_candidate import ExtractionCandidate
 from app.models.extraction_attempt import ExtractionAttempt
-from app.services.field_encryption import decrypt_field
+from app.services.field_encryption import try_decrypt_field
 
 router = APIRouter(prefix="/extraction-candidates", tags=["extraction-candidates"])
 
 
 def serialize_extraction_candidate(candidate: ExtractionCandidate) -> dict:
+    value, value_unavailable = try_decrypt_field(candidate.value)
+    notes, notes_unavailable = try_decrypt_field(candidate.notes)
     return {
         "id": candidate.id,
         "extraction_attempt_id": candidate.extraction_attempt_id,
         "gift_card_id": candidate.gift_card_id,
         "candidate_type": candidate.candidate_type,
         "source": candidate.source,
-        "value": decrypt_field(candidate.value),
+        "value": value,
         "confidence_score": candidate.confidence_score,
-        "notes": decrypt_field(candidate.notes),
+        "notes": notes,
+        "credential_unavailable": value_unavailable or notes_unavailable,
         "created_at": candidate.created_at,
     }
 

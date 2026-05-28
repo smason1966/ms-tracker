@@ -26,7 +26,13 @@ from app.models.sale import Sale
 from app.models.sale_event import SaleEvent
 from app.models.sale_fuel_account import SaleFuelAccount
 from app.models.sale_gift_card import SaleGiftCard
-from app.services.field_encryption import decrypt_field, encrypt_field
+from app.services.field_encryption import (
+    CredentialDecryptionError,
+    UNDECRYPTABLE_CREDENTIAL_MESSAGE,
+    decrypt_field,
+    encrypt_field,
+    try_decrypt_field,
+)
 from app.services.operational_queues import get_awaiting_payment_sales
 from app.services.upload_storage import physical_upload_path
 from app.services.storage import normalize_object_key, storage
@@ -742,6 +748,34 @@ def ending(value: str | None, length: int = 4) -> str | None:
     return normalized[-length:] if normalized else None
 
 
+def undecryptable_credential_error() -> HTTPException:
+    return HTTPException(status_code=400, detail=UNDECRYPTABLE_CREDENTIAL_MESSAGE)
+
+
+def safe_locked_card_number(card: GiftCard) -> tuple[str, bool]:
+    unavailable = False
+    for value in (
+        card.confirmed_redemption_code,
+        card.confirmed_card_number,
+        card.card_number_encrypted,
+    ):
+        decrypted, field_unavailable = try_decrypt_field(value)
+        unavailable = unavailable or field_unavailable
+        if decrypted:
+            return decrypted, unavailable
+    return "", unavailable
+
+
+def safe_locked_pin(card: GiftCard) -> tuple[str, bool]:
+    unavailable = False
+    for value in (card.confirmed_pin, card.pin_encrypted):
+        decrypted, field_unavailable = try_decrypt_field(value)
+        unavailable = unavailable or field_unavailable
+        if decrypted:
+            return decrypted, unavailable
+    return "", unavailable
+
+
 def locked_card_number(card: GiftCard) -> str:
     return (
         decrypt_field(card.confirmed_redemption_code)
@@ -756,8 +790,15 @@ def locked_pin(card: GiftCard) -> str:
 
 
 def serialize_card(card: GiftCard, include_secret: bool = False) -> dict:
-    card_number = locked_card_number(card)
-    pin = locked_pin(card)
+    if include_secret:
+        card_number = locked_card_number(card)
+        pin = locked_pin(card)
+        credential_unavailable = False
+    else:
+        card_number, card_number_unavailable = safe_locked_card_number(card)
+        pin, pin_unavailable = safe_locked_pin(card)
+        credential_unavailable = card_number_unavailable or pin_unavailable
+
     data = {
         "id": card.id,
         "purchase_batch_id": card.purchase_batch_id,
@@ -778,6 +819,7 @@ def serialize_card(card: GiftCard, include_secret: bool = False) -> dict:
         "sold_date": card.sold_date,
         "expected_payment_date": card.expected_payment_date,
         "notes": card.notes,
+        "credential_unavailable": credential_unavailable,
     }
 
     if include_secret:
@@ -792,13 +834,26 @@ def serialize_card(card: GiftCard, include_secret: bool = False) -> dict:
     return data
 
 
-def serialize_fuel_account(account: FuelRewardAccount, row: SaleFuelAccount | None = None) -> dict:
+def serialize_fuel_account(
+    account: FuelRewardAccount,
+    row: SaleFuelAccount | None = None,
+    *,
+    include_secret: bool = False,
+) -> dict:
+    login_password = None
+    credential_unavailable = False
+    if include_secret:
+        login_password = decrypt_field(account.login_password)
+    else:
+        _, credential_unavailable = try_decrypt_field(account.login_password)
+
     return {
         "id": account.id,
         "retailer": account.retailer,
         "email": account.email,
         "alt_id": account.alt_id,
-        "login_password": decrypt_field(account.login_password),
+        "login_password": login_password,
+        "credential_unavailable": credential_unavailable,
         "barcode_image_url": account.barcode_image_url,
         "barcode_value": account.barcode_value,
         "status": account.status,
@@ -1021,7 +1076,11 @@ def serialize_sale(db: Session, sale: Sale, include_secret: bool = False) -> dic
                     "sensitive_details_removed": True,
                 }
                 if sensitive_details_revoked
-                else serialize_fuel_account(account, row)
+                else serialize_fuel_account(
+                    account,
+                    row,
+                    include_secret=include_secret,
+                )
             )
             for row, account in sale_fuel_rows
         ],
@@ -1540,7 +1599,10 @@ def create_sale(payload: SaleCreate):
         )
         db.commit()
         db.refresh(sale)
-        return serialize_sale(db, sale, include_secret=True)
+        try:
+            return serialize_sale(db, sale, include_secret=True)
+        except CredentialDecryptionError as exc:
+            raise undecryptable_credential_error() from exc
     finally:
         db.close()
 
@@ -2276,6 +2338,12 @@ def get_sale_export(sale_id: int):
             .all()
         )
 
+        try:
+            card_export = card_export_text(cards, buyer)
+            fuel_export = fuel_export_text(fuel_rows, buyer) if fuel_rows else ""
+        except CredentialDecryptionError as exc:
+            raise undecryptable_credential_error() from exc
+
         record_sale_event(
             db,
             sale,
@@ -2286,8 +2354,8 @@ def get_sale_export(sale_id: int):
         db.commit()
         return {
             "sale_id": sale.id,
-            "card_export": card_export_text(cards, buyer),
-            "fuel_export": fuel_export_text(fuel_rows, buyer) if fuel_rows else "",
+            "card_export": card_export,
+            "fuel_export": fuel_export,
         }
     finally:
         db.close()
@@ -2336,73 +2404,43 @@ def download_sale_package(sale_id: int):
         purchase_ids = {
             card.purchase_batch_id for _, card in card_rows if card.purchase_batch_id
         }
-        manifest = build_sale_package_manifest(
-            sale,
-            buyer,
-            card_rows,
-            fuel_rows,
-            sale_date,
-            organization,
-        )
+        try:
+            manifest = build_sale_package_manifest(
+                sale,
+                buyer,
+                card_rows,
+                fuel_rows,
+                sale_date,
+                organization,
+            )
+        except CredentialDecryptionError as exc:
+            raise undecryptable_credential_error() from exc
 
         with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
-            if card_rows:
-                if organization == "FLAT":
-                    card_base_path = f"{root}/card_exports"
-                    archive_text(
-                        archive,
-                        used_archive_names,
-                        card_base_path,
-                        "card_export",
-                        f".{sale_export_extension(buyer)}",
-                        card_export_text([card for _, card in card_rows], buyer),
-                    )
-                elif organization == "GROUP_BY_ASSET_TYPE":
-                    card_base_path = f"{root}/card_exports"
-                    archive_text(
-                        archive,
-                        used_archive_names,
-                        card_base_path,
-                        "card_export",
-                        f".{sale_export_extension(buyer)}",
-                        card_export_text([card for _, card in card_rows], buyer),
-                    )
-                    if buyer.requires_card_images:
-                        for _, card in card_rows:
-                            for image in (
-                                db.query(CardImage)
-                                .filter(CardImage.gift_card_id == card.id)
-                                .filter(CardImage.retention_status == "active")
-                                .order_by(CardImage.created_at.desc())
-                                .all()
-                            ):
-                                path = local_upload_path(image.original_image_url)
-                                if path:
-                                    archive_file(
-                                        archive,
-                                        used_archive_names,
-                                        path,
-                                        f"{root}/card_exports/card_images",
-                                        card_image_archive_stem(card),
-                                        file_extension(image.original_image_url),
-                                    )
-                else:
-                    for brand, brand_cards in grouped_cards_by_brand(
-                        [card for _, card in card_rows]
-                    ).items():
-                        brand_base_path = (
-                            f"{root}/card_exports/{clean_folder_part(brand)}"
-                        )
+            try:
+                if card_rows:
+                    if organization == "FLAT":
+                        card_base_path = f"{root}/card_exports"
                         archive_text(
                             archive,
                             used_archive_names,
-                            brand_base_path,
+                            card_base_path,
                             "card_export",
                             f".{sale_export_extension(buyer)}",
-                            card_export_text(brand_cards, buyer),
+                            card_export_text([card for _, card in card_rows], buyer),
+                        )
+                    elif organization == "GROUP_BY_ASSET_TYPE":
+                        card_base_path = f"{root}/card_exports"
+                        archive_text(
+                            archive,
+                            used_archive_names,
+                            card_base_path,
+                            "card_export",
+                            f".{sale_export_extension(buyer)}",
+                            card_export_text([card for _, card in card_rows], buyer),
                         )
                         if buyer.requires_card_images:
-                            for card in brand_cards:
+                            for _, card in card_rows:
                                 for image in (
                                     db.query(CardImage)
                                     .filter(CardImage.gift_card_id == card.id)
@@ -2416,51 +2454,87 @@ def download_sale_package(sale_id: int):
                                             archive,
                                             used_archive_names,
                                             path,
-                                            f"{brand_base_path}/card_images",
+                                            f"{root}/card_exports/card_images",
                                             card_image_archive_stem(card),
                                             file_extension(image.original_image_url),
                                         )
-
-            if buyer.requires_receipt_images:
-                for purchase_id in sorted(purchase_ids):
-                    receipts = (
-                        db.query(Receipt)
-                        .filter(Receipt.purchase_batch_id == purchase_id)
-                        .filter(Receipt.retention_status == "active")
-                        .order_by(Receipt.created_at.desc(), Receipt.id.desc())
-                        .all()
-                    )
-
-                    for receipt in receipts:
-                        path = local_upload_path(receipt.image_url)
-                        if path:
-                            archive_file(
+                    else:
+                        for brand, brand_cards in grouped_cards_by_brand(
+                            [card for _, card in card_rows]
+                        ).items():
+                            brand_base_path = (
+                                f"{root}/card_exports/{clean_folder_part(brand)}"
+                            )
+                            archive_text(
                                 archive,
                                 used_archive_names,
-                                path,
-                                f"{root}/receipts",
-                                f"purchase_{purchase_id}_receipt",
-                                file_extension(receipt.image_url),
+                                brand_base_path,
+                                "card_export",
+                                f".{sale_export_extension(buyer)}",
+                                card_export_text(brand_cards, buyer),
                             )
+                            if buyer.requires_card_images:
+                                for card in brand_cards:
+                                    for image in (
+                                        db.query(CardImage)
+                                        .filter(CardImage.gift_card_id == card.id)
+                                        .filter(CardImage.retention_status == "active")
+                                        .order_by(CardImage.created_at.desc())
+                                        .all()
+                                    ):
+                                        path = local_upload_path(image.original_image_url)
+                                        if path:
+                                            archive_file(
+                                                archive,
+                                                used_archive_names,
+                                                path,
+                                                f"{brand_base_path}/card_images",
+                                                card_image_archive_stem(card),
+                                                file_extension(image.original_image_url),
+                                            )
 
-            if fuel_rows:
-                archive_text(
-                    archive,
-                    used_archive_names,
-                    f"{root}/fuel_exports",
-                    "fuel_export",
-                    f".{sale_export_extension(buyer)}",
-                    fuel_export_text(fuel_rows, buyer),
-                )
-                for row, account in fuel_rows:
+                if buyer.requires_receipt_images:
+                    for purchase_id in sorted(purchase_ids):
+                        receipts = (
+                            db.query(Receipt)
+                            .filter(Receipt.purchase_batch_id == purchase_id)
+                            .filter(Receipt.retention_status == "active")
+                            .order_by(Receipt.created_at.desc(), Receipt.id.desc())
+                            .all()
+                        )
+
+                        for receipt in receipts:
+                            path = local_upload_path(receipt.image_url)
+                            if path:
+                                archive_file(
+                                    archive,
+                                    used_archive_names,
+                                    path,
+                                    f"{root}/receipts",
+                                    f"purchase_{purchase_id}_receipt",
+                                    file_extension(receipt.image_url),
+                                )
+
+                if fuel_rows:
                     archive_text(
                         archive,
                         used_archive_names,
-                        f"{root}/fuel_exports/fuel_accounts",
-                        f"{clean_filename_part(account.retailer)}_{row.points_sold}",
-                        ".txt",
-                        fuel_account_export_text(row, account),
+                        f"{root}/fuel_exports",
+                        "fuel_export",
+                        f".{sale_export_extension(buyer)}",
+                        fuel_export_text(fuel_rows, buyer),
                     )
+                    for row, account in fuel_rows:
+                        archive_text(
+                            archive,
+                            used_archive_names,
+                            f"{root}/fuel_exports/fuel_accounts",
+                            f"{clean_filename_part(account.retailer)}_{row.points_sold}",
+                            ".txt",
+                            fuel_account_export_text(row, account),
+                        )
+            except CredentialDecryptionError as exc:
+                raise undecryptable_credential_error() from exc
 
             archive_text(
                 archive,

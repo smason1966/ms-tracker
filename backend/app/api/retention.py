@@ -23,7 +23,7 @@ from app.models.sale import Sale
 from app.models.sale_event import SaleEvent
 from app.models.sale_gift_card import SaleGiftCard
 from app.services.card_image_schema import ensure_card_image_schema
-from app.services.field_encryption import decrypt_field
+from app.services.field_encryption import try_decrypt_field
 from app.services.ocr_debug import cleanup_ocr_debug_files, purge_temp_ocr_crops
 from app.services.retention_schema import ensure_retention_schema
 from app.services.upload_storage import (
@@ -80,12 +80,17 @@ def local_path(path_value: str | None) -> Path | None:
 def credential_ending(card: GiftCard | None) -> str | None:
     if not card:
         return None
-    value = (
-        (decrypt_field(card.confirmed_redemption_code) or "").strip()
-        or (decrypt_field(card.confirmed_card_number) or "").strip()
-        or (decrypt_field(card.card_number_encrypted) or "").strip()
-    )
-    return value[-4:] if value else None
+    for encrypted_value in (
+        card.confirmed_redemption_code,
+        card.confirmed_card_number,
+        card.card_number_encrypted,
+    ):
+        value, unavailable = try_decrypt_field(encrypted_value)
+        if unavailable:
+            return None
+        if value and value.strip():
+            return value.strip()[-4:]
+    return None
 
 
 def card_open_sale_reasons(db: Session, card_id: int) -> list[str]:
@@ -132,7 +137,10 @@ def metadata_for_card_image(db: Session, image: CardImage) -> dict:
         ],
         "confirmed_card_ending": credential_ending(card),
         "confirmed_pin_present": bool(
-            (decrypt_field(card.confirmed_pin) or decrypt_field(card.pin_encrypted))
+            (
+                try_decrypt_field(card.confirmed_pin)[0]
+                or try_decrypt_field(card.pin_encrypted)[0]
+            )
             if card
             else False
         ),
