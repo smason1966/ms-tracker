@@ -579,35 +579,6 @@ export default function RewardProgramsPage() {
     }
   }
 
-  async function deleteProgramWithProtection(program: RewardProgram) {
-    setError(null);
-    setMessage(null);
-
-    const programWithProtectionDefaults = withDefaultProtection(program);
-    setEditingProgram(programWithProtectionDefaults);
-    setForm(formFromProgram(programWithProtectionDefaults));
-
-    try {
-      const protection = await loadProgramProtection(program.id, { throwOnError: true });
-      if (!protection) {
-        return;
-      }
-      if (!protection.can_delete) {
-        setError(
-          `Reward program is protected. ${protection.protection_reasons.join("; ")}`,
-        );
-        return;
-      }
-      await deleteProgram({ ...programWithProtectionDefaults, ...protection });
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to check reward program dependencies before delete.",
-      );
-    }
-  }
-
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-6xl space-y-5">
@@ -757,15 +728,6 @@ export default function RewardProgramsPage() {
                       <td className="px-4 py-3">{program.active ? "Active" : "Inactive"}</td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-2">
-                          {!program.active ? (
-                            <button
-                              className="h-9 rounded-md border border-emerald-200 px-3 text-xs font-semibold text-emerald-700"
-                              onClick={() => void setProgramActive(program, true, true)}
-                              type="button"
-                            >
-                              Reactivate
-                            </button>
-                          ) : null}
                           <button
                             className="h-9 rounded-md border border-slate-300 px-3 text-xs font-semibold"
                             onClick={() => startEdit(program)}
@@ -773,25 +735,6 @@ export default function RewardProgramsPage() {
                           >
                             Edit
                           </button>
-                          {!program.active && program.can_delete ? (
-                            <button
-                              className="h-9 rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700"
-                              onClick={() => void deleteProgramWithProtection(program)}
-                              type="button"
-                            >
-                              Delete
-                            </button>
-                          ) : null}
-                          {!program.active && !program.can_delete && program.protected ? (
-                            <button
-                              className="h-9 cursor-not-allowed rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-400"
-                              disabled
-                              title={protectionSummary(program)}
-                              type="button"
-                            >
-                              Protected
-                            </button>
-                          ) : null}
                         </div>
                       </td>
                     </tr>

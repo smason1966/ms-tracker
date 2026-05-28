@@ -237,7 +237,7 @@ export default function BuyerDetailPage() {
       return [];
     }
 
-    return buyer.gift_cards.filter((card) => {
+    return (buyer.gift_cards ?? []).filter((card) => {
       if (filter === "awaiting") {
         return card.status === "SOLD_PENDING_PAYMENT";
       }
@@ -355,13 +355,13 @@ export default function BuyerDetailPage() {
 
             <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="font-semibold">External IDs</h2>
-              {buyer.external_identifiers.length === 0 ? (
+              {(buyer.external_identifiers ?? []).length === 0 ? (
                 <p className="mt-3 text-sm text-slate-500">
                   No external identifiers configured.
                 </p>
               ) : (
                 <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
-                  {buyer.external_identifiers.map((identifier) => (
+                  {(buyer.external_identifiers ?? []).map((identifier) => (
                     <div
                       className="rounded-md border border-slate-200 bg-slate-50 p-3"
                       key={identifier.id}
@@ -487,7 +487,7 @@ export default function BuyerDetailPage() {
               <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h2 className="text-lg font-semibold">Fuel Accounts Sold</h2>
                 <div className="mt-3 space-y-2">
-                  {buyer.fuel_accounts.map((account) => (
+                  {(buyer.fuel_accounts ?? []).map((account) => (
                     <div
                       className="rounded-md bg-slate-50 px-3 py-2 text-sm"
                       key={account.id}
@@ -502,7 +502,7 @@ export default function BuyerDetailPage() {
                       </p>
                     </div>
                   ))}
-                  {buyer.fuel_accounts.length === 0 ? (
+                  {(buyer.fuel_accounts ?? []).length === 0 ? (
                     <p className="text-sm text-slate-500">No fuel account sales yet.</p>
                   ) : null}
                 </div>
@@ -511,7 +511,7 @@ export default function BuyerDetailPage() {
               <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h2 className="text-lg font-semibold">Export History</h2>
                 <div className="mt-3 space-y-2">
-                  {buyer.export_history.map((item) => (
+                  {(buyer.export_history ?? []).map((item) => (
                     <div
                       className="rounded-md bg-slate-50 px-3 py-2 text-sm"
                       key={`${item.type}-${item.id}`}
@@ -526,7 +526,7 @@ export default function BuyerDetailPage() {
                       </p>
                     </div>
                   ))}
-                  {buyer.export_history.length === 0 ? (
+                  {(buyer.export_history ?? []).length === 0 ? (
                     <p className="text-sm text-slate-500">No export history yet.</p>
                   ) : null}
                 </div>

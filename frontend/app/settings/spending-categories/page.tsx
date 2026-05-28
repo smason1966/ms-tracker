@@ -141,6 +141,8 @@ export default function SpendingCategoriesSettingsPage() {
         );
       }
 
+      setIsModalOpen(false);
+      setEditingCategory(null);
       await loadCategories();
     } catch (err) {
       setError(
@@ -213,21 +215,13 @@ export default function SpendingCategoriesSettingsPage() {
                     <td className="px-4 py-3 text-slate-600">
                       {category.notes || "-"}
                     </td>
-                    <td className="space-x-2 px-4 py-3 text-right">
+                    <td className="px-4 py-3 text-right">
                       <button
                         className="h-8 cursor-pointer rounded-md border border-slate-300 px-3 text-xs font-semibold hover:bg-slate-100"
                         onClick={() => openEdit(category)}
                         type="button"
                       >
                         Edit
-                      </button>
-                      <button
-                        className="h-8 cursor-pointer rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={isSaving}
-                        onClick={() => void deleteOrDeactivateCategory(category)}
-                        type="button"
-                      >
-                        Delete / Deactivate
                       </button>
                     </td>
                   </tr>
@@ -325,6 +319,25 @@ export default function SpendingCategoriesSettingsPage() {
                 />
                 <span>Active</span>
               </label>
+              {editingCategory ? (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3">
+                  <p className="text-sm font-semibold text-red-800">
+                    Danger Zone
+                  </p>
+                  <p className="mt-1 text-xs text-red-700">
+                    Delete this category if unused, or deactivate it when linked
+                    records prevent deletion.
+                  </p>
+                  <button
+                    className="mt-3 h-10 cursor-pointer rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isSaving}
+                    onClick={() => void deleteOrDeactivateCategory(editingCategory)}
+                    type="button"
+                  >
+                    Delete / Deactivate
+                  </button>
+                </div>
+              ) : null}
             </form>
           </div>
         </div>

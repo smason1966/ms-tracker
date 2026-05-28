@@ -554,12 +554,6 @@ export default function BuyersPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-2">
-                          <Link
-                            className="inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200"
-                            href={`/buyers/${buyer.id}`}
-                          >
-                            Details
-                          </Link>
                           <button
                             className="h-9 cursor-pointer rounded-md bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-700 active:bg-slate-950"
                             onClick={() => openEdit(buyer)}
@@ -602,12 +596,6 @@ export default function BuyersPage() {
                     <MiniStat label="Default Rate" value={formatPercent(buyer.default_payout_rate)} />
                   </div>
                   <div className="mt-4 flex gap-2">
-                    <Link
-                      className="inline-flex h-10 flex-1 cursor-pointer items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-100"
-                      href={`/buyers/${buyer.id}`}
-                    >
-                      Details
-                    </Link>
                     <button
                       className="h-10 flex-1 cursor-pointer rounded-md bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-700"
                       onClick={() => openEdit(buyer)}

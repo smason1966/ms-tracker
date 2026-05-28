@@ -305,6 +305,32 @@ export default function PlayersSettingsPage() {
                 </button>
               ) : null}
             </div>
+            {editingPlayer ? (
+              <div className="rounded-md border border-red-200 bg-red-50 p-3">
+                <p className="text-sm font-semibold text-red-800">Danger Zone</p>
+                <p className="mt-1 text-xs text-red-700">
+                  Delete this player if unused, or deactivate it when linked records
+                  prevent deletion.
+                </p>
+                <button
+                  className="mt-3 h-10 cursor-pointer rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isSaving}
+                  onClick={() =>
+                    setPendingPlayerAction({
+                      player: editingPlayer,
+                      action:
+                        editingPlayer.linked_credit_card_count > 0 ||
+                        editingPlayer.linked_purchase_count > 0
+                          ? "deactivate"
+                          : "delete",
+                    })
+                  }
+                  type="button"
+                >
+                  Delete / Deactivate
+                </button>
+              </div>
+            ) : null}
           </form>
 
           <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -362,22 +388,6 @@ export default function PlayersSettingsPage() {
                         type="button"
                       >
                         Edit
-                      </button>
-                      <button
-                        className="h-10 cursor-pointer rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-50 active:bg-red-100"
-                        onClick={() =>
-                          setPendingPlayerAction({
-                            player,
-                            action:
-                              player.linked_credit_card_count > 0 ||
-                              player.linked_purchase_count > 0
-                                ? "deactivate"
-                                : "delete",
-                          })
-                        }
-                        type="button"
-                      >
-                        Delete
                       </button>
                     </div>
                   </div>

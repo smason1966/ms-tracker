@@ -120,6 +120,7 @@ export default function CardNetworksSettingsPage() {
       setError(body?.detail || `Failed to delete network (${response.status})`);
       return;
     }
+    resetForm();
     await loadNetworks();
   }
 
@@ -168,7 +169,6 @@ export default function CardNetworksSettingsPage() {
                   <p>{network.active ? "Active" : "Inactive"}</p>
                   <div className="flex justify-end gap-2">
                     <button className="h-8 rounded-md border border-slate-300 px-3 text-xs font-semibold hover:bg-slate-100" onClick={() => editNetwork(network)} type="button">Edit</button>
-                    <button className="h-8 rounded-md border border-slate-300 px-3 text-xs font-semibold hover:bg-slate-100" onClick={() => void deleteNetwork(network.id)} type="button">Delete</button>
                   </div>
                 </div>
               ))}
@@ -222,6 +222,22 @@ export default function CardNetworksSettingsPage() {
               <span>Notes</span>
               <textarea className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2" onChange={(event) => setForm({ ...form, notes: event.target.value })} value={form.notes} />
             </label>
+            {editingNetwork ? (
+              <div className="rounded-md border border-red-200 bg-red-50 p-3">
+                <p className="text-sm font-semibold text-red-800">Danger Zone</p>
+                <p className="mt-1 text-xs text-red-700">
+                  Delete this network if it is not protected by existing cards.
+                </p>
+                <button
+                  className="mt-3 h-10 rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isSaving}
+                  onClick={() => void deleteNetwork(editingNetwork.id)}
+                  type="button"
+                >
+                  Delete Network
+                </button>
+              </div>
+            ) : null}
           </form>
         </div>
       ) : null}
