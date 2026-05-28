@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api import credit_cards
+from app.api.credit_cards import resolve_configured_billing_day
 from app.db.base import Base
 from app.models.app_setting import AppSetting  # noqa: F401
 from app.models.card_issuer import CardIssuer  # noqa: F401
@@ -122,3 +123,30 @@ def test_credit_card_limit_rejects_negative_or_decimal_cents(monkeypatch):
 
     assert negative.status_code == 422
     assert decimal_cents.status_code == 422
+
+
+def test_billing_day_resolves_to_existing_calendar_day():
+    assert resolve_configured_billing_day(2026, 5, 15).isoformat() == "2026-05-15"
+
+
+def test_billing_day_resolves_31st_to_february_last_day():
+    assert resolve_configured_billing_day(2026, 2, 31).isoformat() == "2026-02-28"
+
+
+def test_billing_day_resolves_31st_to_april_last_day():
+    assert resolve_configured_billing_day(2026, 4, 31).isoformat() == "2026-04-30"
+
+
+def test_billing_day_resolves_31st_to_leap_year_february_last_day():
+    assert resolve_configured_billing_day(2028, 2, 31).isoformat() == "2028-02-29"
+
+
+def test_credit_card_billing_day_rejects_out_of_range_values(monkeypatch):
+    session_factory = make_session_factory()
+    client = make_client(monkeypatch, session_factory)
+
+    low = client.post("/credit-cards", json=card_payload(statement_close_day=0))
+    high = client.post("/credit-cards", json=card_payload(payment_due_day=32))
+
+    assert low.status_code == 422
+    assert high.status_code == 422

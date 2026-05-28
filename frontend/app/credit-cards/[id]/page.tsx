@@ -5,6 +5,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 
 import { API_BASE_URL } from "@/lib/api";
+import { DAY_OF_MONTH_OPTIONS, formatOrdinalDay } from "@/lib/billing-days";
 
 type CreditCard = {
   id: number;
@@ -1499,6 +1500,10 @@ export default function CreditCardDetailPage() {
                 },
                 { label: "Payment Due Date", value: formatDate(card.payment_due_date) },
                 {
+                  label: "Payment Due Day",
+                  value: formatOrdinalDay(card.payment_due_day),
+                },
+                {
                   label: "Days Until Due",
                   value:
                     card.days_until_payment_due === null
@@ -1514,6 +1519,10 @@ export default function CreditCardDetailPage() {
                 {
                   label: "Next Statement Close",
                   value: formatDate(card.next_statement_close_date),
+                },
+                {
+                  label: "Statement Close Day",
+                  value: formatOrdinalDay(card.statement_close_day),
                 },
                 {
                   label: "Days Until Statement Close",
@@ -1571,7 +1580,41 @@ export default function CreditCardDetailPage() {
                 {renderInlineCheckbox("minimum_payment_paid", "Minimum Payment Made")}
                 {renderInlineCheckbox("autopay_enabled", "Autopay Enabled")}
                 {renderInlineInput("payment_due_date", "Payment Due Date", "date")}
+                <label className="space-y-1 text-sm font-medium text-slate-700">
+                  <span>Payment Due Day</span>
+                  <select
+                    className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    onChange={(event) =>
+                      updateFormField("payment_due_day", event.target.value)
+                    }
+                    value={form.payment_due_day}
+                  >
+                    <option value="">Select payment due day</option>
+                    {DAY_OF_MONTH_OPTIONS.map((day) => (
+                      <option key={day} value={day}>
+                        {formatOrdinalDay(day)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 {renderInlineInput("next_statement_close_date", "Next Statement Close Date", "date")}
+                <label className="space-y-1 text-sm font-medium text-slate-700">
+                  <span>Statement Close Day</span>
+                  <select
+                    className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    onChange={(event) =>
+                      updateFormField("statement_close_day", event.target.value)
+                    }
+                    value={form.statement_close_day}
+                  >
+                    <option value="">Select statement close day</option>
+                    {DAY_OF_MONTH_OPTIONS.map((day) => (
+                      <option key={day} value={day}>
+                        {formatOrdinalDay(day)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 {renderInlineInput("preferred_utilization", "Preferred Utilization %", "number")}
                 {renderInlineInput("apr", "APR %", "number")}
                 <div className="sm:col-span-2 xl:col-span-3">

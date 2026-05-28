@@ -16,6 +16,7 @@ import {
 } from "react";
 
 import { API_BASE_URL } from "@/lib/api";
+import { DAY_OF_MONTH_OPTIONS, formatOrdinalDay } from "@/lib/billing-days";
 
 type RewardProgram = {
   id: number;
@@ -197,10 +198,6 @@ const NETWORK_OPTIONS = [
   "Discover",
   "Other",
 ];
-
-const DAY_OF_MONTH_OPTIONS = Array.from({ length: 31 }, (_, index) =>
-  String(index + 1),
-);
 
 const REWARD_TYPE_OPTIONS = [
   { value: "points_multiplier", label: "Points Multiplier" },
@@ -508,7 +505,7 @@ function upcomingLabel(days: number | null, fallbackDate: string | null, fallbac
     return fallbackDate;
   }
 
-  return fallbackDay ? `Day ${fallbackDay}` : "-";
+  return fallbackDay ? formatOrdinalDay(fallbackDay) : "-";
 }
 
 function compactUpcomingLabel(prefix: string, days: number | null) {
@@ -1834,7 +1831,7 @@ function CreditCardsContent() {
                   <option value="">Select statement close day</option>
                   {DAY_OF_MONTH_OPTIONS.map((day) => (
                     <option key={day} value={day}>
-                      {day}
+                      {formatOrdinalDay(day)}
                     </option>
                   ))}
                 </select>
@@ -1855,7 +1852,7 @@ function CreditCardsContent() {
                   <option value="">Select payment due day</option>
                   {DAY_OF_MONTH_OPTIONS.map((day) => (
                     <option key={day} value={day}>
-                      {day}
+                      {formatOrdinalDay(day)}
                     </option>
                   ))}
                 </select>

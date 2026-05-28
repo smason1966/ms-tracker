@@ -91,6 +91,11 @@ class CreditCardCreate(BaseModel):
     def validate_credit_limit(cls, value: Decimal | None) -> Decimal | None:
         return validate_credit_limit_amount(value)
 
+    @field_validator("statement_close_day", "payment_due_day")
+    @classmethod
+    def validate_billing_day(cls, value: int | None) -> int | None:
+        return validate_billing_day_value(value)
+
 
 class CreditCardUpdate(BaseModel):
     player_id: int | None = None
@@ -140,6 +145,11 @@ class CreditCardUpdate(BaseModel):
     @classmethod
     def validate_credit_limit(cls, value: Decimal | None) -> Decimal | None:
         return validate_credit_limit_amount(value)
+
+    @field_validator("statement_close_day", "payment_due_day")
+    @classmethod
+    def validate_billing_day(cls, value: int | None) -> int | None:
+        return validate_billing_day_value(value)
 
 
 class RewardRuleCreate(BaseModel):
@@ -195,13 +205,27 @@ def validate_credit_limit_amount(value: Decimal | None) -> Decimal | None:
     return value
 
 
+def validate_billing_day_value(value: int | None) -> int | None:
+    if value is None:
+        return None
+
+    if value < 1 or value > 31:
+        raise ValueError("Billing day must be between 1 and 31")
+
+    return value
+
+
+def resolve_configured_billing_day(year: int, month: int, configured_day: int) -> date:
+    target_day = min(configured_day, monthrange(year, month)[1])
+    return date(year, month, target_day)
+
+
 def days_until_day(day: int | None) -> int | None:
     if day is None:
         return None
 
     today = date.today()
-    target_day = min(day, monthrange(today.year, today.month)[1])
-    target = date(today.year, today.month, target_day)
+    target = resolve_configured_billing_day(today.year, today.month, day)
 
     if target < today:
         next_month = today.month + 1
@@ -211,8 +235,7 @@ def days_until_day(day: int | None) -> int | None:
             next_month = 1
             next_year += 1
 
-        target_day = min(day, monthrange(next_year, next_month)[1])
-        target = date(next_year, next_month, target_day)
+        target = resolve_configured_billing_day(next_year, next_month, day)
 
     return (target - today).days
 
