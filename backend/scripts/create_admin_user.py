@@ -25,9 +25,9 @@ def create_or_update_admin_user(
 ) -> AdminUser:
     cleaned_username = username.strip().lower()
     if not cleaned_username:
-        raise ValueError("Admin username is required")
+        raise ValueError("Username is required")
     if not password:
-        raise ValueError("Admin password is required")
+        raise ValueError("Password is required")
     if role is not None and role not in {"admin", "tester"}:
         raise ValueError("Role must be admin or tester")
 
@@ -56,7 +56,7 @@ def create_or_update_admin_user(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create or rotate the single Dotopoly admin user password."
+        description="Create or update a Dotopoly app user password and role."
     )
     parser.add_argument("--username", default=os.getenv("ADMIN_USERNAME"))
     parser.add_argument(
@@ -75,10 +75,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    username = args.username or input("Admin username: ").strip()
-    password = args.password or getpass.getpass("Admin password: ")
+    username = args.username or input("Username: ").strip()
+    password = args.password or getpass.getpass(f"Password for {username}: ")
     if not args.password:
-        confirmation = getpass.getpass("Confirm admin password: ")
+        confirmation = getpass.getpass(f"Confirm password for {username}: ")
         if password != confirmation:
             print("Passwords do not match.", file=sys.stderr)
             return 1
