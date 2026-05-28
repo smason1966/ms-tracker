@@ -23,7 +23,7 @@ class CreditCard(Base):
     issuer: Mapped[str] = mapped_column(String(120), nullable=False)
     network: Mapped[str | None] = mapped_column(String(50), nullable=True)
     last_four: Mapped[str | None] = mapped_column(String(4), nullable=True)
-    credit_limit: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    credit_limit: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     current_balance: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     statement_balance: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     statement_paid_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)

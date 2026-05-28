@@ -20,7 +20,7 @@ type CreditCard = {
   issuer: string;
   network: string | null;
   last_four: string | null;
-  credit_limit: string | number;
+  credit_limit: string | number | null;
   current_balance: string | number | null;
   statement_balance: string | number | null;
   statement_paid_amount: string | number | null;
@@ -178,6 +178,7 @@ type CardForm = {
   network: string;
   last_four: string;
   credit_limit: string;
+  no_preset_limit: boolean;
   current_balance: string;
   statement_balance: string;
   statement_paid_amount: string;
@@ -315,6 +316,25 @@ function formatAmount(value: string | number | null) {
   });
 }
 
+function formatCreditLimit(value: string | number | null) {
+  if (value === null || value === "") {
+    return "No preset limit";
+  }
+
+  const amount = Number(value);
+
+  if (Number.isNaN(amount)) {
+    return String(value);
+  }
+
+  return amount.toLocaleString(undefined, {
+    currency: "USD",
+    maximumFractionDigits: 0,
+    minimumFractionDigits: 0,
+    style: "currency",
+  });
+}
+
 function formatPercent(value: string | number | null) {
   if (value === null || value === "") {
     return "-";
@@ -403,7 +423,8 @@ function toForm(card: CreditCard): CardForm {
     issuer: card.issuer,
     network: card.network ?? "",
     last_four: card.last_four ?? "",
-    credit_limit: String(card.credit_limit),
+    credit_limit: optionalString(card.credit_limit),
+    no_preset_limit: card.credit_limit === null,
     current_balance: optionalString(card.current_balance),
     statement_balance: optionalString(card.statement_balance),
     statement_paid_amount: optionalString(card.statement_paid_amount),
@@ -451,7 +472,7 @@ function buildPayload(form: CardForm) {
     network_id: form.network_id ? Number(form.network_id) : null,
     nickname: form.nickname.trim(),
     last_four: form.last_four.trim() || null,
-    credit_limit: form.credit_limit,
+    credit_limit: form.no_preset_limit ? null : form.credit_limit || null,
     current_balance: form.current_balance || null,
     statement_balance: form.statement_balance || null,
     statement_paid_amount: form.statement_paid_amount || null,
@@ -820,6 +841,18 @@ export default function CreditCardDetailPage() {
         ? {
             ...currentForm,
             [field]: value,
+          }
+        : currentForm,
+    );
+  }
+
+  function updateNoPresetLimit(value: boolean) {
+    setForm((currentForm) =>
+      currentForm
+        ? {
+            ...currentForm,
+            credit_limit: value ? "" : currentForm.credit_limit,
+            no_preset_limit: value,
           }
         : currentForm,
     );
@@ -1404,7 +1437,7 @@ export default function CreditCardDetailPage() {
             <DetailSection
               isEditing={editingSection === "operations"}
               items={[
-                { label: "Credit Limit", value: formatAmount(card.credit_limit) },
+                { label: "Credit Limit", value: formatCreditLimit(card.credit_limit) },
                 {
                   label: "Estimated Balance",
                   value: formatAmount(card.current_balance),
@@ -1500,7 +1533,37 @@ export default function CreditCardDetailPage() {
               title="Payment, Statement & Utilization"
             >
               <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-3">
-                {renderInlineInput("credit_limit", "Credit Limit", "number", true)}
+                <div className="space-y-1 text-sm font-medium text-slate-700">
+                  <label className="space-y-1">
+                    <span>Credit Limit</span>
+                    <input
+                      className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition disabled:bg-slate-100 disabled:text-slate-500 focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                      disabled={form.no_preset_limit}
+                      min="0"
+                      onChange={(event) =>
+                        updateFormField("credit_limit", event.target.value)
+                      }
+                      placeholder="10000"
+                      step="100"
+                      type="number"
+                      value={form.credit_limit}
+                    />
+                  </label>
+                  <label className="flex items-start gap-2 text-xs font-medium text-slate-600">
+                    <input
+                      checked={form.no_preset_limit}
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                      onChange={(event) =>
+                        updateNoPresetLimit(event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                    <span>
+                      No preset spending limit / N/A for charge cards or cards
+                      without a published limit.
+                    </span>
+                  </label>
+                </div>
                 {renderInlineInput("current_balance", "Estimated Balance", "number")}
                 {renderInlineInput("statement_balance", "Last Statement Balance", "number")}
                 {renderInlineInput("statement_paid_amount", "Amount Paid Toward Statement", "number")}

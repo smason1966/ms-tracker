@@ -1,0 +1,124 @@
+from decimal import Decimal
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.api import credit_cards
+from app.db.base import Base
+from app.models.app_setting import AppSetting  # noqa: F401
+from app.models.card_issuer import CardIssuer  # noqa: F401
+from app.models.card_network import CardNetwork  # noqa: F401
+from app.models.credit_card import CreditCard
+from app.models.credit_card_product_change import CreditCardProductChange  # noqa: F401
+from app.models.credit_card_reward_rule import CreditCardRewardRule  # noqa: F401
+from app.models.credit_card_reward_transaction import CreditCardRewardTransaction  # noqa: F401
+from app.models.player import Player  # noqa: F401
+from app.models.purchase_batch import PurchaseBatch  # noqa: F401
+from app.models.reward_program import RewardProgram  # noqa: F401
+from app.models.spending_category import SpendingCategory  # noqa: F401
+from app.models.store import Store  # noqa: F401
+
+
+def make_session_factory():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)
+
+
+def make_client(monkeypatch, session_factory):
+    monkeypatch.setattr(credit_cards, "SessionLocal", session_factory)
+    app = FastAPI()
+    app.include_router(credit_cards.router)
+    return TestClient(app)
+
+
+def card_payload(**overrides):
+    payload = {
+        "nickname": "Amex Gold",
+        "issuer": "American Express",
+        "network": "American Express",
+        "credit_limit": 10_000,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_create_credit_card_with_whole_dollar_limit(monkeypatch):
+    session_factory = make_session_factory()
+    client = make_client(monkeypatch, session_factory)
+
+    response = client.post("/credit-cards", json=card_payload(credit_limit=25_000))
+
+    assert response.status_code == 200
+    assert response.json()["credit_limit"] == 25_000
+    db = session_factory()
+    assert db.query(CreditCard).one().credit_limit == Decimal("25000.00")
+    db.close()
+
+
+def test_create_credit_card_without_preset_limit(monkeypatch):
+    session_factory = make_session_factory()
+    client = make_client(monkeypatch, session_factory)
+
+    response = client.post("/credit-cards", json=card_payload(credit_limit=None))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["credit_limit"] is None
+    assert body["calculated_available_credit"] is None
+    assert body["utilization_percent"] is None
+
+
+def test_edit_credit_card_from_limit_to_no_preset_limit(monkeypatch):
+    session_factory = make_session_factory()
+    client = make_client(monkeypatch, session_factory)
+    created = client.post("/credit-cards", json=card_payload(credit_limit=5_000)).json()
+
+    response = client.patch(
+        f"/credit-cards/{created['id']}",
+        json={"credit_limit": None},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["credit_limit"] is None
+    db = session_factory()
+    assert db.query(CreditCard).one().credit_limit is None
+    db.close()
+
+
+def test_edit_credit_card_from_no_preset_limit_to_limit(monkeypatch):
+    session_factory = make_session_factory()
+    client = make_client(monkeypatch, session_factory)
+    created = client.post("/credit-cards", json=card_payload(credit_limit=None)).json()
+
+    response = client.patch(
+        f"/credit-cards/{created['id']}",
+        json={"credit_limit": 15_000},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["credit_limit"] == 15_000
+    db = session_factory()
+    assert db.query(CreditCard).one().credit_limit == Decimal("15000.00")
+    db.close()
+
+
+def test_credit_card_limit_rejects_negative_or_decimal_cents(monkeypatch):
+    session_factory = make_session_factory()
+    client = make_client(monkeypatch, session_factory)
+
+    negative = client.post("/credit-cards", json=card_payload(credit_limit=-100))
+    decimal_cents = client.post(
+        "/credit-cards",
+        json=card_payload(nickname="Cents Card", credit_limit=5000.25),
+    )
+
+    assert negative.status_code == 422
+    assert decimal_cents.status_code == 422

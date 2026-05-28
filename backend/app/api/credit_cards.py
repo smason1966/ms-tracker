@@ -6,7 +6,7 @@ from decimal import Decimal
 import logging
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
 
@@ -51,7 +51,7 @@ class CreditCardCreate(BaseModel):
     issuer: str | None = None
     network: str | None = None
     last_four: str | None = None
-    credit_limit: Decimal
+    credit_limit: Decimal | None = None
     current_balance: Decimal | None = None
     statement_balance: Decimal | None = None
     statement_paid_amount: Decimal | None = None
@@ -85,6 +85,11 @@ class CreditCardCreate(BaseModel):
     reports_to_tu: bool = False
     reports_to_eq: bool = False
     notes: str | None = None
+
+    @field_validator("credit_limit")
+    @classmethod
+    def validate_credit_limit(cls, value: Decimal | None) -> Decimal | None:
+        return validate_credit_limit_amount(value)
 
 
 class CreditCardUpdate(BaseModel):
@@ -131,6 +136,11 @@ class CreditCardUpdate(BaseModel):
     reports_to_eq: bool | None = None
     notes: str | None = None
 
+    @field_validator("credit_limit")
+    @classmethod
+    def validate_credit_limit(cls, value: Decimal | None) -> Decimal | None:
+        return validate_credit_limit_amount(value)
+
 
 class RewardRuleCreate(BaseModel):
     spending_category_id: int
@@ -172,6 +182,19 @@ def get_payload_fields(payload: BaseModel) -> set[str]:
     return get_model_fields_set(payload)
 
 
+def validate_credit_limit_amount(value: Decimal | None) -> Decimal | None:
+    if value is None:
+        return None
+
+    if value < 0:
+        raise ValueError("Credit limit must be a non-negative whole-dollar amount")
+
+    if value != value.to_integral_value():
+        raise ValueError("Credit limit must be a whole-dollar amount")
+
+    return value
+
+
 def days_until_day(day: int | None) -> int | None:
     if day is None:
         return None
@@ -202,7 +225,7 @@ def days_until_date(value: date | None) -> int | None:
 
 
 def serialize_card(card: CreditCard) -> dict:
-    credit_limit = Decimal(card.credit_limit or 0)
+    credit_limit = Decimal(card.credit_limit) if card.credit_limit is not None else None
     current_balance = Decimal(card.current_balance or 0)
     statement_balance = Decimal(card.statement_balance or 0)
     statement_paid_amount = Decimal(card.statement_paid_amount or 0)
@@ -211,13 +234,17 @@ def serialize_card(card: CreditCard) -> dict:
     available_credit = (
         Decimal(card.available_credit)
         if card.available_credit is not None
-        else credit_limit - current_balance
+        else (
+            credit_limit - current_balance
+            if credit_limit is not None
+            else None
+        )
     )
     signup_bonus_spend = card.signup_bonus_spend
     current_spend_progress = Decimal(card.current_spend_progress or 0)
     utilization = (
         float((current_balance / credit_limit) * 100)
-        if credit_limit > 0
+        if credit_limit is not None and credit_limit > 0
         else None
     )
     msr_remaining = (
@@ -227,7 +254,11 @@ def serialize_card(card: CreditCard) -> dict:
     )
     preferred_balance = (
         credit_limit * (Decimal(card.preferred_utilization) / Decimal("100"))
-        if card.preferred_utilization is not None and credit_limit > 0
+        if (
+            card.preferred_utilization is not None
+            and credit_limit is not None
+            and credit_limit > 0
+        )
         else None
     )
     payment_needed_for_preferred_utilization = (

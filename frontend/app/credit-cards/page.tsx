@@ -35,7 +35,7 @@ type CreditCard = {
   issuer: string;
   network: string | null;
   last_four: string | null;
-  credit_limit: string | number;
+  credit_limit: string | number | null;
   current_balance: string | number | null;
   statement_balance: string | number | null;
   statement_paid_amount: string | number | null;
@@ -143,6 +143,7 @@ type CardForm = {
   network: string;
   last_four: string;
   credit_limit: string;
+  no_preset_limit: boolean;
   current_balance: string;
   statement_close_day: string;
   payment_due_day: string;
@@ -177,6 +178,7 @@ const emptyForm: CardForm = {
   network: "",
   last_four: "",
   credit_limit: "",
+  no_preset_limit: false,
   current_balance: "",
   statement_close_day: "",
   payment_due_day: "",
@@ -341,6 +343,10 @@ function formatWholeDollarAmount(value: string | number | null) {
     minimumFractionDigits: 0,
     style: "currency",
   });
+}
+
+function formatCreditLimit(value: string | number | null) {
+  return value === null || value === "" ? "No preset limit" : formatWholeDollarAmount(value);
 }
 
 function numericValue(value: string | number | null | undefined) {
@@ -1019,6 +1025,14 @@ function CreditCardsContent() {
     }));
   }
 
+  function updateNoPresetLimit(value: boolean) {
+    setForm((currentForm) => ({
+      ...currentForm,
+      credit_limit: value ? "" : currentForm.credit_limit,
+      no_preset_limit: value,
+    }));
+  }
+
   function updateIssuerField(value: string) {
     if (value === "__legacy__") {
       setForm((currentForm) => ({
@@ -1190,7 +1204,7 @@ function CreditCardsContent() {
       nickname: form.nickname.trim(),
       network: form.network.trim() || null,
       last_four: form.last_four.trim() || null,
-      credit_limit: form.credit_limit,
+      credit_limit: form.no_preset_limit ? null : form.credit_limit || null,
       current_balance: form.current_balance || null,
       statement_close_day: form.statement_close_day
         ? Number(form.statement_close_day)
@@ -1457,7 +1471,7 @@ function CreditCardsContent() {
                             </span>
                           </td>
                           <td className="px-3 py-2 text-right font-medium tabular-nums">
-                            {formatWholeDollarAmount(card.credit_limit)}
+                            {formatCreditLimit(card.credit_limit)}
                           </td>
                           <td className="px-3 py-2 text-right font-medium tabular-nums">
                             {formatWholeDollarAmount(card.current_balance)}
@@ -1567,7 +1581,7 @@ function CreditCardsContent() {
                       <div>
                         <dt className="text-xs font-medium text-slate-500">Limit</dt>
                         <dd className="font-semibold">
-                          {formatWholeDollarAmount(card.credit_limit)}
+                          {formatCreditLimit(card.credit_limit)}
                         </dd>
                       </div>
                       <div>
@@ -1752,7 +1766,6 @@ function CreditCardsContent() {
 
               {([
                 ["last_four", "Last Four", "text", false],
-                ["credit_limit", "Credit Limit", "number", true],
                 ["current_balance", "Estimated Balance", "number", false],
                 ["signup_bonus_spend", "Signup Bonus Spend", "number", false],
                 ["signup_bonus_deadline", "Signup Bonus Deadline", "date", false],
@@ -1778,6 +1791,36 @@ function CreditCardsContent() {
                   ) : null}
                 </label>
               ))}
+
+              <div className="space-y-2 text-sm font-medium text-slate-700">
+                <label className="space-y-2">
+                  <span>Credit Limit</span>
+                  <input
+                    className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition disabled:bg-slate-100 disabled:text-slate-500 focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    disabled={form.no_preset_limit}
+                    min="0"
+                    onChange={(event) =>
+                      updateFormField("credit_limit", event.target.value)
+                    }
+                    placeholder="10000"
+                    step="100"
+                    type="number"
+                    value={form.credit_limit}
+                  />
+                </label>
+                <label className="flex items-start gap-2 text-xs font-medium text-slate-600">
+                  <input
+                    checked={form.no_preset_limit}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                    onChange={(event) => updateNoPresetLimit(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>
+                    No preset spending limit / N/A for charge cards or cards
+                    without a published limit.
+                  </span>
+                </label>
+              </div>
 
               <label className="space-y-2 text-sm font-medium text-slate-700">
                 <span>Statement Close Day</span>
