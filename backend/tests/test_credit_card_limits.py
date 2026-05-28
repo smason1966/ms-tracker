@@ -111,6 +111,56 @@ def test_edit_credit_card_from_no_preset_limit_to_limit(monkeypatch):
     db.close()
 
 
+def test_edit_credit_card_preserves_existing_values_when_updating_days(monkeypatch):
+    session_factory = make_session_factory()
+    client = make_client(monkeypatch, session_factory)
+    created = client.post(
+        "/credit-cards",
+        json=card_payload(
+            credit_limit=10_000,
+            current_balance=1250,
+            statement_close_day=None,
+            payment_due_day=None,
+        ),
+    ).json()
+
+    response = client.patch(
+        f"/credit-cards/{created['id']}",
+        json={"statement_close_day": 31, "payment_due_day": 15},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["credit_limit"] == 10_000
+    assert body["current_balance"] == 1250
+    assert body["statement_close_day"] == 31
+    assert body["payment_due_day"] == 15
+
+
+def test_edit_credit_card_can_clear_billing_days_without_changing_limit(monkeypatch):
+    session_factory = make_session_factory()
+    client = make_client(monkeypatch, session_factory)
+    created = client.post(
+        "/credit-cards",
+        json=card_payload(
+            credit_limit=20_000,
+            statement_close_day=30,
+            payment_due_day=5,
+        ),
+    ).json()
+
+    response = client.patch(
+        f"/credit-cards/{created['id']}",
+        json={"statement_close_day": None, "payment_due_day": None},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["credit_limit"] == 20_000
+    assert body["statement_close_day"] is None
+    assert body["payment_due_day"] is None
+
+
 def test_credit_card_limit_rejects_negative_or_decimal_cents(monkeypatch):
     session_factory = make_session_factory()
     client = make_client(monkeypatch, session_factory)

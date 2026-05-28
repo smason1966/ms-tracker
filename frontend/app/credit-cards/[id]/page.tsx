@@ -300,6 +300,19 @@ function optionalString(value: string | number | null | undefined) {
   return value === null || value === undefined ? "" : String(value);
 }
 
+function wholeDollarFormValue(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+
+  const amount = Number(value);
+  if (!Number.isNaN(amount) && Number.isInteger(amount)) {
+    return String(amount);
+  }
+
+  return String(value);
+}
+
 function formatAmount(value: string | number | null) {
   if (value === null || value === "") {
     return "-";
@@ -424,7 +437,7 @@ function toForm(card: CreditCard): CardForm {
     issuer: card.issuer,
     network: card.network ?? "",
     last_four: card.last_four ?? "",
-    credit_limit: optionalString(card.credit_limit),
+    credit_limit: wholeDollarFormValue(card.credit_limit),
     no_preset_limit: card.credit_limit === null,
     current_balance: optionalString(card.current_balance),
     statement_balance: optionalString(card.statement_balance),
