@@ -17,15 +17,29 @@ type AdminSession = {
   username: string;
   active: boolean;
   last_login_at: string | null;
+  mfa_enabled?: boolean;
 };
 
-type AuthStatus = "loading" | "authenticated" | "unauthenticated" | "disabled";
+type AuthStatus =
+  | "loading"
+  | "authenticated"
+  | "unauthenticated"
+  | "mfa_required"
+  | "disabled";
 
 type AuthContextValue = {
   admin: AdminSession | null;
   authEnabled: boolean;
+  mfaChallengeExpiresAt: string | null;
   status: AuthStatus;
-  login: (username: string, password: string) => Promise<void>;
+  login: (
+    username: string,
+    password: string,
+  ) => Promise<{ mfaRequired: boolean }>;
+  verifyMfaChallenge: (payload: {
+    code?: string;
+    recovery_code?: string;
+  }) => Promise<void>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<void>;
 };
@@ -82,6 +96,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     AUTH_ENABLED ? "loading" : "disabled",
   );
   const [admin, setAdmin] = useState<AdminSession | null>(null);
+  const [mfaChallengeExpiresAt, setMfaChallengeExpiresAt] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     installAuthenticatedFetch();
@@ -96,13 +113,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const body = await requestSession();
       if (body.authenticated) {
         setAdmin(body.admin);
+        setMfaChallengeExpiresAt(null);
         setStatus("authenticated");
       } else {
         setAdmin(null);
+        setMfaChallengeExpiresAt(null);
         setStatus("unauthenticated");
       }
     } catch {
       setAdmin(null);
+      setMfaChallengeExpiresAt(null);
       setStatus("unauthenticated");
     }
   }, []);
@@ -121,15 +141,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (body?.authenticated) {
           setAdmin(body.admin);
+          setMfaChallengeExpiresAt(null);
           setStatus("authenticated");
         } else {
           setAdmin(null);
+          setMfaChallengeExpiresAt(null);
           setStatus("unauthenticated");
         }
       })
       .catch(() => {
         if (!isCancelled) {
           setAdmin(null);
+          setMfaChallengeExpiresAt(null);
           setStatus("unauthenticated");
         }
       });
@@ -142,7 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (username: string, password: string) => {
     if (!AUTH_ENABLED) {
       setStatus("disabled");
-      return;
+      return { mfaRequired: false };
     }
 
     const csrf = csrfToken();
@@ -161,14 +184,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const body = await response.json();
+    if (body.mfa_required) {
+      setAdmin(null);
+      setMfaChallengeExpiresAt(body.challenge_expires_at ?? null);
+      setStatus("mfa_required");
+      return { mfaRequired: true };
+    }
+
     setAdmin(body.admin);
+    setMfaChallengeExpiresAt(null);
     setStatus("authenticated");
+    return { mfaRequired: false };
   }, []);
+
+  const verifyMfaChallenge = useCallback(
+    async (payload: { code?: string; recovery_code?: string }) => {
+      if (!AUTH_ENABLED) {
+        setStatus("disabled");
+        return;
+      }
+
+      const csrf = csrfToken();
+      const response = await fetch(`${API_BASE_URL}/auth/mfa/challenge/verify`, {
+        body: JSON.stringify(payload),
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(csrf ? { "X-CSRF-Token": csrf } : {}),
+        },
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        throw new Error(await parseAuthError(response));
+      }
+
+      const body = await response.json();
+      setAdmin(body.admin);
+      setMfaChallengeExpiresAt(null);
+      setStatus("authenticated");
+    },
+    [],
+  );
 
   const logout = useCallback(async () => {
     if (!AUTH_ENABLED) {
       setStatus("disabled");
       setAdmin(null);
+      setMfaChallengeExpiresAt(null);
       return;
     }
 
@@ -181,6 +244,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
     } finally {
       setAdmin(null);
+      setMfaChallengeExpiresAt(null);
       setStatus("unauthenticated");
     }
   }, []);
@@ -189,12 +253,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       admin,
       authEnabled: AUTH_ENABLED,
+      mfaChallengeExpiresAt,
       status,
       login,
+      verifyMfaChallenge,
       logout,
       refreshSession,
     }),
-    [admin, login, logout, refreshSession, status],
+    [
+      admin,
+      login,
+      logout,
+      mfaChallengeExpiresAt,
+      refreshSession,
+      status,
+      verifyMfaChallenge,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

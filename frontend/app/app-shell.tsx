@@ -312,7 +312,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (status === "unauthenticated" && !isLoginRoute) {
+    if (
+      (status === "unauthenticated" || status === "mfa_required") &&
+      !isLoginRoute
+    ) {
       router.replace(`/login?next=${encodeURIComponent(pathname)}`);
     }
   }, [authEnabled, isLoginRoute, pathname, router, status]);
@@ -352,6 +355,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   if (authEnabled && status === "unauthenticated" && !isLoginRoute) {
+    return <ShellLoading />;
+  }
+
+  if (authEnabled && status === "mfa_required" && !isLoginRoute) {
     return <ShellLoading />;
   }
 

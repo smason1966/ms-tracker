@@ -8,9 +8,19 @@ import { useAuth } from "@/lib/auth";
 export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { authEnabled, login, status } = useAuth();
+  const {
+    authEnabled,
+    login,
+    logout,
+    mfaChallengeExpiresAt,
+    status,
+    verifyMfaChallenge,
+  } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [recoveryCode, setRecoveryCode] = useState("");
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -34,8 +44,20 @@ export default function LoginPage() {
     setIsSubmitting(true);
 
     try {
-      await login(username, password);
-      router.replace(nextPath);
+      if (status === "mfa_required") {
+        await verifyMfaChallenge(
+          useRecoveryCode
+            ? { recovery_code: recoveryCode }
+            : { code: mfaCode },
+        );
+        router.replace(nextPath);
+      } else {
+        const result = await login(username, password);
+        setPassword("");
+        if (!result.mfaRequired) {
+          router.replace(nextPath);
+        }
+      }
     } catch (loginError) {
       setError(
         loginError instanceof Error
@@ -45,6 +67,14 @@ export default function LoginPage() {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  async function cancelMfaChallenge() {
+    setError(null);
+    setMfaCode("");
+    setRecoveryCode("");
+    setUseRecoveryCode(false);
+    await logout();
   }
 
   return (
@@ -63,29 +93,87 @@ export default function LoginPage() {
         </div>
 
         <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
-          <label className="block text-sm font-medium text-slate-200">
-            Username
-            <input
-              autoComplete="username"
-              className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/15"
-              onChange={(event) => setUsername(event.target.value)}
-              required
-              type="text"
-              value={username}
-            />
-          </label>
+          {status === "mfa_required" ? (
+            <>
+              <div className="rounded-lg border border-cyan-300/25 bg-cyan-300/10 px-3 py-2 text-sm text-cyan-50">
+                Password accepted. Enter your authenticator code to finish
+                signing in.
+                {mfaChallengeExpiresAt ? (
+                  <span className="mt-1 block text-xs text-cyan-100/70">
+                    Challenge expires {new Date(mfaChallengeExpiresAt).toLocaleTimeString()}.
+                  </span>
+                ) : null}
+              </div>
 
-          <label className="block text-sm font-medium text-slate-200">
-            Password
-            <input
-              autoComplete="current-password"
-              className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/15"
-              onChange={(event) => setPassword(event.target.value)}
-              required
-              type="password"
-              value={password}
-            />
-          </label>
+              {useRecoveryCode ? (
+                <label className="block text-sm font-medium text-slate-200">
+                  Recovery code
+                  <input
+                    autoComplete="one-time-code"
+                    className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm uppercase text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/15"
+                    onChange={(event) => setRecoveryCode(event.target.value)}
+                    required
+                    type="text"
+                    value={recoveryCode}
+                  />
+                </label>
+              ) : (
+                <label className="block text-sm font-medium text-slate-200">
+                  Authenticator code
+                  <input
+                    autoComplete="one-time-code"
+                    className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/15"
+                    inputMode="numeric"
+                    maxLength={8}
+                    onChange={(event) => setMfaCode(event.target.value)}
+                    pattern="[0-9 ]*"
+                    required
+                    type="text"
+                    value={mfaCode}
+                  />
+                </label>
+              )}
+
+              <button
+                className="text-sm font-semibold text-cyan-200 transition hover:text-cyan-100"
+                onClick={() => {
+                  setError(null);
+                  setUseRecoveryCode((current) => !current);
+                }}
+                type="button"
+              >
+                {useRecoveryCode
+                  ? "Use authenticator code"
+                  : "Use recovery code"}
+              </button>
+            </>
+          ) : (
+            <>
+              <label className="block text-sm font-medium text-slate-200">
+                Username
+                <input
+                  autoComplete="username"
+                  className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/15"
+                  onChange={(event) => setUsername(event.target.value)}
+                  required
+                  type="text"
+                  value={username}
+                />
+              </label>
+
+              <label className="block text-sm font-medium text-slate-200">
+                Password
+                <input
+                  autoComplete="current-password"
+                  className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/15"
+                  onChange={(event) => setPassword(event.target.value)}
+                  required
+                  type="password"
+                  value={password}
+                />
+              </label>
+            </>
+          )}
 
           {error ? (
             <div className="rounded-lg border border-red-300/30 bg-red-950/35 px-3 py-2 text-sm font-medium text-red-100">
@@ -98,8 +186,22 @@ export default function LoginPage() {
             disabled={isSubmitting || status === "loading"}
             type="submit"
           >
-            {isSubmitting ? "Signing in..." : "Sign in"}
+            {isSubmitting
+              ? "Signing in..."
+              : status === "mfa_required"
+                ? "Verify and sign in"
+                : "Sign in"}
           </button>
+
+          {status === "mfa_required" ? (
+            <button
+              className="inline-flex h-10 w-full items-center justify-center rounded-lg border border-white/10 px-4 text-sm font-semibold text-slate-300 transition hover:bg-white/5 hover:text-white"
+              onClick={() => void cancelMfaChallenge()}
+              type="button"
+            >
+              Cancel sign in
+            </button>
+          ) : null}
         </form>
       </section>
     </main>

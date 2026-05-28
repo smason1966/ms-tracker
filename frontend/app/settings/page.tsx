@@ -3,12 +3,21 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Component, ErrorInfo, ReactNode, useEffect, useRef, useState } from "react";
+import QRCode from "qrcode";
 
 import { API_BASE_URL } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 
 type AppSettings = {
   multi_player_mode_enabled: boolean;
   voided_sale_sensitive_export_retention: string;
+};
+
+type MfaSetupResponse = {
+  issuer: string;
+  username: string;
+  manual_secret: string;
+  provisioning_uri: string;
 };
 
 const settingsCards = [
@@ -172,6 +181,324 @@ function useRenderLoopDiagnostics(name: string, extra?: Record<string, unknown>)
   });
 }
 
+async function authErrorMessage(response: Response) {
+  try {
+    const body = await response.json();
+    if (typeof body?.detail === "string") {
+      return body.detail;
+    }
+  } catch {
+    // Keep the generic fallback below.
+  }
+  return `Request failed (${response.status})`;
+}
+
+function MfaSettingsPanel() {
+  const { admin, authEnabled, refreshSession } = useAuth();
+  const [setup, setSetup] = useState<MfaSetupResponse | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [adminCode, setAdminCode] = useState("");
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isBusy, setIsBusy] = useState(false);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    if (!setup?.provisioning_uri) {
+      return;
+    }
+
+    QRCode.toDataURL(setup.provisioning_uri, {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      width: 192,
+    })
+      .then((dataUrl) => {
+        if (!isCancelled) {
+          setQrDataUrl(dataUrl);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setQrDataUrl(null);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [setup]);
+
+  async function startSetup() {
+    setIsBusy(true);
+    setError(null);
+    setMessage(null);
+    setRecoveryCodes([]);
+    setQrDataUrl(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/mfa/setup/start`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error(await authErrorMessage(response));
+      }
+      setSetup((await response.json()) as MfaSetupResponse);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start MFA setup.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function verifySetup() {
+    setIsBusy(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/mfa/setup/verify`, {
+        body: JSON.stringify({ code: totpCode }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error(await authErrorMessage(response));
+      }
+      const body = await response.json();
+      setRecoveryCodes(body.recovery_codes ?? []);
+      setSetup(null);
+      setQrDataUrl(null);
+      setTotpCode("");
+      setMessage("MFA is enabled. Save the recovery codes now.");
+      await refreshSession();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to verify MFA setup.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function regenerateRecoveryCodes() {
+    setIsBusy(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/auth/mfa/recovery-codes/regenerate`,
+        {
+          body: JSON.stringify({ code: adminCode }),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await authErrorMessage(response));
+      }
+      const body = await response.json();
+      setRecoveryCodes(body.recovery_codes ?? []);
+      setAdminCode("");
+      setMessage("Recovery codes regenerated. Save them now.");
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to regenerate recovery codes.",
+      );
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function disableMfa() {
+    setIsBusy(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/mfa/disable`, {
+        body: JSON.stringify({ code: adminCode }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error(await authErrorMessage(response));
+      }
+      setAdminCode("");
+      setRecoveryCodes([]);
+      setSetup(null);
+      setQrDataUrl(null);
+      setMessage("MFA disabled.");
+      await refreshSession();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to disable MFA.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  if (!authEnabled) {
+    return null;
+  }
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="max-w-2xl">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold">Multi-factor Authentication</h2>
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                admin?.mfa_enabled
+                  ? "bg-emerald-100 text-emerald-800"
+                  : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {admin?.mfa_enabled ? "Enabled" : "Optional"}
+            </span>
+          </div>
+          <p className="mt-1 text-sm leading-6 text-slate-600">
+            Add a TOTP authenticator app before using real production card data.
+            Recovery codes are shown once and are not stored in plaintext.
+          </p>
+          {message ? (
+            <p className="mt-2 text-sm font-medium text-emerald-700">{message}</p>
+          ) : null}
+          {error ? (
+            <p className="mt-2 text-sm font-medium text-red-700">{error}</p>
+          ) : null}
+        </div>
+
+        {!admin?.mfa_enabled && !setup ? (
+          <button
+            className="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isBusy}
+            onClick={() => void startSetup()}
+            type="button"
+          >
+            Set Up MFA
+          </button>
+        ) : null}
+      </div>
+
+      {setup ? (
+        <div className="mt-5 grid gap-5 lg:grid-cols-[14rem_1fr]">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            {qrDataUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                alt="MFA setup QR code"
+                className="mx-auto h-48 w-48"
+                src={qrDataUrl}
+              />
+            ) : (
+              <div className="flex h-48 w-full items-center justify-center rounded-md bg-white text-sm text-slate-500">
+                QR unavailable
+              </div>
+            )}
+          </div>
+          <div className="space-y-4">
+            <div>
+              <p className="text-sm font-semibold text-slate-700">
+                Scan the QR code, or enter this manual secret:
+              </p>
+              <code className="mt-2 block break-all rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800">
+                {setup.manual_secret}
+              </code>
+            </div>
+            <label className="block text-sm font-semibold text-slate-700">
+              Verification code
+              <input
+                className="mt-2 h-10 w-full max-w-xs rounded-md border border-slate-300 px-3 text-sm"
+                inputMode="numeric"
+                onChange={(event) => setTotpCode(event.target.value)}
+                placeholder="123456"
+                type="text"
+                value={totpCode}
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                className="inline-flex h-10 items-center rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isBusy || !totpCode.trim()}
+                onClick={() => void verifySetup()}
+                type="button"
+              >
+                Verify and Enable
+              </button>
+              <button
+                className="inline-flex h-10 items-center rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                onClick={() => {
+                  setSetup(null);
+                  setQrDataUrl(null);
+                  setTotpCode("");
+                }}
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {admin?.mfa_enabled ? (
+        <div className="mt-5 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <label className="block text-sm font-semibold text-slate-700">
+            Current authenticator code
+            <input
+              className="mt-2 h-10 w-full max-w-xs rounded-md border border-slate-300 bg-white px-3 text-sm"
+              inputMode="numeric"
+              onChange={(event) => setAdminCode(event.target.value)}
+              placeholder="123456"
+              type="text"
+              value={adminCode}
+            />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="inline-flex h-10 items-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isBusy || !adminCode.trim()}
+              onClick={() => void regenerateRecoveryCodes()}
+              type="button"
+            >
+              Regenerate Recovery Codes
+            </button>
+            <button
+              className="inline-flex h-10 items-center rounded-md border border-red-200 bg-white px-4 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isBusy || !adminCode.trim()}
+              onClick={() => void disableMfa()}
+              type="button"
+            >
+              Disable MFA
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {recoveryCodes.length > 0 ? (
+        <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm font-semibold text-amber-900">
+            Save these recovery codes now. They will not be shown again.
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {recoveryCodes.map((code) => (
+              <code
+                className="rounded-md border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                key={code}
+              >
+                {code}
+              </code>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function SettingsContent() {
   const pathname = usePathname();
   const [settings, setSettings] = useState<AppSettings>({
@@ -299,6 +626,8 @@ function SettingsContent() {
             inventory, sales, and rewards workflows.
           </p>
         </header>
+
+        <MfaSettingsPanel />
 
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

@@ -54,6 +54,7 @@ def admin_summary(admin: AdminUser) -> dict:
         "username": admin.username,
         "active": admin.active,
         "last_login_at": admin.last_login_at,
+        "mfa_enabled": admin.mfa_enabled,
     }
 
 
