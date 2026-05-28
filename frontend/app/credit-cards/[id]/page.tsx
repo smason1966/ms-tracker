@@ -402,7 +402,28 @@ function formatIsoDateForInput(value: string | null | undefined) {
   return `${match[2]}/${match[3]}/${match[1]}`;
 }
 
-function parseDateInput(value: string, label: string): ParsedDateInput {
+function statementCycleDateInputsFromForm(form: CardForm) {
+  return {
+    payment_due_date: formatIsoDateForInput(form.payment_due_date),
+    next_statement_close_date: formatIsoDateForInput(
+      form.next_statement_close_date,
+    ),
+  };
+}
+
+function normalizeShortYear(year: number) {
+  if (year >= 100) {
+    return year;
+  }
+
+  return year <= 69 ? 2000 + year : 1900 + year;
+}
+
+function parseDateInput(
+  value: string,
+  label: string,
+  options: { rejectMoreThanOneYearPast?: boolean } = {},
+): ParsedDateInput {
   const trimmedValue = value.trim();
 
   if (!trimmedValue) {
@@ -410,14 +431,44 @@ function parseDateInput(value: string, label: string): ParsedDateInput {
   }
 
   const isoMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmedValue);
-  const usMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmedValue);
+  const separatedMatch = /^(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})$/.exec(
+    trimmedValue,
+  );
+  const compactValue = trimmedValue.replace(/\s+/g, "");
 
-  const year = isoMatch ? Number(isoMatch[1]) : usMatch ? Number(usMatch[3]) : null;
-  const month = isoMatch ? Number(isoMatch[2]) : usMatch ? Number(usMatch[1]) : null;
-  const day = isoMatch ? Number(isoMatch[3]) : usMatch ? Number(usMatch[2]) : null;
+  let year = isoMatch ? Number(isoMatch[1]) : null;
+  let month = isoMatch ? Number(isoMatch[2]) : null;
+  let day = isoMatch ? Number(isoMatch[3]) : null;
+
+  if (!isoMatch && separatedMatch) {
+    month = Number(separatedMatch[1]);
+    day = Number(separatedMatch[2]);
+    year = normalizeShortYear(Number(separatedMatch[3]));
+  }
+
+  if (!isoMatch && !separatedMatch && /^\d{8}$/.test(compactValue)) {
+    month = Number(compactValue.slice(0, 2));
+    day = Number(compactValue.slice(2, 4));
+    year = Number(compactValue.slice(4, 8));
+  }
+
+  if (!isoMatch && !separatedMatch && /^\d{6}$/.test(compactValue)) {
+    month = Number(compactValue.slice(0, 2));
+    day = Number(compactValue.slice(2, 4));
+    year = normalizeShortYear(Number(compactValue.slice(4, 6)));
+  }
+
+  if (!isoMatch && !separatedMatch && /^\d{4}$/.test(compactValue)) {
+    month = Number(compactValue.slice(0, 1));
+    day = Number(compactValue.slice(1, 2));
+    year = normalizeShortYear(Number(compactValue.slice(2, 4)));
+  }
 
   if (year === null || month === null || day === null) {
-    return { ok: false, message: `${label} must use MM/DD/YYYY.` };
+    return {
+      ok: false,
+      message: `${label} must use a date like MM/DD/YYYY or 06202026.`,
+    };
   }
 
   const date = new Date(year, month - 1, day);
@@ -428,6 +479,19 @@ function parseDateInput(value: string, label: string): ParsedDateInput {
 
   if (!isValid) {
     return { ok: false, message: `${label} must be a valid calendar date.` };
+  }
+
+  if (options.rejectMoreThanOneYearPast) {
+    const oneYearAgo = new Date();
+    oneYearAgo.setHours(0, 0, 0, 0);
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+    if (date.getTime() < oneYearAgo.getTime()) {
+      return {
+        ok: false,
+        message: `${label} cannot be more than 1 year in the past.`,
+      };
+    }
   }
 
   return {
@@ -707,6 +771,15 @@ export default function CreditCardDetailPage() {
     payment_due_date: "",
     next_statement_close_date: "",
   });
+  const [statementCycleDateErrors, setStatementCycleDateErrors] = useState<
+    Partial<Record<StatementCycleDateField, string>>
+  >({});
+  const [statementCycleDateDirty, setStatementCycleDateDirty] = useState<
+    Record<StatementCycleDateField, boolean>
+  >({
+    payment_due_date: false,
+    next_statement_close_date: false,
+  });
   const [error, setError] = useState<string | null>(null);
   const [sectionMessage, setSectionMessage] = useState<string | null>(null);
   const [rewardRuleMessage, setRewardRuleMessage] = useState<string | null>(null);
@@ -748,6 +821,15 @@ export default function CreditCardDetailPage() {
       ),
     [cardNetworks, form?.network_id],
   );
+
+  function resetStatementCycleDateState(cardForm: CardForm) {
+    setStatementCycleDateInputs(statementCycleDateInputsFromForm(cardForm));
+    setStatementCycleDateErrors({});
+    setStatementCycleDateDirty({
+      payment_due_date: false,
+      next_statement_close_date: false,
+    });
+  }
 
   const loadCard = useCallback(async () => {
     if (!cardId) {
@@ -817,12 +899,7 @@ export default function CreditCardDetailPage() {
       const settings = (await settingsResponse.json()) as AppSettings;
       setCard(data);
       setForm(cardForm);
-      setStatementCycleDateInputs({
-        payment_due_date: formatIsoDateForInput(cardForm.payment_due_date),
-        next_statement_close_date: formatIsoDateForInput(
-          cardForm.next_statement_close_date,
-        ),
-      });
+      resetStatementCycleDateState(cardForm);
       setCategories((await categoriesResponse.json()) as SpendingCategory[]);
       setIsMultiPlayerModeEnabled(settings.multi_player_mode_enabled);
       setPlayers((await playersResponse.json()) as Player[]);
@@ -852,12 +929,7 @@ export default function CreditCardDetailPage() {
     const cardForm = toForm(data);
     setCard(data);
     setForm(cardForm);
-    setStatementCycleDateInputs({
-      payment_due_date: formatIsoDateForInput(cardForm.payment_due_date),
-      next_statement_close_date: formatIsoDateForInput(
-        cardForm.next_statement_close_date,
-      ),
-    });
+    resetStatementCycleDateState(cardForm);
     return data;
   }, [cardId]);
 
@@ -996,14 +1068,24 @@ export default function CreditCardDetailPage() {
       const parsedPaymentDueDate = parseDateInput(
         statementCycleDateInputs.payment_due_date,
         "Payment Due Date",
+        {
+          rejectMoreThanOneYearPast: statementCycleDateDirty.payment_due_date,
+        },
       );
       const parsedStatementCloseDate = parseDateInput(
         statementCycleDateInputs.next_statement_close_date,
         "Next Statement Close Date",
+        {
+          rejectMoreThanOneYearPast:
+            statementCycleDateDirty.next_statement_close_date,
+        },
       );
 
       if (!parsedPaymentDueDate.ok) {
         setError(parsedPaymentDueDate.message);
+        setStatementCycleDateErrors({
+          payment_due_date: parsedPaymentDueDate.message,
+        });
         setEditingSection(section);
         setIsSaving(false);
         return;
@@ -1011,10 +1093,21 @@ export default function CreditCardDetailPage() {
 
       if (!parsedStatementCloseDate.ok) {
         setError(parsedStatementCloseDate.message);
+        setStatementCycleDateErrors({
+          next_statement_close_date: parsedStatementCloseDate.message,
+        });
         setEditingSection(section);
         setIsSaving(false);
         return;
       }
+
+      setStatementCycleDateErrors({});
+      setStatementCycleDateInputs({
+        payment_due_date: formatIsoDateForInput(parsedPaymentDueDate.value),
+        next_statement_close_date: formatIsoDateForInput(
+          parsedStatementCloseDate.value,
+        ),
+      });
 
       payloadForm = {
         ...form,
@@ -1043,12 +1136,7 @@ export default function CreditCardDetailPage() {
       const cardForm = toForm(data);
       setCard(data);
       setForm(cardForm);
-      setStatementCycleDateInputs({
-        payment_due_date: formatIsoDateForInput(cardForm.payment_due_date),
-        next_statement_close_date: formatIsoDateForInput(
-          cardForm.next_statement_close_date,
-        ),
-      });
+      resetStatementCycleDateState(cardForm);
       setEditingSection(null);
       setSectionMessage("Section saved.");
     } catch (err) {
@@ -1334,12 +1422,7 @@ export default function CreditCardDetailPage() {
     );
 
     if (section === "cycle" && editingSection !== "cycle" && form) {
-      setStatementCycleDateInputs({
-        payment_due_date: formatIsoDateForInput(form.payment_due_date),
-        next_statement_close_date: formatIsoDateForInput(
-          form.next_statement_close_date,
-        ),
-      });
+      resetStatementCycleDateState(form);
     }
   }
 
@@ -1403,16 +1486,26 @@ export default function CreditCardDetailPage() {
     field: StatementCycleDateField,
     label: string,
   ) {
+    const errorMessage = statementCycleDateErrors[field];
+
     return (
       <label className="space-y-1 text-sm font-medium text-slate-700" key={field}>
         <span>{label}</span>
         <input
-          className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+          aria-invalid={errorMessage ? true : undefined}
+          className={`h-10 w-full rounded-md border px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:ring-2 ${
+            errorMessage
+              ? "border-red-300 focus:border-red-500 focus:ring-red-100"
+              : "border-slate-300 focus:border-slate-500 focus:ring-slate-200"
+          }`}
           inputMode="numeric"
           onBlur={() => {
             const parsedValue = parseDateInput(
               statementCycleDateInputs[field],
               label,
+              {
+                rejectMoreThanOneYearPast: statementCycleDateDirty[field],
+              },
             );
 
             if (parsedValue.ok) {
@@ -1420,21 +1513,46 @@ export default function CreditCardDetailPage() {
                 ...currentInputs,
                 [field]: formatIsoDateForInput(parsedValue.value),
               }));
+              setStatementCycleDateErrors((currentErrors) => {
+                const nextErrors = { ...currentErrors };
+                delete nextErrors[field];
+                return nextErrors;
+              });
+            } else {
+              setStatementCycleDateErrors((currentErrors) => ({
+                ...currentErrors,
+                [field]: parsedValue.message,
+              }));
             }
           }}
-          onChange={(event) =>
+          onChange={(event) => {
+            setStatementCycleDateDirty((currentDirtyFields) => ({
+              ...currentDirtyFields,
+              [field]: true,
+            }));
+            setStatementCycleDateErrors((currentErrors) => {
+              const nextErrors = { ...currentErrors };
+              delete nextErrors[field];
+              return nextErrors;
+            });
             setStatementCycleDateInputs((currentInputs) => ({
               ...currentInputs,
               [field]: event.target.value,
-            }))
-          }
+            }));
+          }}
           placeholder="MM/DD/YYYY"
           type="text"
           value={statementCycleDateInputs[field]}
         />
-        <span className="block text-xs font-normal text-slate-500">
-          Use MM/DD/YYYY. Leave blank if not set.
-        </span>
+        {errorMessage ? (
+          <span className="block text-xs font-semibold text-red-700">
+            {errorMessage}
+          </span>
+        ) : (
+          <span className="block text-xs font-normal text-slate-500">
+            Accepts 06/20/2026, 6-20-26, or 06202026. Leave blank if not set.
+          </span>
+        )}
       </label>
     );
   }
@@ -1476,14 +1594,7 @@ export default function CreditCardDetailPage() {
             if (card) {
               const resetForm = toForm(card);
               setForm(resetForm);
-              setStatementCycleDateInputs({
-                payment_due_date: formatIsoDateForInput(
-                  resetForm.payment_due_date,
-                ),
-                next_statement_close_date: formatIsoDateForInput(
-                  resetForm.next_statement_close_date,
-                ),
-              });
+              resetStatementCycleDateState(resetForm);
             }
             setEditingSection(null);
           }}
