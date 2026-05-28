@@ -196,6 +196,10 @@ const NETWORK_OPTIONS = [
   "Other",
 ];
 
+const DAY_OF_MONTH_OPTIONS = Array.from({ length: 31 }, (_, index) =>
+  String(index + 1),
+);
+
 const REWARD_TYPE_OPTIONS = [
   { value: "points_multiplier", label: "Points Multiplier" },
   { value: "cashback_percent", label: "Cashback %" },
@@ -1750,8 +1754,6 @@ function CreditCardsContent() {
                 ["last_four", "Last Four", "text", false],
                 ["credit_limit", "Credit Limit", "number", true],
                 ["current_balance", "Estimated Balance", "number", false],
-                ["statement_close_day", "Statement Close Day", "number", false],
-                ["payment_due_day", "Payment Due Day", "number", false],
                 ["signup_bonus_spend", "Signup Bonus Spend", "number", false],
                 ["signup_bonus_deadline", "Signup Bonus Deadline", "date", false],
                 ["current_spend_progress", "Current Spend Progress", "number", false],
@@ -1776,6 +1778,48 @@ function CreditCardsContent() {
                   ) : null}
                 </label>
               ))}
+
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Statement Close Day</span>
+                <select
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  onChange={(event) =>
+                    updateFormField("statement_close_day", event.target.value)
+                  }
+                  value={form.statement_close_day}
+                >
+                  <option value="">Select statement close day</option>
+                  {DAY_OF_MONTH_OPTIONS.map((day) => (
+                    <option key={day} value={day}>
+                      {day}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-slate-500">
+                  Calendar day of month, 1 through 31.
+                </p>
+              </label>
+
+              <label className="space-y-2 text-sm font-medium text-slate-700">
+                <span>Payment Due Day</span>
+                <select
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  onChange={(event) =>
+                    updateFormField("payment_due_day", event.target.value)
+                  }
+                  value={form.payment_due_day}
+                >
+                  <option value="">Select payment due day</option>
+                  {DAY_OF_MONTH_OPTIONS.map((day) => (
+                    <option key={day} value={day}>
+                      {day}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-slate-500">
+                  Calendar day of month, 1 through 31.
+                </p>
+              </label>
 
               <label className="space-y-2 text-sm font-medium text-slate-700">
                 <span>Network</span>
