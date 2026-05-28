@@ -277,10 +277,10 @@ export default function CardIssuersSettingsPage() {
                 <textarea className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2" onChange={(event) => setForm({ ...form, notes: event.target.value })} value={form.notes} />
               </label>
               {editingIssuer ? (
-                <div className="rounded-md border border-red-200 bg-red-50 p-3 md:col-span-3">
-                  <p className="text-sm font-semibold text-red-800">Danger Zone</p>
-                  <p className="mt-1 text-xs text-red-700">
-                    Delete this issuer if it is not protected by existing cards.
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3 md:col-span-3">
+                  <p className="text-sm font-semibold text-slate-800">Record cleanup</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Deletes if unused. Issuers referenced by existing cards will be deactivated instead.
                   </p>
                   <button
                     className="mt-3 h-10 rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"

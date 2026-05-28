@@ -982,13 +982,21 @@ export default function RewardProgramsPage() {
                     )}
                   </div>
                   {editingProgram.can_delete ? (
-                    <button
-                      className="h-10 w-full rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-50"
-                      onClick={() => void deleteProgram(editingProgram)}
-                      type="button"
-                    >
-                      Delete Program Permanently
-                    </button>
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-sm font-semibold text-slate-800">
+                        Record cleanup
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Deletes if unused. Protected or referenced programs cannot be deleted.
+                      </p>
+                      <button
+                        className="mt-3 h-10 w-full rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-100"
+                        onClick={() => void deleteProgram(editingProgram)}
+                        type="button"
+                      >
+                        Delete Program Permanently
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               ) : null}

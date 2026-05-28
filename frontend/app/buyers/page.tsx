@@ -1229,11 +1229,10 @@ function BuyerModal({
         </AdvancedFormSection>
 
         {editingBuyer ? (
-          <section className="rounded-lg border border-red-200 bg-red-50 p-4">
-            <h3 className="text-sm font-semibold text-red-900">Danger Zone</h3>
-            <p className="mt-2 text-sm text-red-700">
-              Delete this buyer if it has no related sales or asset history. Buyers
-              with related records will be deactivated instead.
+          <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <h3 className="text-sm font-semibold text-slate-800">Record cleanup</h3>
+            <p className="mt-2 text-sm text-slate-500">
+              Deletes if unused. Buyers with related sales or asset history will be deactivated instead.
             </p>
             <button
               className="mt-3 h-10 cursor-pointer rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
