@@ -32,6 +32,7 @@ export default function RewardProgramCategoriesPage() {
   const [form, setForm] = useState<CategoryForm>(emptyForm);
   const [editingCategory, setEditingCategory] =
     useState<RewardProgramCategory | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +73,14 @@ export default function RewardProgramCategoriesPage() {
     });
   }, []);
 
+  function openCreate() {
+    setEditingCategory(null);
+    setForm(emptyForm);
+    setError(null);
+    setMessage(null);
+    setIsModalOpen(true);
+  }
+
   function startEdit(category: RewardProgramCategory) {
     setEditingCategory(category);
     setForm({
@@ -81,11 +90,13 @@ export default function RewardProgramCategoriesPage() {
     });
     setError(null);
     setMessage(null);
+    setIsModalOpen(true);
   }
 
   function resetForm() {
     setEditingCategory(null);
     setForm(emptyForm);
+    setIsModalOpen(false);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -141,19 +152,28 @@ export default function RewardProgramCategoriesPage() {
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-5xl space-y-5">
-        <header>
-          <Link
-            className="inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-            href="/settings"
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <Link
+              className="inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+              href="/settings"
+            >
+              Back to Settings
+            </Link>
+            <p className="mt-4 text-sm font-medium text-slate-500">
+              Settings / Reward Program Categories
+            </p>
+            <h1 className="mt-1 text-3xl font-semibold tracking-tight">
+              Reward Program Categories
+            </h1>
+          </div>
+          <button
+            className="h-10 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+            onClick={openCreate}
+            type="button"
           >
-            Back to Settings
-          </Link>
-          <p className="mt-4 text-sm font-medium text-slate-500">
-            Settings / Reward Program Categories
-          </p>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-            Reward Program Categories
-          </h1>
+            Add Category
+          </button>
         </header>
 
         {error ? (
@@ -167,60 +187,7 @@ export default function RewardProgramCategoriesPage() {
           </p>
         ) : null}
 
-        <section className="grid gap-5 lg:grid-cols-[20rem_1fr]">
-          <form
-            className="space-y-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
-            onSubmit={handleSubmit}
-          >
-            <h2 className="text-lg font-semibold">
-              {editingCategory ? "Edit Category" : "Add Category"}
-            </h2>
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Name</span>
-              <input
-                className="h-11 w-full rounded-md border border-slate-300 px-3"
-                onChange={(event) => setForm({ ...form, name: event.target.value })}
-                required
-                value={form.name}
-              />
-            </label>
-            <label className="flex h-10 items-center gap-2 text-sm font-medium text-slate-700">
-              <input
-                checked={form.active}
-                onChange={(event) => setForm({ ...form, active: event.target.checked })}
-                type="checkbox"
-              />
-              Active
-            </label>
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Notes</span>
-              <textarea
-                className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2"
-                onChange={(event) => setForm({ ...form, notes: event.target.value })}
-                value={form.notes}
-              />
-            </label>
-            <div className="flex gap-2">
-              <button
-                className="h-11 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
-                disabled={isSaving}
-                type="submit"
-              >
-                {isSaving ? "Saving..." : "Save Category"}
-              </button>
-              {editingCategory ? (
-                <button
-                  className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-                  onClick={resetForm}
-                  type="button"
-                >
-                  Cancel
-                </button>
-              ) : null}
-            </div>
-          </form>
-
-          <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-5 py-4">
               <h2 className="text-lg font-semibold">Categories</h2>
             </div>
@@ -267,7 +234,69 @@ export default function RewardProgramCategoriesPage() {
               </table>
             </div>
           </section>
-        </section>
+        {isModalOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+            <form
+              className="max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-lg bg-white p-5 shadow-xl"
+              id="reward-category-settings-form"
+              onSubmit={handleSubmit}
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
+                <div>
+                  <h2 className="text-lg font-semibold">
+                    {editingCategory ? "Edit Category" : "Add Category"}
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Configure categories used to group reward programs.
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    className="h-9 cursor-pointer rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60"
+                    disabled={isSaving}
+                    onClick={resetForm}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="h-9 cursor-pointer rounded-md bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+                    disabled={isSaving}
+                    form="reward-category-settings-form"
+                    type="submit"
+                  >
+                    {isSaving ? "Saving..." : "Save"}
+                  </button>
+                </div>
+              </div>
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                <span>Name</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3"
+                  onChange={(event) => setForm({ ...form, name: event.target.value })}
+                  required
+                  value={form.name}
+                />
+              </label>
+              <label className="flex h-10 items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                  checked={form.active}
+                  onChange={(event) => setForm({ ...form, active: event.target.checked })}
+                  type="checkbox"
+                />
+                Active
+              </label>
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                <span>Notes</span>
+                <textarea
+                  className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2"
+                  onChange={(event) => setForm({ ...form, notes: event.target.value })}
+                  value={form.notes}
+                />
+              </label>
+            </form>
+          </div>
+        ) : null}
       </div>
     </main>
   );
