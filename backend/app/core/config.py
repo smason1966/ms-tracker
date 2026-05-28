@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     auth_enabled: bool = False
     auth_dev_bypass: bool = False
     auth_public_docs: bool = False
+    mfa_required: bool = False
+    mfa_issuer: str = "Dotopoly"
     session_secret: str | None = None
     session_cookie_name: str = "dotopoly_session"
     session_cookie_secure: bool = True

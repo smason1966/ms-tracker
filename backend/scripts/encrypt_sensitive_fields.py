@@ -19,6 +19,8 @@ if str(ROOT) not in sys.path:
 
 def initialize_model_registry() -> None:
     """Import all mapped models so SQLAlchemy can resolve relationships/FKs."""
+    import app.models.admin_mfa_recovery_code  # noqa: F401
+    import app.models.admin_user  # noqa: F401
     import app.models.app_setting  # noqa: F401
     import app.models.attachment  # noqa: F401
     import app.models.buyer  # noqa: F401
