@@ -39,7 +39,12 @@ type Buyer = {
   outstanding_payouts: string | number;
   total_settled_payouts: string | number;
   avg_payout_days: number | null;
+  delete_reference_counts?: BuyerReferenceCounts;
 };
+
+type BuyerReferenceCounts = Partial<
+  Record<"sales" | "gift_cards" | "fuel_accounts" | "external_identifiers", number>
+>;
 
 type BuyerExternalIdentifier = {
   id?: number;
@@ -52,7 +57,8 @@ type BuyerDeleteResult = {
   deleted?: boolean;
   deactivated?: boolean;
   message?: string;
-  related_counts?: Partial<Record<"sales" | "gift_cards" | "fuel_accounts" | "external_identifiers", number>>;
+  related_counts?: BuyerReferenceCounts;
+  buyer?: Buyer;
 };
 
 type PaymentAccount = {
@@ -296,6 +302,31 @@ function buyerDeleteFeedback(result: BuyerDeleteResult | null) {
   return `Buyer is referenced by ${references} and was deactivated instead.`;
 }
 
+function buyerReferenceParts(counts: BuyerReferenceCounts | undefined) {
+  const labels = {
+    sales: "sale record",
+    gift_cards: "gift card",
+    fuel_accounts: "fuel reward account",
+    external_identifiers: "external identifier",
+  };
+  return Object.entries(counts ?? {})
+    .filter(([, count]) => Number(count) > 0)
+    .map(([key, count]) => {
+      const label = labels[key as keyof typeof labels] ?? key;
+      return `${count} ${label}${count === 1 ? "" : "s"}`;
+    });
+}
+
+function buyerReferenceSummary(counts: BuyerReferenceCounts | undefined) {
+  const parts = buyerReferenceParts(counts);
+  if (parts.length === 0) {
+    return null;
+  }
+  return parts.length === 1
+    ? parts[0]
+    : `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)}`;
+}
+
 export default function BuyersPage() {
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>([]);
@@ -493,9 +524,15 @@ export default function BuyersPage() {
         );
       }
 
-      setModalMessage(buyerDeleteFeedback(body as BuyerDeleteResult | null));
-      setIsModalOpen(false);
-      setEditingBuyer(null);
+      const result = body as BuyerDeleteResult | null;
+      setModalMessage(buyerDeleteFeedback(result));
+      if (result?.deactivated && result.buyer) {
+        setEditingBuyer(result.buyer);
+        setForm(buyerToForm(result.buyer));
+      } else {
+        setIsModalOpen(false);
+        setEditingBuyer(null);
+      }
       await loadBuyers();
     } catch (err) {
       setModalMessage(
@@ -813,6 +850,9 @@ function BuyerModal({
   const hasInvalidPayoutRate = isDecimalStylePayoutRate(
     form.default_payout_rate,
   );
+  const referenceSummary = buyerReferenceSummary(
+    editingBuyer?.delete_reference_counts,
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4">
@@ -848,6 +888,12 @@ function BuyerModal({
         {modalMessage ? (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
             {modalMessage}
+          </div>
+        ) : null}
+
+        {editingBuyer && !editingBuyer.active && referenceSummary ? (
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+            Inactive. Kept for history because it is referenced by existing records.
           </div>
         ) : null}
 
@@ -1270,7 +1316,9 @@ function BuyerModal({
           <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
             <h3 className="text-sm font-semibold text-slate-800">Record cleanup</h3>
             <p className="mt-2 text-sm text-slate-500">
-              Deletes if unused. Buyers with related sales or asset history will be deactivated instead.
+              {referenceSummary
+                ? `Cannot be permanently deleted while referenced by ${referenceSummary}.`
+                : "Deletes if unused. Buyers with related sales or asset history will be deactivated instead."}
             </p>
             <button
               className="mt-3 h-10 cursor-pointer rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"

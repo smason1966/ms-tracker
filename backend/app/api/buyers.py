@@ -145,6 +145,21 @@ def buyer_metrics(db: Session, buyer_id: int) -> dict:
     }
 
 
+def buyer_reference_counts(db: Session, buyer_id: int) -> dict[str, int]:
+    return {
+        "sales": db.query(Sale).filter(Sale.buyer_id == buyer_id).count(),
+        "gift_cards": db.query(GiftCard)
+        .filter(GiftCard.buyer_id == buyer_id)
+        .count(),
+        "fuel_accounts": db.query(FuelRewardAccount)
+        .filter(FuelRewardAccount.buyer_id == buyer_id)
+        .count(),
+        "external_identifiers": db.query(BuyerExternalIdentifier)
+        .filter(BuyerExternalIdentifier.buyer_id == buyer_id)
+        .count(),
+    }
+
+
 def serialize_buyer(db: Session, buyer: Buyer) -> dict:
     default_payment_account = (
         db.query(PaymentAccount)
@@ -193,6 +208,7 @@ def serialize_buyer(db: Session, buyer: Buyer) -> dict:
         ],
         "notes": buyer.notes,
         "created_at": buyer.created_at,
+        "delete_reference_counts": buyer_reference_counts(db, buyer.id),
         **buyer_metrics(db, buyer.id),
     }
 
@@ -354,18 +370,7 @@ def delete_or_deactivate_buyer_record(db: Session, buyer_id: int) -> dict:
     if not buyer:
         raise HTTPException(status_code=404, detail="Buyer not found")
 
-    related_counts = {
-        "sales": db.query(Sale).filter(Sale.buyer_id == buyer_id).count(),
-        "gift_cards": db.query(GiftCard)
-        .filter(GiftCard.buyer_id == buyer_id)
-        .count(),
-        "fuel_accounts": db.query(FuelRewardAccount)
-        .filter(FuelRewardAccount.buyer_id == buyer_id)
-        .count(),
-        "external_identifiers": db.query(BuyerExternalIdentifier)
-        .filter(BuyerExternalIdentifier.buyer_id == buyer_id)
-        .count(),
-    }
+    related_counts = buyer_reference_counts(db, buyer_id)
     related_total = sum(related_counts.values())
     if related_total > 0:
         buyer.active = False
