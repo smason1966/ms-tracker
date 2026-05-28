@@ -418,7 +418,6 @@ export default function CardBrandsPage() {
                   <th className="px-4 py-3">Barcode</th>
                   <th className="px-4 py-3">OCR</th>
                   <th className="px-4 py-3">Magstripe</th>
-                  <th className="px-4 py-3">Parser</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3 text-right">Action</th>
                 </tr>
@@ -426,7 +425,7 @@ export default function CardBrandsPage() {
               <tbody className="divide-y divide-slate-200">
                 {visibleBrands.length === 0 ? (
                   <tr>
-                    <td className="px-4 py-6 text-slate-500" colSpan={7}>
+                    <td className="px-4 py-6 text-slate-500" colSpan={6}>
                       {filter === "inactive"
                         ? "No inactive card brands."
                         : `No ${filterLabel(filter)} card brands found.`}
@@ -446,19 +445,6 @@ export default function CardBrandsPage() {
                     </td>
                     <td className="px-4 py-3">
                       {brand.supports_magstripe ? "Supported" : "No"}
-                    </td>
-                    <td className="px-4 py-3 text-slate-600">
-                      {brand.parser_type ||
-                      brand.parsing_profile ||
-                      brand.card_number_regex ||
-                      brand.pin_regex
-                        ? "Parsing rules"
-                        : brand.magstripe_parser_type ?? ""}
-                      {brand.parsing_profile ? (
-                        <span className="ml-2 text-xs text-slate-400">
-                          {brand.parsing_profile}
-                        </span>
-                      ) : null}
                     </td>
                     <td className="px-4 py-3">
                       <span

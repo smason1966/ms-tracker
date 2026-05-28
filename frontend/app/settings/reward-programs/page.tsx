@@ -247,6 +247,7 @@ export default function RewardProgramsPage() {
   const [categories, setCategories] = useState(fallbackCategories);
   const [form, setForm] = useState<RewardProgramForm>(emptyForm);
   const [editingProgram, setEditingProgram] = useState<RewardProgram | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [duplicateProgram, setDuplicateProgram] =
     useState<DuplicateProgramDetail | null>(null);
   const [filter, setFilter] = useState("active");
@@ -374,13 +375,24 @@ export default function RewardProgramsPage() {
     setForm(formFromProgram(programWithProtectionDefaults));
     setError(null);
     setMessage(null);
+    setIsModalOpen(true);
     void loadProgramProtection(program.id);
+  }
+
+  function openCreate() {
+    setEditingProgram(null);
+    setDuplicateProgram(null);
+    setForm(emptyForm);
+    setError(null);
+    setMessage(null);
+    setIsModalOpen(true);
   }
 
   function resetForm() {
     setEditingProgram(null);
     setDuplicateProgram(null);
     setForm(emptyForm);
+    setIsModalOpen(false);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -426,12 +438,9 @@ export default function RewardProgramsPage() {
 
       const savedProgram = withDefaultProtection((await response.json()) as RewardProgram);
       setMessage(editingProgram ? "Reward program updated." : "Reward program added.");
-      if (editingProgram) {
-        setEditingProgram(savedProgram);
-        setForm(formFromProgram(savedProgram));
-      } else {
-        resetForm();
-      }
+      setEditingProgram(savedProgram);
+      setForm(formFromProgram(savedProgram));
+      setIsModalOpen(false);
       await loadPrograms();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save reward program.");
@@ -516,13 +525,11 @@ export default function RewardProgramsPage() {
         throw new Error(apiErrorMessage(endpoint, response.status, bodyText));
       }
 
-      const savedProgram = withDefaultProtection((await response.json()) as RewardProgram);
+      await response.json();
       setMessage(active ? "Reward program reactivated." : "Reward program deactivated.");
       if (showActiveAfter && active) {
         setFilter("active");
       }
-      setEditingProgram(savedProgram);
-      setForm(formFromProgram(savedProgram));
       await loadPrograms();
     } catch (err) {
       setError(
@@ -533,6 +540,15 @@ export default function RewardProgramsPage() {
             : "Failed to deactivate reward program.",
       );
     }
+  }
+
+  async function updateEditingProgramActive(active: boolean, showActiveAfter = false) {
+    if (!editingProgram) {
+      return;
+    }
+
+    await setProgramActive(editingProgram, active, showActiveAfter);
+    resetForm();
   }
 
   async function deleteProgram(program: RewardProgram) {
@@ -595,19 +611,28 @@ export default function RewardProgramsPage() {
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-6xl space-y-5">
-        <header>
-          <Link
-            className="inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-            href="/settings"
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <Link
+              className="inline-flex h-9 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+              href="/settings"
+            >
+              Back to Settings
+            </Link>
+            <p className="mt-4 text-sm font-medium text-slate-500">
+              Settings / Reward Programs
+            </p>
+            <h1 className="mt-1 text-3xl font-semibold tracking-tight">
+              Reward Programs
+            </h1>
+          </div>
+          <button
+            className="h-10 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+            onClick={openCreate}
+            type="button"
           >
-            Back to Settings
-          </Link>
-          <p className="mt-4 text-sm font-medium text-slate-500">
-            Settings / Reward Programs
-          </p>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-            Reward Programs
-          </h1>
+            Add Program
+          </button>
         </header>
 
         {error ? (
@@ -651,239 +676,7 @@ export default function RewardProgramsPage() {
           ))}
         </section>
 
-        <section className="grid gap-5 lg:grid-cols-[22rem_1fr]">
-          <form
-            className="space-y-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
-            onSubmit={handleSubmit}
-          >
-            <h2 className="text-lg font-semibold">
-              {editingProgram ? "Edit Program" : "Add Program"}
-            </h2>
-            {editingProgram ? (
-              <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-                <p className="font-semibold text-slate-800">
-                  Status: {editingProgram.active ? "Active" : "Inactive"}
-                </p>
-                <p className="mt-1">
-                  {editingProgram.active
-                    ? "Active programs can be selected where they are eligible."
-                    : "Inactive programs are hidden from setup dropdowns but remain visible with the Inactive or All filters."}
-                </p>
-                <p className="mt-1">
-                  Credit card setup:{" "}
-                  {editingProgram.eligible_for_credit_cards
-                    ? "Eligible"
-                    : "Not eligible"}
-                </p>
-              </div>
-            ) : null}
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Name</span>
-              <input
-                className="h-11 w-full rounded-md border border-slate-300 px-3"
-                onChange={(event) => setForm({ ...form, name: event.target.value })}
-                required
-                value={form.name}
-              />
-            </label>
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Code</span>
-              <input
-                className="h-11 w-full rounded-md border border-slate-300 px-3 uppercase"
-                onChange={(event) => setForm({ ...form, short_code: event.target.value })}
-                required
-                value={form.short_code}
-              />
-            </label>
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Category</span>
-              <select
-                className="h-11 w-full rounded-md border border-slate-300 px-3"
-                onChange={(event) => {
-                  const category = event.target.value;
-                  setForm({
-                    ...form,
-                    category,
-                    eligible_for_credit_cards:
-                      defaultCreditCardEligibility(category),
-                  });
-                }}
-                value={form.category}
-              >
-                {categories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Estimated Value</span>
-              <input
-                className="h-11 w-full rounded-md border border-slate-300 px-3"
-                min="0"
-                onChange={(event) =>
-                  setForm({
-                    ...form,
-                    estimated_value_cents_per_point: event.target.value,
-                  })
-                }
-                step="0.01"
-                type="number"
-                value={form.estimated_value_cents_per_point}
-              />
-            </label>
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Value Unit</span>
-              <select
-                className="h-11 w-full rounded-md border border-slate-300 px-3"
-                onChange={(event) => setForm({ ...form, value_unit: event.target.value })}
-                value={form.value_unit}
-              >
-                {valueUnits.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex h-10 items-center gap-2 text-sm font-medium text-slate-700">
-              <input
-                checked={form.transferable}
-                onChange={(event) => setForm({ ...form, transferable: event.target.checked })}
-                type="checkbox"
-              />
-              Transferable
-            </label>
-            <div className="space-y-1">
-              <label className="flex min-h-10 items-center gap-2 text-sm font-medium text-slate-700">
-                <input
-                  checked={form.eligible_for_credit_cards}
-                  onChange={(event) =>
-                    setForm({
-                      ...form,
-                      eligible_for_credit_cards: event.target.checked,
-                    })
-                  }
-                  type="checkbox"
-                />
-                Eligible for credit card setup
-              </label>
-              <p className="text-xs text-slate-500">
-                Disable if this program should not appear in credit card reward
-                program selections.
-              </p>
-            </div>
-            <label className="flex h-10 items-center gap-2 text-sm font-medium text-slate-700">
-              <input
-                checked={form.active}
-                onChange={(event) => setForm({ ...form, active: event.target.checked })}
-                type="checkbox"
-              />
-              Active
-            </label>
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Notes</span>
-              <textarea
-                className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2"
-                onChange={(event) => setForm({ ...form, notes: event.target.value })}
-                value={form.notes}
-              />
-            </label>
-            {duplicateProgram ? (
-              <div className="space-y-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                <p className="font-semibold">{duplicateProgram.message}</p>
-                {duplicateProgram.existing_program ? (
-                  <p>
-                    Existing record: {duplicateProgram.existing_program.name} (
-                    {duplicateProgram.existing_program.short_code}) is{" "}
-                    {duplicateProgram.existing_program.active ? "active" : "inactive"}.
-                  </p>
-                ) : null}
-                {duplicateProgram.existing_program_status === "inactive" ? (
-                  <button
-                    className="h-10 rounded-md bg-amber-900 px-3 text-sm font-semibold text-white transition hover:bg-amber-800 disabled:opacity-60"
-                    disabled={isSaving}
-                    onClick={() => void reactivateDuplicateProgram()}
-                    type="button"
-                  >
-                    Reactivate Existing Program
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-            <div className="flex gap-2">
-              <button
-                className="h-11 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
-                disabled={isSaving}
-                type="submit"
-              >
-                {isSaving ? "Saving..." : "Save Program"}
-              </button>
-              {editingProgram ? (
-                <button
-                  className="h-11 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-                  onClick={resetForm}
-                  type="button"
-                >
-                  Cancel
-                </button>
-              ) : null}
-            </div>
-            {editingProgram ? (
-              <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                {isLoadingProtection ? (
-                  <p className="text-xs font-semibold text-slate-600">
-                    Checking linked cards, stores, payments, and reward history...
-                  </p>
-                ) : null}
-                {editingProgram.protection_reasons.length > 0 ? (
-                  <div className="space-y-1 text-xs text-slate-600">
-                    <p className="font-semibold text-slate-700">
-                      Deletion is blocked because this program is protected.
-                    </p>
-                    {editingProgram.protection_reasons.map((reason) => (
-                      <p key={reason}>{reason}</p>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-xs text-slate-600">
-                    This program is not linked to cards, rules, stores, payments, or reward history.
-                  </p>
-                )}
-                <div className="grid gap-2">
-                  {editingProgram.active ? (
-                    <button
-                      className="h-10 w-full rounded-md border border-amber-200 px-3 text-sm font-semibold text-amber-700 transition hover:bg-amber-50"
-                      onClick={() => void setProgramActive(editingProgram, false)}
-                      type="button"
-                    >
-                      Deactivate Program
-                    </button>
-                  ) : (
-                    <button
-                      className="h-10 w-full rounded-md border border-emerald-200 px-3 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50"
-                      onClick={() => void setProgramActive(editingProgram, true, true)}
-                      type="button"
-                    >
-                      Reactivate Program
-                    </button>
-                  )}
-                </div>
-                {editingProgram.can_delete ? (
-                  <button
-                    className="h-10 w-full rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-50"
-                    onClick={() => void deleteProgram(editingProgram)}
-                    type="button"
-                  >
-                    Delete Program Permanently
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-          </form>
-
-          <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-5 py-4">
               <div>
                 <h2 className="text-lg font-semibold">Programs</h2>
@@ -1007,7 +800,258 @@ export default function RewardProgramsPage() {
               </table>
             </div>
           </section>
-        </section>
+        {isModalOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+            <form
+              className="max-h-[90vh] w-full max-w-xl space-y-4 overflow-y-auto rounded-lg bg-white p-5 shadow-xl"
+              id="reward-program-settings-form"
+              onSubmit={handleSubmit}
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
+                <div>
+                  <h2 className="text-lg font-semibold">
+                    {editingProgram ? "Edit Program" : "Add Program"}
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Configure reward program setup and dropdown eligibility.
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    className="h-9 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60"
+                    disabled={isSaving}
+                    onClick={resetForm}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="h-9 rounded-md bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+                    disabled={isSaving}
+                    form="reward-program-settings-form"
+                    type="submit"
+                  >
+                    {isSaving ? "Saving..." : "Save"}
+                  </button>
+                </div>
+              </div>
+
+              {editingProgram ? (
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                  <p className="font-semibold text-slate-800">
+                    Status: {editingProgram.active ? "Active" : "Inactive"}
+                  </p>
+                  <p className="mt-1">
+                    {editingProgram.active
+                      ? "Active programs can be selected where they are eligible."
+                      : "Inactive programs are hidden from setup dropdowns but remain visible with the Inactive or All filters."}
+                  </p>
+                  <p className="mt-1">
+                    Credit card setup:{" "}
+                    {editingProgram.eligible_for_credit_cards
+                      ? "Eligible"
+                      : "Not eligible"}
+                  </p>
+                </div>
+              ) : null}
+
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                <span>Name</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3"
+                  onChange={(event) => setForm({ ...form, name: event.target.value })}
+                  required
+                  value={form.name}
+                />
+              </label>
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                <span>Code</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3 uppercase"
+                  onChange={(event) =>
+                    setForm({ ...form, short_code: event.target.value })
+                  }
+                  required
+                  value={form.short_code}
+                />
+              </label>
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                <span>Category</span>
+                <select
+                  className="h-11 w-full rounded-md border border-slate-300 px-3"
+                  onChange={(event) => {
+                    const category = event.target.value;
+                    setForm({
+                      ...form,
+                      category,
+                      eligible_for_credit_cards:
+                        defaultCreditCardEligibility(category),
+                    });
+                  }}
+                  value={form.category}
+                >
+                  {categories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                <span>Estimated Value</span>
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 px-3"
+                  min="0"
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      estimated_value_cents_per_point: event.target.value,
+                    })
+                  }
+                  step="0.01"
+                  type="number"
+                  value={form.estimated_value_cents_per_point}
+                />
+              </label>
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                <span>Value Unit</span>
+                <select
+                  className="h-11 w-full rounded-md border border-slate-300 px-3"
+                  onChange={(event) =>
+                    setForm({ ...form, value_unit: event.target.value })
+                  }
+                  value={form.value_unit}
+                >
+                  {valueUnits.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex h-10 items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                  checked={form.transferable}
+                  onChange={(event) =>
+                    setForm({ ...form, transferable: event.target.checked })
+                  }
+                  type="checkbox"
+                />
+                Transferable
+              </label>
+              <div className="space-y-1">
+                <label className="flex min-h-10 items-center gap-2 text-sm font-medium text-slate-700">
+                  <input
+                    checked={form.eligible_for_credit_cards}
+                    onChange={(event) =>
+                      setForm({
+                        ...form,
+                        eligible_for_credit_cards: event.target.checked,
+                      })
+                    }
+                    type="checkbox"
+                  />
+                  Eligible for credit card setup
+                </label>
+                <p className="text-xs text-slate-500">
+                  Disable if this program should not appear in credit card reward
+                  program selections.
+                </p>
+              </div>
+              <label className="flex h-10 items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                  checked={form.active}
+                  onChange={(event) => setForm({ ...form, active: event.target.checked })}
+                  type="checkbox"
+                />
+                Active
+              </label>
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                <span>Notes</span>
+                <textarea
+                  className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2"
+                  onChange={(event) => setForm({ ...form, notes: event.target.value })}
+                  value={form.notes}
+                />
+              </label>
+
+              {duplicateProgram ? (
+                <div className="space-y-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  <p className="font-semibold">{duplicateProgram.message}</p>
+                  {duplicateProgram.existing_program ? (
+                    <p>
+                      Existing record: {duplicateProgram.existing_program.name} (
+                      {duplicateProgram.existing_program.short_code}) is{" "}
+                      {duplicateProgram.existing_program.active ? "active" : "inactive"}.
+                    </p>
+                  ) : null}
+                  {duplicateProgram.existing_program_status === "inactive" ? (
+                    <button
+                      className="h-10 rounded-md bg-amber-900 px-3 text-sm font-semibold text-white transition hover:bg-amber-800 disabled:opacity-60"
+                      disabled={isSaving}
+                      onClick={() => void reactivateDuplicateProgram()}
+                      type="button"
+                    >
+                      Reactivate Existing Program
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {editingProgram ? (
+                <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                  {isLoadingProtection ? (
+                    <p className="text-xs font-semibold text-slate-600">
+                      Checking linked cards, stores, payments, and reward history...
+                    </p>
+                  ) : null}
+                  {editingProgram.protection_reasons.length > 0 ? (
+                    <div className="space-y-1 text-xs text-slate-600">
+                      <p className="font-semibold text-slate-700">
+                        Deletion is blocked because this program is protected.
+                      </p>
+                      {editingProgram.protection_reasons.map((reason) => (
+                        <p key={reason}>{reason}</p>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-600">
+                      This program is not linked to cards, rules, stores, payments, or reward history.
+                    </p>
+                  )}
+                  <div className="grid gap-2">
+                    {editingProgram.active ? (
+                      <button
+                        className="h-10 w-full rounded-md border border-amber-200 px-3 text-sm font-semibold text-amber-700 transition hover:bg-amber-50"
+                        onClick={() => void updateEditingProgramActive(false)}
+                        type="button"
+                      >
+                        Deactivate Program
+                      </button>
+                    ) : (
+                      <button
+                        className="h-10 w-full rounded-md border border-emerald-200 px-3 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50"
+                        onClick={() => void updateEditingProgramActive(true, true)}
+                        type="button"
+                      >
+                        Reactivate Program
+                      </button>
+                    )}
+                  </div>
+                  {editingProgram.can_delete ? (
+                    <button
+                      className="h-10 w-full rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-50"
+                      onClick={() => void deleteProgram(editingProgram)}
+                      type="button"
+                    >
+                      Delete Program Permanently
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </form>
+          </div>
+        ) : null}
       </div>
     </main>
   );
