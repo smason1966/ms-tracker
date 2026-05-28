@@ -222,7 +222,8 @@ type DisplayItem = {
 
 type EditableSection =
   | "overview"
-  | "operations"
+  | "defaults"
+  | "cycle"
   | "rewards"
   | "bonus"
   | "notes";
@@ -315,7 +316,7 @@ function wholeDollarFormValue(value: string | number | null | undefined) {
 
 function formatAmount(value: string | number | null) {
   if (value === null || value === "") {
-    return "-";
+    return "Not set";
   }
 
   const amount = Number(value);
@@ -351,7 +352,7 @@ function formatCreditLimit(value: string | number | null) {
 
 function formatPercent(value: string | number | null) {
   if (value === null || value === "") {
-    return "-";
+    return "Not set";
   }
 
   const amount = Number(value);
@@ -365,7 +366,7 @@ function formatPercent(value: string | number | null) {
 
 function formatDate(value: string | null) {
   if (!value) {
-    return "-";
+    return "Not set";
   }
 
   const date = new Date(`${value}T00:00:00`);
@@ -379,6 +380,26 @@ function formatDate(value: string | null) {
     day: "numeric",
     year: "numeric",
   }).format(date);
+}
+
+function formatStatementAmount(value: string | number | null) {
+  return value === null || value === "" ? "No current statement" : formatAmount(value);
+}
+
+function formatDaysUntil(value: number | null) {
+  if (value === null) {
+    return "Not set";
+  }
+
+  if (value < 0) {
+    return `${Math.abs(value)} days overdue`;
+  }
+
+  if (value === 0) {
+    return "Today";
+  }
+
+  return `${value} days`;
 }
 
 function toNumber(value: string | number | null) {
@@ -553,25 +574,28 @@ function DetailSection({
           </button>
         ) : null}
       </div>
-      <dl className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {items.map((item) => (
-          <div key={item.label}>
-            <dt className="text-sm font-medium text-slate-500">{item.label}</dt>
-            <dd
-              className={`mt-1 text-base font-semibold ${
-                item.tone === "danger"
-                  ? "text-red-700"
-                  : item.tone === "warning"
-                    ? "text-amber-700"
-                    : "text-slate-950"
-              }`}
-            >
-              {item.value}
-            </dd>
-          </div>
-        ))}
-      </dl>
-      {isEditing ? <div className="mt-4">{children}</div> : null}
+      {isEditing ? (
+        <div className="mt-4">{children}</div>
+      ) : (
+        <dl className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {items.map((item) => (
+            <div key={item.label}>
+              <dt className="text-sm font-medium text-slate-500">{item.label}</dt>
+              <dd
+                className={`mt-1 text-base font-semibold ${
+                  item.tone === "danger"
+                    ? "text-red-700"
+                    : item.tone === "warning"
+                      ? "text-amber-700"
+                      : "text-slate-950"
+                }`}
+              >
+                {item.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </section>
   );
 }
@@ -1335,6 +1359,13 @@ export default function CreditCardDetailPage() {
     );
   }
 
+  const hasCurrentStatement =
+    card.statement_balance !== null ||
+    card.statement_paid_amount !== null ||
+    card.minimum_payment_due !== null ||
+    card.payment_due_date !== null ||
+    card.next_statement_close_date !== null;
+
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-950 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -1400,12 +1431,12 @@ export default function CreditCardDetailPage() {
                     ]
                   : []),
                 { label: "Issuer", value: card.issuer },
-                { label: "Network", value: card.network ?? "-" },
-                { label: "Last Four", value: card.last_four ?? "-" },
+                { label: "Network", value: card.network ?? "Not set" },
+                { label: "Last Four", value: card.last_four ?? "Not set" },
                 { label: "Status", value: card.is_active ? "Active" : "Inactive" },
               ]}
               onEdit={() => toggleSection("overview")}
-              title="Overview"
+              title="Card Basics"
             >
               <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
                 {renderPlayerSelect()}
@@ -1449,110 +1480,25 @@ export default function CreditCardDetailPage() {
               </div>
             </DetailSection>
             <DetailSection
-              isEditing={editingSection === "operations"}
+              isEditing={editingSection === "defaults"}
               items={[
                 { label: "Credit Limit", value: formatCreditLimit(card.credit_limit) },
-                {
-                  label: "Estimated Balance",
-                  value: formatAmount(card.current_balance),
-                },
-                {
-                  label: "Last Statement Balance",
-                  value: formatAmount(card.statement_balance),
-                },
-                {
-                  label: "Paid Toward Statement",
-                  value: formatAmount(card.statement_paid_amount),
-                },
-                {
-                  label: "Statement Remaining",
-                  value: formatAmount(card.statement_remaining),
-                  tone: card.interest_risk ? "danger" : undefined,
-                },
-                {
-                  label: "Minimum Payment Due",
-                  value: formatAmount(card.minimum_payment_due),
-                },
-                {
-                  label: "Minimum Payment Made",
-                  value: card.minimum_payment_paid ? "Yes" : "No",
-                  tone: card.minimum_payment_missing ? "danger" : undefined,
-                },
-                {
-                  label: "Autopay Enabled",
-                  value: card.autopay_enabled ? "Yes" : "No",
-                },
-                {
-                  label: "Available Credit",
-                  value: formatAmount(card.calculated_available_credit),
-                },
-                {
-                  label: "Utilization",
-                  value: formatPercent(card.utilization_percent),
-                  tone:
-                    card.preferred_utilization !== null &&
-                    card.utilization_percent !== null &&
-                    card.utilization_percent > Number(card.preferred_utilization)
-                      ? "danger"
-                      : undefined,
-                },
                 {
                   label: "Preferred Utilization",
                   value: formatPercent(card.preferred_utilization),
                 },
-                {
-                  label: "Payment Needed for Preferred Utilization",
-                  value: formatAmount(
-                    card.payment_needed_for_preferred_utilization,
-                  ),
-                },
                 { label: "APR", value: formatPercent(card.apr) },
-                {
-                  label: "Estimated Monthly Interest",
-                  value: formatAmount(card.estimated_monthly_interest),
-                },
-                { label: "Payment Due Date", value: formatDate(card.payment_due_date) },
                 {
                   label: "Payment Due Day",
                   value: formatOrdinalDay(card.payment_due_day),
                 },
                 {
-                  label: "Days Until Due",
-                  value:
-                    card.days_until_payment_due === null
-                      ? "-"
-                      : String(card.days_until_payment_due),
-                  tone:
-                    card.days_until_payment_due !== null &&
-                    card.days_until_payment_due >= 0 &&
-                    card.days_until_payment_due <= 7
-                      ? "danger"
-                      : undefined,
-                },
-                {
-                  label: "Next Statement Close",
-                  value: formatDate(card.next_statement_close_date),
-                },
-                {
                   label: "Statement Close Day",
                   value: formatOrdinalDay(card.statement_close_day),
                 },
-                {
-                  label: "Days Until Statement Close",
-                  value:
-                    card.days_until_statement_close === null
-                      ? "-"
-                      : String(card.days_until_statement_close),
-                  tone:
-                    card.days_until_statement_close !== null &&
-                    card.days_until_statement_close >= 0 &&
-                    card.days_until_statement_close <= 3
-                      ? "warning"
-                      : undefined,
-                },
               ]}
-              onEdit={() => toggleSection("operations")}
-              title="Payment, Statement & Utilization"
+              onEdit={() => toggleSection("defaults")}
+              title="Credit & Defaults"
             >
               <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-3">
                 <div className="space-y-1 text-sm font-medium text-slate-700">
@@ -1586,31 +1532,8 @@ export default function CreditCardDetailPage() {
                     </span>
                   </label>
                 </div>
-                {renderInlineInput("current_balance", "Estimated Balance", "number")}
-                {renderInlineInput("statement_balance", "Last Statement Balance", "number")}
-                {renderInlineInput("statement_paid_amount", "Amount Paid Toward Statement", "number")}
-                {renderInlineInput("minimum_payment_due", "Minimum Payment Due", "number")}
-                {renderInlineCheckbox("minimum_payment_paid", "Minimum Payment Made")}
-                {renderInlineCheckbox("autopay_enabled", "Autopay Enabled")}
-                {renderInlineInput("payment_due_date", "Payment Due Date", "date")}
-                <label className="space-y-1 text-sm font-medium text-slate-700">
-                  <span>Payment Due Day</span>
-                  <select
-                    className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                    onChange={(event) =>
-                      updateFormField("payment_due_day", event.target.value)
-                    }
-                    value={form.payment_due_day}
-                  >
-                    <option value="">Select payment due day</option>
-                    {DAY_OF_MONTH_OPTIONS.map((day) => (
-                      <option key={day} value={day}>
-                        {formatOrdinalDay(day)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {renderInlineInput("next_statement_close_date", "Next Statement Close Date", "date")}
+                {renderInlineInput("preferred_utilization", "Preferred Utilization %", "number")}
+                {renderInlineInput("apr", "APR %", "number")}
                 <label className="space-y-1 text-sm font-medium text-slate-700">
                   <span>Statement Close Day</span>
                   <select
@@ -1628,10 +1551,134 @@ export default function CreditCardDetailPage() {
                     ))}
                   </select>
                 </label>
-                {renderInlineInput("preferred_utilization", "Preferred Utilization %", "number")}
-                {renderInlineInput("apr", "APR %", "number")}
+                <label className="space-y-1 text-sm font-medium text-slate-700">
+                  <span>Payment Due Day</span>
+                  <select
+                    className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    onChange={(event) =>
+                      updateFormField("payment_due_day", event.target.value)
+                    }
+                    value={form.payment_due_day}
+                  >
+                    <option value="">Select payment due day</option>
+                    {DAY_OF_MONTH_OPTIONS.map((day) => (
+                      <option key={day} value={day}>
+                        {formatOrdinalDay(day)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <div className="sm:col-span-2 xl:col-span-3">
-                  {renderSectionActions("operations")}
+                  {renderSectionActions("defaults")}
+                </div>
+              </div>
+            </DetailSection>
+            <DetailSection
+              isEditing={editingSection === "cycle"}
+              items={[
+                {
+                  label: "Estimated Balance",
+                  value: formatAmount(card.current_balance),
+                },
+                {
+                  label: "Available Credit",
+                  value: formatAmount(card.calculated_available_credit),
+                },
+                {
+                  label: "Utilization",
+                  value: formatPercent(card.utilization_percent),
+                  tone:
+                    card.preferred_utilization !== null &&
+                    card.utilization_percent !== null &&
+                    card.utilization_percent > Number(card.preferred_utilization)
+                      ? "danger"
+                      : undefined,
+                },
+                {
+                  label: "Payment Needed for Preferred Utilization",
+                  value: formatAmount(
+                    card.payment_needed_for_preferred_utilization,
+                  ),
+                },
+                {
+                  label: "Last Statement Balance",
+                  value: formatStatementAmount(card.statement_balance),
+                },
+                {
+                  label: "Paid Toward Statement",
+                  value: hasCurrentStatement
+                    ? formatAmount(card.statement_paid_amount)
+                    : "No current statement",
+                },
+                {
+                  label: "Statement Remaining",
+                  value: hasCurrentStatement
+                    ? formatAmount(card.statement_remaining)
+                    : "No current statement",
+                  tone: card.interest_risk ? "danger" : undefined,
+                },
+                {
+                  label: "Minimum Payment Due",
+                  value: hasCurrentStatement
+                    ? formatAmount(card.minimum_payment_due)
+                    : "No current statement",
+                },
+                {
+                  label: "Minimum Payment Made",
+                  value: card.minimum_payment_paid ? "Yes" : "No",
+                  tone: card.minimum_payment_missing ? "danger" : undefined,
+                },
+                {
+                  label: "Autopay Enabled",
+                  value: card.autopay_enabled ? "Yes" : "No",
+                },
+                {
+                  label: "Payment Due Date",
+                  value: formatDate(card.payment_due_date),
+                },
+                {
+                  label: "Days Until Due",
+                  value: formatDaysUntil(card.days_until_payment_due),
+                  tone:
+                    card.days_until_payment_due !== null &&
+                    card.days_until_payment_due >= 0 &&
+                    card.days_until_payment_due <= 7
+                      ? "danger"
+                      : undefined,
+                },
+                {
+                  label: "Next Statement Close",
+                  value: formatDate(card.next_statement_close_date),
+                },
+                {
+                  label: "Days Until Statement Close",
+                  value: formatDaysUntil(card.days_until_statement_close),
+                  tone:
+                    card.days_until_statement_close !== null &&
+                    card.days_until_statement_close >= 0 &&
+                    card.days_until_statement_close <= 3
+                      ? "warning"
+                      : undefined,
+                },
+                {
+                  label: "Estimated Monthly Interest",
+                  value: formatAmount(card.estimated_monthly_interest),
+                },
+              ]}
+              onEdit={() => toggleSection("cycle")}
+              title="Current Statement Cycle"
+            >
+              <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-3">
+                {renderInlineInput("current_balance", "Estimated Balance", "number")}
+                {renderInlineInput("statement_balance", "Last Statement Balance", "number")}
+                {renderInlineInput("statement_paid_amount", "Amount Paid Toward Statement", "number")}
+                {renderInlineInput("minimum_payment_due", "Minimum Payment Due", "number")}
+                {renderInlineCheckbox("minimum_payment_paid", "Minimum Payment Made")}
+                {renderInlineCheckbox("autopay_enabled", "Autopay Enabled")}
+                {renderInlineInput("payment_due_date", "Payment Due Date", "date")}
+                {renderInlineInput("next_statement_close_date", "Next Statement Close Date", "date")}
+                <div className="sm:col-span-2 xl:col-span-3">
+                  {renderSectionActions("cycle")}
                 </div>
               </div>
             </DetailSection>
@@ -1672,7 +1719,7 @@ export default function CreditCardDetailPage() {
                     label: "Signup Bonus Points",
                     value:
                       card.signup_bonus_points === null
-                        ? "-"
+                        ? "Not set"
                         : card.signup_bonus_points.toLocaleString(),
                   },
                 ]}
@@ -2160,7 +2207,7 @@ export default function CreditCardDetailPage() {
                 },
               ]}
               onEdit={() => toggleSection("rewards")}
-              title="Rewards Tracking"
+              title="Rewards"
             >
               <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-3">
                 <label className="space-y-1 text-sm font-medium text-slate-700">
@@ -2231,8 +2278,8 @@ export default function CreditCardDetailPage() {
             <DetailSection
               isEditing={editingSection === "notes"}
               items={[
-                { label: "Payment Options", value: card.payment_options || "-" },
-                { label: "Notes", value: card.notes || "-" },
+                { label: "Payment Options", value: card.payment_options || "Not set" },
+                { label: "Notes", value: card.notes || "Not set" },
               ]}
               onEdit={() => toggleSection("notes")}
               title="Notes"
@@ -2323,7 +2370,7 @@ export default function CreditCardDetailPage() {
                           label: "Signup Bonus Points",
                           value:
                             card.signup_bonus_points === null
-                              ? "-"
+                              ? "Not set"
                               : card.signup_bonus_points.toLocaleString(),
                         },
                       ].map((item) => (
