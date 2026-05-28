@@ -14,6 +14,7 @@ PUBLIC_AUTH_ROUTES = {
     ("POST", "/auth/login"),
     ("POST", "/auth/logout"),
     ("GET", "/auth/session"),
+    ("POST", "/auth/mfa/challenge/verify"),
 }
 PUBLIC_DOC_ROUTES = {"/docs", "/redoc", "/openapi.json"}
 
