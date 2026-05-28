@@ -443,15 +443,15 @@ export default function BuyersPage() {
     setModalMessage(null);
 
     try {
-      const endpoint = `${API_BASE_URL}/buyers/${buyer.id}`;
-      const response = await fetch(endpoint, { method: "DELETE" });
+      const endpoint = `${API_BASE_URL}/buyers/${buyer.id}/delete-or-deactivate`;
+      const response = await fetch(endpoint, { method: "POST" });
       const body = await response.json().catch(() => null);
 
       if (!response.ok) {
         throw new Error(
           body?.detail?.message ||
             body?.detail ||
-            `Failed to delete or deactivate buyer (${response.status})`,
+            "Buyer could not be deleted or deactivated.",
         );
       }
 
