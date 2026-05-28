@@ -127,6 +127,15 @@ export default function CardIssuersSettingsPage() {
   }
 
   async function deleteIssuer(issuerId: number) {
+    const issuer = issuers.find((currentIssuer) => currentIssuer.id === issuerId);
+    if (
+      !window.confirm(
+        `Delete ${issuer?.name ?? "this issuer"}? If it is used by cards, it will be deactivated instead.`,
+      )
+    ) {
+      return;
+    }
+
     setError(null);
     const response = await fetch(`${API_BASE_URL}/card-issuers/${issuerId}`, {
       method: "DELETE",

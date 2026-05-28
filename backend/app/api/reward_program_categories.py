@@ -3,7 +3,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
+from app.models.reward_program import RewardProgram
 from app.services.reward_program_categories import (
+    DEFAULT_REWARD_PROGRAM_CATEGORIES,
     load_reward_program_categories,
     normalize_category_name,
     save_reward_program_categories,
@@ -110,6 +112,77 @@ def update_reward_program_category(
         saved = save_reward_program_categories(db, categories)
         db.commit()
         return saved
+    except HTTPException:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@router.delete("/{category_name}")
+def delete_or_deactivate_reward_program_category(category_name: str):
+    db: Session = SessionLocal()
+
+    try:
+        categories = load_reward_program_categories(db)
+        current_name = normalize_category_name(category_name)
+        index = next(
+            (
+                idx
+                for idx, category in enumerate(categories)
+                if category["name"].lower() == current_name.lower()
+            ),
+            None,
+        )
+        if index is None:
+            raise HTTPException(status_code=404, detail="Category not found")
+
+        category = categories[index]
+        default_names = {
+            normalize_category_name(default["name"]).lower()
+            for default in DEFAULT_REWARD_PROGRAM_CATEGORIES
+        }
+        reference_count = (
+            db.query(RewardProgram)
+            .filter(RewardProgram.category == category["name"])
+            .count()
+        )
+        is_default = category["name"].lower() in default_names
+
+        if is_default or reference_count > 0:
+            category["active"] = False
+            reason = (
+                "Default categories cannot be deleted."
+                if is_default
+                else f"{reference_count} reward program(s) reference this category."
+            )
+            note = f"Marked inactive. {reason}"
+            current_notes = str(category.get("notes") or "").strip()
+            category["notes"] = (
+                f"{current_notes}\n{note}" if current_notes else note
+            )
+            saved = save_reward_program_categories(db, categories)
+            db.commit()
+            return {
+                "deleted": False,
+                "deactivated": True,
+                "protected": is_default,
+                "reference_count": reference_count,
+                "message": reason,
+                "categories": saved,
+            }
+
+        del categories[index]
+        saved = save_reward_program_categories(db, categories)
+        db.commit()
+        return {
+            "deleted": True,
+            "deactivated": False,
+            "protected": False,
+            "reference_count": 0,
+            "message": "Reward program category deleted.",
+            "categories": saved,
+        }
     except HTTPException:
         db.rollback()
         raise

@@ -267,6 +267,7 @@ export default function BuyersPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modalMessage, setModalMessage] = useState<string | null>(null);
 
   const totals = useMemo(
     () => ({
@@ -335,12 +336,14 @@ export default function BuyersPage() {
   function openCreate() {
     setEditingBuyer(null);
     setForm(emptyForm);
+    setModalMessage(null);
     setIsModalOpen(true);
   }
 
   function openEdit(buyer: Buyer) {
     setEditingBuyer(buyer);
     setForm(buyerToForm(buyer));
+    setModalMessage(null);
     setIsModalOpen(true);
   }
 
@@ -421,6 +424,47 @@ export default function BuyersPage() {
       await loadBuyers();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save buyer.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function deleteOrDeactivateBuyer(buyer: Buyer) {
+    if (
+      !window.confirm(
+        `Delete ${buyer.name}? If this buyer has related records, it will be deactivated instead.`,
+      )
+    ) {
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+    setModalMessage(null);
+
+    try {
+      const endpoint = `${API_BASE_URL}/buyers/${buyer.id}`;
+      const response = await fetch(endpoint, { method: "DELETE" });
+      const body = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          body?.detail?.message ||
+            body?.detail ||
+            `Failed to delete or deactivate buyer (${response.status})`,
+        );
+      }
+
+      setModalMessage(body?.message ?? "Buyer updated.");
+      setIsModalOpen(false);
+      setEditingBuyer(null);
+      await loadBuyers();
+    } catch (err) {
+      setModalMessage(
+        err instanceof Error
+          ? err.message
+          : "Failed to delete or deactivate buyer.",
+      );
     } finally {
       setIsSaving(false);
     }
@@ -618,7 +662,9 @@ export default function BuyersPage() {
           isSaving={isSaving}
           paymentAccounts={paymentAccounts}
           setForm={setForm}
+          modalMessage={modalMessage}
           onClose={() => setIsModalOpen(false)}
+          onDeleteOrDeactivate={deleteOrDeactivateBuyer}
           onSubmit={saveBuyer}
         />
       ) : null}
@@ -711,7 +757,9 @@ function BuyerModal({
   isSaving,
   paymentAccounts,
   setForm,
+  modalMessage,
   onClose,
+  onDeleteOrDeactivate,
   onSubmit,
 }: {
   editingBuyer: Buyer | null;
@@ -719,7 +767,9 @@ function BuyerModal({
   isSaving: boolean;
   paymentAccounts: PaymentAccount[];
   setForm: (form: BuyerForm) => void;
+  modalMessage: string | null;
   onClose: () => void;
+  onDeleteOrDeactivate: (buyer: Buyer) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const hasInvalidPayoutRate = isDecimalStylePayoutRate(
@@ -756,6 +806,12 @@ function BuyerModal({
             </button>
           </div>
         </div>
+
+        {modalMessage ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
+            {modalMessage}
+          </div>
+        ) : null}
 
         <FormSection title="General">
           <div className="grid gap-4 sm:grid-cols-3">
@@ -1171,6 +1227,24 @@ function BuyerModal({
             />
           </label>
         </AdvancedFormSection>
+
+        {editingBuyer ? (
+          <section className="rounded-lg border border-red-200 bg-red-50 p-4">
+            <h3 className="text-sm font-semibold text-red-900">Danger Zone</h3>
+            <p className="mt-2 text-sm text-red-700">
+              Delete this buyer if it has no related sales or asset history. Buyers
+              with related records will be deactivated instead.
+            </p>
+            <button
+              className="mt-3 h-10 cursor-pointer rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isSaving}
+              onClick={() => onDeleteOrDeactivate(editingBuyer)}
+              type="button"
+            >
+              Delete / Deactivate Buyer
+            </button>
+          </section>
+        ) : null}
 
       </form>
     </div>

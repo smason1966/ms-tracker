@@ -111,6 +111,15 @@ export default function CardNetworksSettingsPage() {
   }
 
   async function deleteNetwork(networkId: number) {
+    const network = networks.find((currentNetwork) => currentNetwork.id === networkId);
+    if (
+      !window.confirm(
+        `Delete ${network?.name ?? "this network"}? If it is used by cards, it will be deactivated instead.`,
+      )
+    ) {
+      return;
+    }
+
     setError(null);
     const response = await fetch(`${API_BASE_URL}/card-networks/${networkId}`, {
       method: "DELETE",

@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.buyer import Buyer, BuyerExternalIdentifier
+from app.models.fuel_reward_account import FuelRewardAccount
+from app.models.gift_card import GiftCard
 from app.models.payment_account import PaymentAccount
 from app.models.sale import Sale
 
@@ -343,5 +345,51 @@ def get_buyer(buyer_id: int):
         if not buyer:
             raise HTTPException(status_code=404, detail="Buyer not found")
         return serialize_buyer(db, buyer)
+    finally:
+        db.close()
+
+
+@router.delete("/{buyer_id}")
+def delete_or_deactivate_buyer(buyer_id: int):
+    db: Session = SessionLocal()
+
+    try:
+        buyer = db.query(Buyer).filter(Buyer.id == buyer_id).first()
+        if not buyer:
+            raise HTTPException(status_code=404, detail="Buyer not found")
+
+        related_counts = {
+            "sales": db.query(Sale).filter(Sale.buyer_id == buyer_id).count(),
+            "gift_cards": db.query(GiftCard)
+            .filter(GiftCard.buyer_id == buyer_id)
+            .count(),
+            "fuel_accounts": db.query(FuelRewardAccount)
+            .filter(FuelRewardAccount.buyer_id == buyer_id)
+            .count(),
+        }
+        related_total = sum(related_counts.values())
+        if related_total > 0:
+            buyer.active = False
+            db.commit()
+            db.refresh(buyer)
+            return {
+                "deleted": False,
+                "deactivated": True,
+                "related_counts": related_counts,
+                "message": "Buyer has related records and was deactivated instead of deleted.",
+                "buyer": serialize_buyer(db, buyer),
+            }
+
+        db.query(BuyerExternalIdentifier).filter(
+            BuyerExternalIdentifier.buyer_id == buyer_id
+        ).delete()
+        db.delete(buyer)
+        db.commit()
+        return {
+            "deleted": True,
+            "deactivated": False,
+            "related_counts": related_counts,
+            "message": "Buyer deleted.",
+        }
     finally:
         db.close()

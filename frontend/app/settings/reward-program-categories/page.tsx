@@ -37,6 +37,7 @@ export default function RewardProgramCategoriesPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [modalMessage, setModalMessage] = useState<string | null>(null);
 
   async function loadCategories() {
     setIsLoading(true);
@@ -78,6 +79,7 @@ export default function RewardProgramCategoriesPage() {
     setForm(emptyForm);
     setError(null);
     setMessage(null);
+    setModalMessage(null);
     setIsModalOpen(true);
   }
 
@@ -90,6 +92,7 @@ export default function RewardProgramCategoriesPage() {
     });
     setError(null);
     setMessage(null);
+    setModalMessage(null);
     setIsModalOpen(true);
   }
 
@@ -97,6 +100,7 @@ export default function RewardProgramCategoriesPage() {
     setEditingCategory(null);
     setForm(emptyForm);
     setIsModalOpen(false);
+    setModalMessage(null);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -143,6 +147,49 @@ export default function RewardProgramCategoriesPage() {
         err instanceof Error
           ? err.message
           : "Failed to save reward program category.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function deleteOrDeactivateCategory(category: RewardProgramCategory) {
+    if (
+      !window.confirm(
+        `Delete ${category.name}? If this category is a default or in use, it will be deactivated instead.`,
+      )
+    ) {
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+    setMessage(null);
+    setModalMessage(null);
+
+    try {
+      const endpoint = `${API_BASE_URL}/reward-program-categories/${categoryPath(
+        category.name,
+      )}`;
+      const response = await fetch(endpoint, { method: "DELETE" });
+      const body = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          body?.detail?.message ||
+            body?.detail ||
+            `Failed to delete or deactivate reward category (${response.status})`,
+        );
+      }
+
+      setMessage(body?.message ?? "Reward category updated.");
+      resetForm();
+      await loadCategories();
+    } catch (err) {
+      setModalMessage(
+        err instanceof Error
+          ? err.message
+          : "Failed to delete or deactivate reward category.",
       );
     } finally {
       setIsSaving(false);
@@ -294,6 +341,30 @@ export default function RewardProgramCategoriesPage() {
                   value={form.notes}
                 />
               </label>
+              {modalMessage ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
+                  {modalMessage}
+                </div>
+              ) : null}
+              {editingCategory ? (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3">
+                  <p className="text-sm font-semibold text-red-800">
+                    Danger Zone
+                  </p>
+                  <p className="mt-1 text-xs text-red-700">
+                    Delete this category if unused. Default or referenced categories
+                    will be deactivated instead.
+                  </p>
+                  <button
+                    className="mt-3 h-10 cursor-pointer rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60"
+                    disabled={isSaving}
+                    onClick={() => void deleteOrDeactivateCategory(editingCategory)}
+                    type="button"
+                  >
+                    Delete / Deactivate
+                  </button>
+                </div>
+              ) : null}
             </form>
           </div>
         ) : null}

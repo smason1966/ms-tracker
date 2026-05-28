@@ -45,6 +45,7 @@ export default function SpendingCategoriesSettingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modalMessage, setModalMessage] = useState<string | null>(null);
 
   async function loadCategories() {
     setIsLoading(true);
@@ -78,12 +79,14 @@ export default function SpendingCategoriesSettingsPage() {
   function openCreate() {
     setEditingCategory(null);
     setForm(emptyForm);
+    setModalMessage(null);
     setIsModalOpen(true);
   }
 
   function openEdit(category: SpendingCategory) {
     setEditingCategory(category);
     setForm(categoryToForm(category));
+    setModalMessage(null);
     setIsModalOpen(true);
   }
 
@@ -123,20 +126,29 @@ export default function SpendingCategoriesSettingsPage() {
   }
 
   async function deleteOrDeactivateCategory(category: SpendingCategory) {
+    if (
+      !window.confirm(
+        `Delete ${category.name}? If this category has linked records, it will be deactivated instead.`,
+      )
+    ) {
+      return;
+    }
+
     setIsSaving(true);
     setError(null);
+    setModalMessage(null);
 
     try {
       const response = await fetch(
         `${API_BASE_URL}/spending-categories/${category.id}`,
         { method: "DELETE" },
       );
+      const result = await response.json().catch(() => null);
 
       if (!response.ok) {
-        const body = await response.text().catch(() => "");
         throw new Error(
           `Failed to delete or deactivate category (${response.status})${
-            body ? `: ${body}` : ""
+            result?.detail ? `: ${result.detail}` : ""
           }`,
         );
       }
@@ -145,7 +157,7 @@ export default function SpendingCategoriesSettingsPage() {
       setEditingCategory(null);
       await loadCategories();
     } catch (err) {
-      setError(
+      setModalMessage(
         err instanceof Error
           ? err.message
           : "Failed to delete or deactivate category.",
@@ -319,6 +331,11 @@ export default function SpendingCategoriesSettingsPage() {
                 />
                 <span>Active</span>
               </label>
+              {modalMessage ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
+                  {modalMessage}
+                </div>
+              ) : null}
               {editingCategory ? (
                 <div className="rounded-md border border-red-200 bg-red-50 p-3">
                   <p className="text-sm font-semibold text-red-800">
