@@ -120,6 +120,37 @@ def graph_transfer_zip(payloads: dict) -> bytes:
     return buffer.getvalue()
 
 
+def linked_image_zip(
+    *,
+    receipts: list[dict] | None = None,
+    card_images: list[dict] | None = None,
+    files: dict[str, bytes] | None = None,
+    source_environment: str = "local-test",
+) -> bytes:
+    now = utc_now().isoformat()
+    manifest = {
+        "export_version": "1.0",
+        "exported_at": now,
+        "source_environment": source_environment,
+        "package_type": "linked_images",
+        "sensitive_transfer": False,
+        "image_mode": "linked",
+        "binary_payload_bytes": sum(len(value) for value in (files or {}).values()),
+        "image_counts": {
+            "receipts": len(receipts or []),
+            "card_images": len(card_images or []),
+        },
+    }
+    buffer = BytesIO()
+    with ZipFile(buffer, "w", ZIP_DEFLATED) as zip_file:
+        zip_file.writestr("manifest.json", json.dumps(manifest, default=str))
+        zip_file.writestr("receipts.json", json.dumps(receipts or [], default=str))
+        zip_file.writestr("card_images.json", json.dumps(card_images or [], default=str))
+        for filename, payload in (files or {}).items():
+            zip_file.writestr(filename, payload)
+    return buffer.getvalue()
+
+
 class FakeUpload:
     def __init__(self, contents: bytes):
         self.contents = contents
@@ -776,4 +807,204 @@ def test_image_exclusion_keeps_graph_without_attachment_records(monkeypatch, tmp
     assert without_images["card_images"] == []
     assert len(with_images["receipts"]) == 1
     assert len(with_images["card_images"]) == 1
+    db.close()
+
+
+def test_linked_image_package_attaches_to_imported_core_records(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api import data_transfer
+    from app.models.card_image import CardImage
+    from app.models.receipt import Receipt
+
+    session_factory = make_session_factory()
+    monkeypatch.setattr(data_transfer, "SessionLocal", session_factory)
+    now = utc_now()
+    db = session_factory()
+    purchase = PurchaseBatch(
+        store_name="Best Buy",
+        purchase_date=now,
+        total_amount="100.00",
+        purchase_total_paid="100.00",
+        imported_from_environment="local-test",
+        imported_source_id="10",
+        imported_at=now,
+    )
+    db.add(purchase)
+    db.flush()
+    card = GiftCard(
+        purchase_batch_id=purchase.id,
+        brand="Best Buy",
+        face_value="100.00",
+        acquisition_cost="100.00",
+        imported_from_environment="local-test",
+        imported_source_id="20",
+        imported_at=now,
+    )
+    db.add(card)
+    db.commit()
+    target_purchase_id = purchase.id
+    target_card_id = card.id
+    db.close()
+
+    contents = linked_image_zip(
+        receipts=[
+            {
+                "id": 100,
+                "purchase_batch_id": 10,
+                "image_url": "/uploads/receipts/source.jpg",
+                "original_filename": "receipt.jpg",
+            }
+        ],
+        card_images=[
+            {
+                "id": 200,
+                "gift_card_id": 20,
+                "image_type": "primary",
+                "original_image_url": "/uploads/card-images/source.jpg",
+                "original_filename": "card.jpg",
+            }
+        ],
+        files={
+            "receipts/100.jpg": b"receipt-image",
+            "card_images/200.jpg": b"card-image",
+        },
+    )
+
+    result = asyncio.run(data_transfer.apply_transfer(FakeUpload(contents)))
+
+    assert result["created"]["receipts"] == 1
+    assert result["created"]["card_images"] == 1
+    db = session_factory()
+    try:
+        assert db.query(Receipt).count() == 1
+        assert db.query(CardImage).count() == 1
+        assert db.query(Receipt).one().purchase_batch_id == target_purchase_id
+        assert db.query(CardImage).one().gift_card_id == target_card_id
+    finally:
+        db.close()
+
+
+def test_linked_image_package_requires_core_import_first(monkeypatch, tmp_path):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api.data_transfer import load_package, preview_package
+
+    db = make_session_factory()()
+    package = load_package(
+        linked_image_zip(
+            card_images=[
+                {
+                    "id": 200,
+                    "gift_card_id": 20,
+                    "image_type": "primary",
+                    "original_image_url": "/uploads/card-images/source.jpg",
+                }
+            ],
+            files={"card_images/200.jpg": b"card-image"},
+        )
+    )
+
+    preview = preview_package(db, package)
+
+    assert preview["conflicts"]["missing_dependencies"][0]["missing"] == (
+        "imported_gift_card"
+    )
+    assert "core transfer package" in preview["conflicts"]["missing_dependencies"][0]["message"]
+    db.close()
+
+
+def test_duplicate_linked_image_package_import_does_not_duplicate_images(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api import data_transfer
+    from app.models.card_image import CardImage
+
+    session_factory = make_session_factory()
+    monkeypatch.setattr(data_transfer, "SessionLocal", session_factory)
+    now = utc_now()
+    db = session_factory()
+    purchase = PurchaseBatch(
+        store_name="Best Buy",
+        purchase_date=now,
+        total_amount="100.00",
+        purchase_total_paid="100.00",
+        imported_from_environment="local-test",
+        imported_source_id="10",
+        imported_at=now,
+    )
+    db.add(purchase)
+    db.flush()
+    card = GiftCard(
+        purchase_batch_id=purchase.id,
+        brand="Best Buy",
+        face_value="100.00",
+        acquisition_cost="100.00",
+        imported_from_environment="local-test",
+        imported_source_id="20",
+        imported_at=now,
+    )
+    db.add(card)
+    db.commit()
+    db.close()
+
+    contents = linked_image_zip(
+        card_images=[
+            {
+                "id": 200,
+                "gift_card_id": 20,
+                "image_type": "primary",
+                "original_image_url": "/uploads/card-images/source.jpg",
+                "original_filename": "card.jpg",
+            }
+        ],
+        files={"card_images/200.jpg": b"card-image"},
+    )
+
+    first_result = asyncio.run(data_transfer.apply_transfer(FakeUpload(contents)))
+    second_result = asyncio.run(data_transfer.apply_transfer(FakeUpload(contents)))
+
+    assert first_result["created"]["card_images"] == 1
+    assert second_result["created"]["card_images"] == 0
+    assert second_result["skipped"]["duplicate_card_images"] == 1
+    db = session_factory()
+    try:
+        assert db.query(CardImage).count() == 1
+    finally:
+        db.close()
+
+
+def test_linked_image_preview_uses_manifest_counts_without_reading_binaries(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api import data_transfer
+
+    def fail_if_copying_binary(*_args, **_kwargs):
+        raise AssertionError("preview should not copy or process image binaries")
+
+    monkeypatch.setattr(data_transfer, "copy_archive_file", fail_if_copying_binary)
+    db = make_session_factory()()
+    package = data_transfer.load_package(
+        linked_image_zip(
+            card_images=[
+                {
+                    "id": 200,
+                    "gift_card_id": 20,
+                    "image_type": "primary",
+                    "original_image_url": "/uploads/card-images/source.jpg",
+                }
+            ],
+            files={"card_images/200.jpg": b"x" * 1024},
+        )
+    )
+
+    preview = data_transfer.preview_package(db, package)
+
+    assert preview["counts"]["card_images"] == 1
+    assert preview["plan"]["package_size_bytes"] > 0
     db.close()

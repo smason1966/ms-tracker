@@ -12,6 +12,8 @@ type ImportPreview = {
     source_environment: string;
     sensitive_transfer?: boolean;
     warning?: string | null;
+    package_type?: string;
+    image_mode?: string;
     source_record_ids: {
       purchases: number[];
       sales: number[];
@@ -24,6 +26,7 @@ type ImportPreview = {
     reuse: Record<string, number>;
     missing_dependencies: Array<Record<string, unknown>>;
     binary_payload_bytes: number;
+    package_size_bytes?: number;
   };
   conflicts: {
     duplicate_cards: Array<{
@@ -36,6 +39,13 @@ type ImportPreview = {
       source_id: number;
       existing_id: number;
     }>;
+    missing_dependencies?: Array<Record<string, unknown>>;
+  };
+  warnings?: {
+    large_package?: {
+      message: string;
+      package_size_bytes: number;
+    };
   };
 };
 
@@ -46,9 +56,13 @@ type ImportResult = {
     purchases: number;
     cards: number;
     sales: number;
+    receipts?: number;
+    card_images?: number;
   };
   skipped: {
     duplicate_cards: number;
+    duplicate_receipts?: number;
+    duplicate_card_images?: number;
   };
 };
 
@@ -101,7 +115,9 @@ export default function DataImportPage() {
   const [saleIds, setSaleIds] = useState("");
   const [includeSensitiveCredentials, setIncludeSensitiveCredentials] =
     useState(false);
-  const [includeImages, setIncludeImages] = useState(false);
+  const [imageMode, setImageMode] = useState<"exclude" | "inline" | "linked">(
+    "exclude",
+  );
   const [acknowledgeSensitiveExport, setAcknowledgeSensitiveExport] =
     useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -228,9 +244,7 @@ export default function DataImportPage() {
         params.set("sensitive", "true");
         params.set("acknowledge_sensitive", "true");
       }
-      if (includeImages) {
-        params.set("include_images", "true");
-      }
+      params.set("image_mode", imageMode);
 
       const response = await fetch(
         `${API_BASE_URL}/data-transfer/export?${params.toString()}`,
@@ -409,34 +423,70 @@ export default function DataImportPage() {
             </label>
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-2">
-            <label className="flex w-full items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-              <input
-                checked={includeImages}
-                className="mt-1 h-4 w-4"
-                onChange={(event) => setIncludeImages(event.target.checked)}
-                type="checkbox"
-              />
-              <span>
-                <span className="block font-semibold">Include images and attachments</span>
-                <span className="mt-1 block text-slate-600">
-                  Off by default for migration packages to avoid very large ZIP
-                  files and upload limits.
-                </span>
-              </span>
-            </label>
+          <div className="mt-4 space-y-3">
+            <fieldset className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              <legend className="px-1 font-semibold">Image handling</legend>
+              <p className="mt-1 text-slate-600">
+                Images are useful for later card-number/PIN verification. For large
+                migrations, export the core data first, then import the linked image
+                package.
+              </p>
+              <div className="mt-3 grid gap-2">
+                {[
+                  {
+                    value: "exclude",
+                    label: "Exclude images",
+                    helper: "Recommended for the first core migration package.",
+                  },
+                  {
+                    value: "inline",
+                    label: "Include images in same package",
+                    helper: "Best for small transfers.",
+                  },
+                  {
+                    value: "linked",
+                    label: "Export images as separate linked package",
+                    helper: "Import this after the core package has been imported.",
+                  },
+                ].map((option) => (
+                  <label
+                    className="flex items-start gap-3 rounded border border-slate-200 bg-white p-2"
+                    key={option.value}
+                  >
+                    <input
+                      checked={imageMode === option.value}
+                      className="mt-1 h-4 w-4"
+                      onChange={() =>
+                        setImageMode(option.value as "exclude" | "inline" | "linked")
+                      }
+                      type="radio"
+                    />
+                    <span>
+                      <span className="block font-medium">{option.label}</span>
+                      <span className="block text-xs text-slate-600">
+                        {option.helper}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <button
               className="h-10 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={isExporting}
               onClick={() => exportTransfer(false)}
               type="button"
             >
-              {isExporting ? "Exporting..." : "Export Transfer"}
+              {isExporting
+                ? "Exporting..."
+                : imageMode === "linked"
+                  ? "Export Linked Image Package"
+                  : "Export Transfer"}
             </button>
           </div>
 
           <div className={`mt-5 ${sensitiveWarningPanelClass}`}>
-            {sensitiveTransferExportEnabled ? (
+            {sensitiveTransferExportEnabled && imageMode !== "linked" ? (
               <>
                 <label className={sensitiveWarningLabelClass}>
                   <input
@@ -486,6 +536,16 @@ export default function DataImportPage() {
                   </div>
                 ) : null}
               </>
+            ) : imageMode === "linked" ? (
+              <div>
+                <p className={sensitiveWarningHeadingClass}>
+                  Linked image packages do not include credentials
+                </p>
+                <p className={sensitiveWarningTextClass}>
+                  Export the sensitive core package separately if credentials need
+                  to move between environments.
+                </p>
+              </div>
             ) : (
               <div>
                 <p className={sensitiveWarningHeadingClass}>
@@ -583,6 +643,17 @@ export default function DataImportPage() {
                   {(preview.plan.binary_payload_bytes / 1024 / 1024).toFixed(2)} MB
                 </p>
               ) : null}
+              {preview.plan?.package_size_bytes ? (
+                <p className="mt-1 text-slate-600">
+                  Package size:{" "}
+                  {(preview.plan.package_size_bytes / 1024 / 1024).toFixed(2)} MB
+                </p>
+              ) : null}
+              {preview.manifest.package_type === "linked_images" ? (
+                <p className="mt-1 font-semibold text-slate-700">
+                  Linked image package. Import the matching core package first.
+                </p>
+              ) : null}
               {preview.manifest.sensitive_transfer ? (
                 <p className="mt-1 font-semibold text-amber-700">
                   Sensitive credential transfer
@@ -635,6 +706,13 @@ export default function DataImportPage() {
               </div>
             ) : null}
 
+            {preview.warnings?.large_package ? (
+              <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-semibold">Large transfer package</p>
+                <p className="mt-1">{preview.warnings.large_package.message}</p>
+              </div>
+            ) : null}
+
             {preview.conflicts.duplicate_cards.length > 0 ? (
               <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                 <p className="font-semibold">Duplicate cards detected</p>
@@ -675,9 +753,23 @@ export default function DataImportPage() {
               Created {result.created.purchases} purchases, {result.created.cards} cards,
               and {result.created.sales} sales.
             </p>
+            {result.created.receipts || result.created.card_images ? (
+              <p className="mt-1">
+                Added {result.created.receipts ?? 0} receipts and{" "}
+                {result.created.card_images ?? 0} card images.
+              </p>
+            ) : null}
             <p className="mt-1">
               Skipped duplicate cards: {result.skipped.duplicate_cards}
             </p>
+            {result.skipped.duplicate_receipts ||
+            result.skipped.duplicate_card_images ? (
+              <p className="mt-1">
+                Skipped duplicate images:{" "}
+                {(result.skipped.duplicate_receipts ?? 0) +
+                  (result.skipped.duplicate_card_images ?? 0)}
+              </p>
+            ) : null}
           </section>
         ) : null}
       </div>

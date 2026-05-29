@@ -60,6 +60,11 @@ SENSITIVE_TRANSFER_WARNING = (
     "This transfer contains sensitive card numbers, PINs, and account credentials. "
     "Store securely and delete after import."
 )
+IMAGE_PACKAGE_CORE_REQUIRED_MESSAGE = (
+    "Linked image package cannot be imported until the matching core transfer "
+    "package has been imported."
+)
+LARGE_TRANSFER_WARNING_BYTES = 50 * 1024 * 1024
 CARD_SENSITIVE_FIELDS = {
     "card_number_encrypted",
     "pin_encrypted",
@@ -166,6 +171,18 @@ def prepare_sensitive_transfer_data(data: dict) -> dict:
         for account in data["fuel_accounts"]
     ]
     return sensitive_data
+
+
+def image_mode_value(include_images: bool, image_mode: str | None) -> str:
+    if image_mode:
+        normalized = image_mode.strip().lower()
+        if normalized in {"exclude", "inline", "linked"}:
+            return normalized
+        raise HTTPException(
+            status_code=400,
+            detail="Image mode must be exclude, inline, or linked.",
+        )
+    return "inline" if include_images else "exclude"
 
 
 def parse_ids(value: str | None) -> list[int]:
@@ -304,6 +321,24 @@ def archive_file_size(path_or_url: str | None) -> int:
 
 def package_json(payload: dict) -> bytes:
     return json.dumps(payload, default=json_default, indent=2, sort_keys=True).encode()
+
+
+def write_image_payloads(zip_file: ZipFile, data: dict) -> None:
+    for receipt in data["receipts"]:
+        archive_file(
+            zip_file,
+            receipt.get("image_url"),
+            "receipts",
+            receipt["id"],
+        )
+
+    for image in data["card_images"]:
+        archive_file(
+            zip_file,
+            image.get("original_image_url"),
+            "card_images",
+            image["id"],
+        )
 
 
 def query_by_ids(db: Session, model, ids: set[int]):
@@ -515,11 +550,15 @@ def export_transfer(
     purchases: str | None = None,
     sales: str | None = None,
     include_images: bool = False,
+    image_mode: str | None = None,
     sensitive: bool = False,
     acknowledge_sensitive: bool = False,
 ):
     purchase_ids = parse_ids(purchases)
     sale_ids = parse_ids(sales)
+    resolved_image_mode = image_mode_value(include_images, image_mode)
+    inline_images = resolved_image_mode == "inline"
+    linked_images = resolved_image_mode == "linked"
 
     if not purchase_ids and not sale_ids:
         raise HTTPException(status_code=400, detail="Select purchases or sales to export")
@@ -552,23 +591,60 @@ def export_transfer(
             db,
             purchase_ids,
             sale_ids,
-            include_images=include_images,
+            include_images=inline_images or linked_images,
         )
-        if sensitive:
-            data = prepare_sensitive_transfer_data(data)
         manifest = {
             "export_version": EXPORT_VERSION,
             "exported_at": utc_now().isoformat(),
             "source_environment": os.getenv("MS_TRACKER_ENV", "test"),
+            "package_type": "linked_images" if linked_images else "core",
             "sensitive_transfer": sensitive,
             "warning": SENSITIVE_TRANSFER_WARNING if sensitive else None,
             "source_record_ids": {
                 "purchases": purchase_ids,
                 "sales": sale_ids,
             },
-            "include_images": include_images,
+            "image_mode": resolved_image_mode,
+            "include_images": inline_images,
             "binary_payload_bytes": data["_metadata"]["binary_payload_bytes"],
+            "image_counts": {
+                "receipts": len(data["receipts"]),
+                "card_images": len(data["card_images"]),
+            },
         }
+        if linked_images:
+            image_data = {
+                "receipts": data["receipts"],
+                "card_images": data["card_images"],
+            }
+            manifest["sha256"] = hashlib.sha256(
+                package_json(image_data)
+            ).hexdigest()
+
+            buffer = BytesIO()
+            with ZipFile(buffer, "w", ZIP_DEFLATED) as zip_file:
+                zip_file.writestr("manifest.json", package_json(manifest))
+                zip_file.writestr("receipts.json", package_json(data["receipts"]))
+                zip_file.writestr("card_images.json", package_json(data["card_images"]))
+                write_image_payloads(zip_file, data)
+
+            buffer.seek(0)
+            filename = (
+                f"ms-transfer-images_purchases-{len(purchase_ids)}_"
+                f"sales-{len(sale_ids)}.zip"
+            )
+            return StreamingResponse(
+                buffer,
+                media_type="application/zip",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+
+        if not inline_images:
+            data["receipts"] = []
+            data["card_images"] = []
+
+        if sensitive:
+            data = prepare_sensitive_transfer_data(data)
         checksum_payload = package_json(
             {key: value for key, value in data.items() if not key.startswith("_")}
         )
@@ -599,22 +675,8 @@ def export_transfer(
             ]:
                 zip_file.writestr(f"{filename}.json", package_json(data[filename]))
 
-            if include_images:
-                for receipt in data["receipts"]:
-                    archive_file(
-                        zip_file,
-                        receipt.get("image_url"),
-                        "receipts",
-                        receipt["id"],
-                    )
-
-                for image in data["card_images"]:
-                    archive_file(
-                        zip_file,
-                        image.get("original_image_url"),
-                        "card_images",
-                        image["id"],
-                    )
+            if inline_images:
+                write_image_payloads(zip_file, data)
 
         buffer.seek(0)
         filename = (
@@ -631,7 +693,11 @@ def export_transfer(
 
 def load_package(contents: bytes) -> dict:
     with ZipFile(BytesIO(contents)) as zip_file:
-        required = [
+        if "manifest.json" not in zip_file.namelist():
+            raise HTTPException(status_code=400, detail="Missing manifest.json")
+        manifest = json.loads(zip_file.read("manifest.json"))
+        is_image_package = manifest.get("package_type") == "linked_images"
+        required = ["manifest.json", "receipts.json", "card_images.json"] if is_image_package else [
             "manifest.json",
             "purchases.json",
             "cards.json",
@@ -643,12 +709,12 @@ def load_package(contents: bytes) -> dict:
                 raise HTTPException(status_code=400, detail=f"Missing {filename}")
 
         package = {
-            "manifest": json.loads(zip_file.read("manifest.json")),
-            "purchases": json.loads(zip_file.read("purchases.json")),
-            "cards": json.loads(zip_file.read("cards.json")),
+            "manifest": manifest,
+            "purchases": json.loads(zip_file.read("purchases.json")) if "purchases.json" in zip_file.namelist() else [],
+            "cards": json.loads(zip_file.read("cards.json")) if "cards.json" in zip_file.namelist() else [],
             "purchase_payments": json.loads(zip_file.read("purchase_payments.json")) if "purchase_payments.json" in zip_file.namelist() else [],
-            "sales": json.loads(zip_file.read("sales.json")),
-            "fuel_transactions": json.loads(zip_file.read("fuel_transactions.json")),
+            "sales": json.loads(zip_file.read("sales.json")) if "sales.json" in zip_file.namelist() else [],
+            "fuel_transactions": json.loads(zip_file.read("fuel_transactions.json")) if "fuel_transactions.json" in zip_file.namelist() else [],
             "receipts": json.loads(zip_file.read("receipts.json")) if "receipts.json" in zip_file.namelist() else [],
             "card_images": json.loads(zip_file.read("card_images.json")) if "card_images.json" in zip_file.namelist() else [],
             "sale_gift_cards": json.loads(zip_file.read("sale_gift_cards.json")) if "sale_gift_cards.json" in zip_file.namelist() else [],
@@ -670,6 +736,9 @@ def load_package(contents: bytes) -> dict:
 def preview_package(db: Session, package: dict) -> dict:
     if package["manifest"].get("sensitive_transfer"):
         require_sensitive_transfer_enabled("import")
+
+    if package["manifest"].get("package_type") == "linked_images":
+        return preview_image_package(db, package)
 
     duplicate_cards = []
     duplicate_purchases = []
@@ -710,6 +779,13 @@ def preview_package(db: Session, package: dict) -> dict:
         if find_imported_sale(db, sale, source_environment)
     }
     missing_dependencies = missing_dependency_messages(package)
+    package_size_bytes = len(package.get("_raw", b""))
+    warnings = {}
+    if package_size_bytes >= LARGE_TRANSFER_WARNING_BYTES:
+        warnings["large_package"] = {
+            "message": "This package is large and may hit upload limits.",
+            "package_size_bytes": package_size_bytes,
+        }
 
     return {
         "manifest": package["manifest"],
@@ -736,6 +812,7 @@ def preview_package(db: Session, package: dict) -> dict:
             },
             "missing_dependencies": missing_dependencies,
             "binary_payload_bytes": package["manifest"].get("binary_payload_bytes", 0),
+            "package_size_bytes": package_size_bytes,
         },
         "conflicts": {
             "duplicate_cards": duplicate_cards,
@@ -744,6 +821,7 @@ def preview_package(db: Session, package: dict) -> dict:
         },
         "warnings": {
             "duplicate_check_limited": duplicate_check_warnings,
+            **warnings,
         },
     }
 
@@ -828,6 +906,159 @@ def find_imported_sale(
         .filter(Sale.imported_source_id == str(sale.get("id")))
         .first()
     )
+
+
+def preview_image_package(db: Session, package: dict) -> dict:
+    source_environment = package["manifest"].get("source_environment")
+    missing_core = image_package_missing_core_records(db, package, source_environment)
+    duplicate_receipts = image_package_duplicate_receipts(
+        db,
+        package,
+        source_environment,
+    )
+    duplicate_card_images = image_package_duplicate_card_images(
+        db,
+        package,
+        source_environment,
+    )
+    package_size_bytes = len(package.get("_raw", b""))
+    warnings = {}
+    if package_size_bytes >= LARGE_TRANSFER_WARNING_BYTES:
+        warnings["large_package"] = {
+            "message": "This package is large and may hit upload limits.",
+            "package_size_bytes": package_size_bytes,
+        }
+
+    return {
+        "manifest": package["manifest"],
+        "counts": {
+            "purchases": 0,
+            "cards": 0,
+            "sales": 0,
+            "receipts": len(package["receipts"]),
+            "card_images": len(package["card_images"]),
+        },
+        "plan": {
+            "create": {
+                "purchases": 0,
+                "cards": 0,
+                "sales": 0,
+                "receipts": len(package["receipts"]) - len(duplicate_receipts),
+                "card_images": len(package["card_images"]) - len(duplicate_card_images),
+            },
+            "reuse": {
+                "purchases": 0,
+                "cards": 0,
+                "sales": 0,
+                "receipts": len(duplicate_receipts),
+                "card_images": len(duplicate_card_images),
+            },
+            "missing_dependencies": missing_core,
+            "binary_payload_bytes": package["manifest"].get("binary_payload_bytes", 0),
+            "package_size_bytes": package_size_bytes,
+        },
+        "conflicts": {
+            "duplicate_cards": [],
+            "duplicate_purchases": [],
+            "missing_dependencies": missing_core,
+        },
+        "warnings": {
+            "duplicate_check_limited": [],
+            **warnings,
+        },
+    }
+
+
+def image_package_missing_core_records(
+    db: Session,
+    package: dict,
+    source_environment: str | None,
+) -> list[dict]:
+    missing = []
+    for receipt in package["receipts"]:
+        if not find_imported_purchase(
+            db,
+            {"id": receipt.get("purchase_batch_id")},
+            source_environment,
+        ):
+            missing.append(
+                {
+                    "entity": "receipt",
+                    "source_id": receipt.get("id"),
+                    "missing": "imported_purchase_batch",
+                    "missing_source_id": receipt.get("purchase_batch_id"),
+                    "message": IMAGE_PACKAGE_CORE_REQUIRED_MESSAGE,
+                }
+            )
+    for image in package["card_images"]:
+        if not find_imported_card(
+            db,
+            {"id": image.get("gift_card_id")},
+            source_environment,
+        ):
+            missing.append(
+                {
+                    "entity": "card_image",
+                    "source_id": image.get("id"),
+                    "missing": "imported_gift_card",
+                    "missing_source_id": image.get("gift_card_id"),
+                    "message": IMAGE_PACKAGE_CORE_REQUIRED_MESSAGE,
+                }
+            )
+    return missing
+
+
+def image_package_duplicate_receipts(
+    db: Session,
+    package: dict,
+    source_environment: str | None,
+) -> set[int]:
+    duplicates = set()
+    for receipt in package["receipts"]:
+        purchase = find_imported_purchase(
+            db,
+            {"id": receipt.get("purchase_batch_id")},
+            source_environment,
+        )
+        if not purchase:
+            continue
+        query = db.query(Receipt).filter(Receipt.purchase_batch_id == purchase.id)
+        if receipt.get("original_filename"):
+            query = query.filter(Receipt.original_filename == receipt.get("original_filename"))
+        elif receipt.get("image_url"):
+            query = query.filter(Receipt.image_url == receipt.get("image_url"))
+        else:
+            continue
+        if query.first():
+            duplicates.add(receipt.get("id"))
+    return duplicates
+
+
+def image_package_duplicate_card_images(
+    db: Session,
+    package: dict,
+    source_environment: str | None,
+) -> set[int]:
+    duplicates = set()
+    for image in package["card_images"]:
+        card = find_imported_card(
+            db,
+            {"id": image.get("gift_card_id")},
+            source_environment,
+        )
+        if not card:
+            continue
+        query = db.query(CardImage).filter(CardImage.gift_card_id == card.id)
+        query = query.filter(CardImage.image_type == (image.get("image_type") or "primary"))
+        if image.get("original_filename"):
+            query = query.filter(CardImage.original_filename == image.get("original_filename"))
+        elif image.get("original_image_url"):
+            query = query.filter(CardImage.original_image_url == image.get("original_image_url"))
+        else:
+            continue
+        if query.first():
+            duplicates.add(image.get("id"))
+    return duplicates
 
 
 def missing_dependency_messages(package: dict) -> list[dict]:
@@ -1051,6 +1282,121 @@ def find_duplicate_card_for_import(
     )
 
 
+def apply_image_package(db: Session, package: dict) -> dict:
+    preview = preview_image_package(db, package)
+    if preview["conflicts"].get("missing_dependencies"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "missing_core_records",
+                "message": IMAGE_PACKAGE_CORE_REQUIRED_MESSAGE,
+                "conflicts": preview["conflicts"]["missing_dependencies"],
+            },
+        )
+
+    imported_at = utc_now()
+    source_environment = package["manifest"].get("source_environment")
+    raw_zip = ZipFile(BytesIO(package["_raw"]))
+    duplicate_receipts = image_package_duplicate_receipts(
+        db,
+        package,
+        source_environment,
+    )
+    duplicate_card_images = image_package_duplicate_card_images(
+        db,
+        package,
+        source_environment,
+    )
+    created_receipts = 0
+    created_card_images = 0
+
+    for source in package["receipts"]:
+        if source.get("id") in duplicate_receipts:
+            continue
+        purchase = find_imported_purchase(
+            db,
+            {"id": source.get("purchase_batch_id")},
+            source_environment,
+        )
+        if not purchase:
+            continue
+        archive_candidates = [
+            name for name in raw_zip.namelist()
+            if name.startswith(f"receipts/{source['id']}.")
+        ]
+        image_url = (
+            copy_archive_file(raw_zip, archive_candidates[0], RECEIPT_DIR)
+            if archive_candidates
+            else source.get("image_url")
+        )
+        if not image_url:
+            continue
+        db.add(
+            Receipt(
+                purchase_batch_id=purchase.id,
+                image_url=image_url,
+                original_filename=source.get("original_filename"),
+                notes=source.get("notes"),
+            )
+        )
+        created_receipts += 1
+
+    for source in package["card_images"]:
+        if source.get("id") in duplicate_card_images:
+            continue
+        card = find_imported_card(
+            db,
+            {"id": source.get("gift_card_id")},
+            source_environment,
+        )
+        if not card:
+            continue
+        archive_candidates = [
+            name for name in raw_zip.namelist()
+            if name.startswith(f"card_images/{source['id']}.")
+        ]
+        image_url = (
+            copy_archive_file(raw_zip, archive_candidates[0], CARD_IMAGE_DIR)
+            if archive_candidates
+            else source.get("original_image_url")
+        )
+        if not image_url:
+            continue
+        db.add(
+            CardImage(
+                gift_card_id=card.id,
+                image_type=source.get("image_type") or "primary",
+                original_image_url=image_url,
+                original_filename=source.get("original_filename"),
+                processed_image_url=source.get("processed_image_url"),
+                canonical_rotation_degrees=source.get("canonical_rotation_degrees"),
+                orientation_source=source.get("orientation_source"),
+                canonical_transform_metadata=source.get(
+                    "canonical_transform_metadata"
+                ),
+            )
+        )
+        created_card_images += 1
+
+    db.commit()
+    return {
+        "imported_at": imported_at,
+        "source_environment": source_environment,
+        "created": {
+            "purchases": 0,
+            "cards": 0,
+            "sales": 0,
+            "receipts": created_receipts,
+            "card_images": created_card_images,
+        },
+        "skipped": {
+            "duplicate_cards": 0,
+            "duplicate_receipts": len(duplicate_receipts),
+            "duplicate_card_images": len(duplicate_card_images),
+        },
+    }
+
+
 @router.post("/import/apply")
 async def apply_transfer(
     file: UploadFile = File(...),
@@ -1067,6 +1413,9 @@ async def apply_transfer(
     db: Session = SessionLocal()
 
     try:
+        if package["manifest"].get("package_type") == "linked_images":
+            return apply_image_package(db, package)
+
         preview = preview_package(db, package)
         if preview["conflicts"]["duplicate_cards"] and not allow_duplicates:
             raise HTTPException(
@@ -1608,7 +1957,19 @@ async def apply_transfer(
             )
 
         raw_zip = ZipFile(BytesIO(package["_raw"]))
+        duplicate_receipt_ids = image_package_duplicate_receipts(
+            db,
+            package,
+            source_environment,
+        )
+        duplicate_card_image_ids = image_package_duplicate_card_images(
+            db,
+            package,
+            source_environment,
+        )
         for source in package["receipts"]:
+            if source.get("id") in duplicate_receipt_ids:
+                continue
             if source.get("purchase_batch_id") not in purchase_map:
                 continue
             archive_candidates = [
@@ -1631,6 +1992,8 @@ async def apply_transfer(
                 )
 
         for source in package["card_images"]:
+            if source.get("id") in duplicate_card_image_ids:
+                continue
             if source.get("gift_card_id") not in card_map:
                 continue
             archive_candidates = [
@@ -1648,7 +2011,15 @@ async def apply_transfer(
                         gift_card_id=card_map[source["gift_card_id"]],
                         image_type=source.get("image_type") or "primary",
                         original_image_url=image_url,
+                        original_filename=source.get("original_filename"),
                         processed_image_url=source.get("processed_image_url"),
+                        canonical_rotation_degrees=source.get(
+                            "canonical_rotation_degrees"
+                        ),
+                        orientation_source=source.get("orientation_source"),
+                        canonical_transform_metadata=source.get(
+                            "canonical_transform_metadata"
+                        ),
                     )
                 )
 
