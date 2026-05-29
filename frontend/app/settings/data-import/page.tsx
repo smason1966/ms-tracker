@@ -10,6 +10,8 @@ type ImportPreview = {
     export_version: string;
     exported_at: string;
     source_environment: string;
+    sensitive_transfer?: boolean;
+    warning?: string | null;
     source_record_ids: {
       purchases: number[];
       sales: number[];
@@ -45,19 +47,126 @@ type ImportResult = {
 };
 
 export default function DataImportPage() {
+  const [purchaseIds, setPurchaseIds] = useState("");
+  const [saleIds, setSaleIds] = useState("");
+  const [includeSensitiveCredentials, setIncludeSensitiveCredentials] =
+    useState(false);
+  const [acknowledgeSensitiveExport, setAcknowledgeSensitiveExport] =
+    useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [allowDuplicates, setAllowDuplicates] = useState(false);
+  const [acknowledgeSensitiveImport, setAcknowledgeSensitiveImport] =
+    useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const sensitiveImportPackage = Boolean(preview?.manifest.sensitive_transfer);
+
+  function backendErrorMessage(body: unknown, fallback: string) {
+    if (!body || typeof body !== "object") {
+      return fallback;
+    }
+
+    const detail = (body as { detail?: unknown }).detail;
+    if (typeof detail === "string") {
+      return detail;
+    }
+    if (detail && typeof detail === "object") {
+      const message = (detail as { message?: unknown }).message;
+      if (typeof message === "string") {
+        return message;
+      }
+    }
+    return fallback;
+  }
+
+  function filenameFromDisposition(disposition: string | null) {
+    if (!disposition) {
+      return null;
+    }
+
+    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match?.[1]) {
+      return decodeURIComponent(utf8Match[1].replaceAll('"', ""));
+    }
+
+    const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+    return filenameMatch?.[1] ?? null;
+  }
+
+  function downloadBlob(blob: Blob, filename: string) {
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
+  async function exportTransfer(sensitive: boolean) {
+    const purchases = purchaseIds.trim();
+    const sales = saleIds.trim();
+    if (!purchases && !sales) {
+      setError("Select purchases or sales to export.");
+      return;
+    }
+    if (sensitive && !acknowledgeSensitiveExport) {
+      setError(
+        "Confirm that you understand this file contains sensitive credentials before exporting.",
+      );
+      return;
+    }
+
+    setIsExporting(true);
+    setError(null);
+
+    try {
+      const params = new URLSearchParams();
+      if (purchases) {
+        params.set("purchases", purchases);
+      }
+      if (sales) {
+        params.set("sales", sales);
+      }
+      if (sensitive) {
+        params.set("sensitive", "true");
+        params.set("acknowledge_sensitive", "true");
+      }
+
+      const response = await fetch(
+        `${API_BASE_URL}/data-transfer/export?${params.toString()}`,
+      );
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(
+          backendErrorMessage(body, `Export failed (${response.status})`),
+        );
+      }
+
+      const blob = await response.blob();
+      const filename =
+        filenameFromDisposition(response.headers.get("Content-Disposition")) ??
+        (sensitive ? "sensitive-transfer.zip" : "transfer.zip");
+      downloadBlob(blob, filename);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Export failed.");
+    } finally {
+      setIsExporting(false);
+    }
+  }
 
   function onFileChange(event: ChangeEvent<HTMLInputElement>) {
     setFile(event.target.files?.[0] ?? null);
     setPreview(null);
     setResult(null);
     setError(null);
+    setAcknowledgeSensitiveImport(false);
   }
 
   async function previewImport() {
@@ -78,7 +187,9 @@ export default function DataImportPage() {
 
       if (!response.ok) {
         const body = await response.json().catch(() => null);
-        throw new Error(body?.detail || `Preview failed (${response.status})`);
+        throw new Error(
+          backendErrorMessage(body, `Preview failed (${response.status})`),
+        );
       }
 
       setPreview((await response.json()) as ImportPreview);
@@ -93,6 +204,12 @@ export default function DataImportPage() {
     if (!file || !preview) {
       return;
     }
+    if (sensitiveImportPackage && !acknowledgeSensitiveImport) {
+      setError(
+        "Confirm that you understand this file contains sensitive credentials before importing.",
+      );
+      return;
+    }
 
     setIsImporting(true);
     setError(null);
@@ -103,6 +220,9 @@ export default function DataImportPage() {
       const params = new URLSearchParams({
         allow_duplicates: String(allowDuplicates),
       });
+      if (sensitiveImportPackage && acknowledgeSensitiveImport) {
+        params.set("acknowledge_sensitive", "true");
+      }
       const response = await fetch(
         `${API_BASE_URL}/data-transfer/import/apply?${params.toString()}`,
         {
@@ -114,7 +234,7 @@ export default function DataImportPage() {
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         throw new Error(
-          body?.detail?.message || body?.detail || `Import failed (${response.status})`,
+          backendErrorMessage(body, `Import failed (${response.status})`),
         );
       }
 
@@ -155,6 +275,105 @@ export default function DataImportPage() {
         ) : null}
 
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Export Transfer Package</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Create a curated ZIP from selected purchases, sales, or both.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Purchase IDs</span>
+              <input
+                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                onChange={(event) => setPurchaseIds(event.target.value)}
+                placeholder="101,102,103"
+                type="text"
+                value={purchaseIds}
+              />
+            </label>
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Sale IDs</span>
+              <input
+                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                onChange={(event) => setSaleIds(event.target.value)}
+                placeholder="12,13,14"
+                type="text"
+                value={saleIds}
+              />
+            </label>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              className="h-10 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isExporting}
+              onClick={() => exportTransfer(false)}
+              type="button"
+            >
+              {isExporting ? "Exporting..." : "Export Transfer"}
+            </button>
+          </div>
+
+          <div className="mt-5 rounded-md border border-amber-200 bg-amber-50/80 p-4 text-sm text-amber-950">
+            <label className="flex items-start gap-3 font-semibold">
+              <input
+                checked={includeSensitiveCredentials}
+                className="mt-1"
+                onChange={(event) => {
+                  setIncludeSensitiveCredentials(event.target.checked);
+                  if (!event.target.checked) {
+                    setAcknowledgeSensitiveExport(false);
+                  }
+                }}
+                type="checkbox"
+              />
+              <span>Include sensitive credentials</span>
+            </label>
+
+            {includeSensitiveCredentials ? (
+              <div className="mt-3 space-y-3">
+                <p>
+                  This export includes sensitive card numbers, PINs, and account
+                  credentials. Store securely and delete after import.
+                </p>
+                <label className="flex items-start gap-3 font-medium">
+                  <input
+                    checked={acknowledgeSensitiveExport}
+                    className="mt-1"
+                    onChange={(event) =>
+                      setAcknowledgeSensitiveExport(event.target.checked)
+                    }
+                    type="checkbox"
+                  />
+                  <span>
+                    I understand this file contains sensitive credentials and
+                    will delete it after import.
+                  </span>
+                </label>
+                <button
+                  className="h-10 cursor-pointer rounded-md border border-amber-500 bg-amber-900 px-4 text-sm font-semibold text-amber-50 transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!acknowledgeSensitiveExport || isExporting}
+                  onClick={() => exportTransfer(true)}
+                  type="button"
+                >
+                  {isExporting ? "Exporting..." : "Export Sensitive Transfer"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold">Import Transfer Package</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Preview a transfer ZIP before applying it to this environment.
+            </p>
+          </div>
           <label className="block space-y-2 text-sm font-medium text-slate-700">
             <span>Transfer ZIP</span>
             <input
@@ -175,7 +394,11 @@ export default function DataImportPage() {
             </button>
             <button
               className="h-10 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={!preview || isImporting}
+              disabled={
+                !preview ||
+                isImporting ||
+                (sensitiveImportPackage && !acknowledgeSensitiveImport)
+              }
               onClick={applyImport}
               type="button"
             >
@@ -202,12 +425,41 @@ export default function DataImportPage() {
                 Source: {preview.manifest.source_environment} · Exported{" "}
                 {preview.manifest.exported_at}
               </p>
+              {preview.manifest.sensitive_transfer ? (
+                <p className="mt-1 font-semibold text-amber-700">
+                  Sensitive credential transfer
+                </p>
+              ) : null}
               {preview.manifest.sha256 ? (
                 <p className="mt-1 break-all text-xs text-slate-500">
                   SHA256: {preview.manifest.sha256}
                 </p>
               ) : null}
             </div>
+
+            {preview.manifest.sensitive_transfer ? (
+              <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                <p className="font-semibold">Sensitive import acknowledgement</p>
+                <p className="mt-1">
+                  This import contains sensitive card numbers, PINs, and account
+                  credentials. Store securely and delete the ZIP after import.
+                </p>
+                <label className="mt-3 flex items-start gap-2 font-medium">
+                  <input
+                    checked={acknowledgeSensitiveImport}
+                    className="mt-1"
+                    onChange={(event) =>
+                      setAcknowledgeSensitiveImport(event.target.checked)
+                    }
+                    type="checkbox"
+                  />
+                  <span>
+                    I understand this file contains sensitive credentials and
+                    will delete it after import.
+                  </span>
+                </label>
+              </div>
+            ) : null}
 
             {preview.conflicts.duplicate_cards.length > 0 ? (
               <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
