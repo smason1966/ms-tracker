@@ -60,11 +60,11 @@ const DEFAULT_TRANSFER_CAPABILITIES: TransferCapabilities = {
   sensitive_import_enabled: false,
 };
 const sensitiveWarningPanelClass =
-  "rounded-md border border-amber-500/60 bg-amber-950/90 p-4 text-sm text-amber-100 shadow-sm";
-const sensitiveWarningHeadingClass = "font-semibold text-amber-50";
-const sensitiveWarningTextClass = "mt-1 text-amber-100";
+  "rounded-md border border-orange-400/70 bg-amber-950/80 p-4 text-sm text-slate-100 shadow-sm";
+const sensitiveWarningHeadingClass = "font-semibold text-amber-100";
+const sensitiveWarningTextClass = "mt-1 text-slate-100";
 const sensitiveWarningLabelClass =
-  "flex items-start gap-3 font-medium text-amber-50";
+  "flex items-start gap-3 font-medium text-slate-100";
 const sensitiveWarningCheckboxClass =
   "mt-1 h-4 w-4 rounded border-amber-300 bg-slate-950 accent-amber-400";
 
@@ -430,7 +430,7 @@ export default function DataImportPage() {
 
                 {includeSensitiveCredentials ? (
                   <div className="mt-3 space-y-3">
-                    <p className="text-amber-100">
+                    <p className="text-slate-100">
                       This export includes sensitive card numbers, PINs, and account
                       credentials. Store securely and delete after import.
                     </p>
@@ -449,7 +449,7 @@ export default function DataImportPage() {
                       </span>
                     </label>
                     <button
-                      className="h-10 cursor-pointer rounded-md border border-amber-500 bg-amber-900 px-4 text-sm font-semibold text-amber-50 transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="h-10 cursor-pointer rounded-md border border-orange-400 bg-amber-700 px-4 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
                       disabled={!acknowledgeSensitiveExport || isExporting}
                       onClick={() => exportTransfer(true)}
                       type="button"
