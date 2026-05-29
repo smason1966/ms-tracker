@@ -172,6 +172,223 @@ def test_sensitive_import_preview_disabled_by_default(monkeypatch, tmp_path):
     assert exc.value.detail == SENSITIVE_TRANSFER_DISABLED_MESSAGE
 
 
+def test_sensitive_import_detects_duplicate_with_different_ids_by_credentials(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("ALLOW_SENSITIVE_TRANSFER_IMPORT", "true")
+    from app.api.data_transfer import load_package, preview_package
+
+    session_factory = make_session_factory()
+    db = session_factory()
+    target_card = GiftCard(
+        purchase_batch_id=99,
+        brand="Best Buy",
+        face_value="100.00",
+        acquisition_cost="100.00",
+        card_number_encrypted=encrypt_field("6332260074021047"),
+        pin_encrypted=encrypt_field("1350"),
+        confirmed_card_number=encrypt_field("6332260074021047"),
+        confirmed_pin=encrypt_field("1350"),
+        status="VERIFIED_AVAILABLE",
+    )
+    db.add(target_card)
+    db.commit()
+
+    package = load_package(
+        transfer_zip(
+            {"sensitive_transfer": True},
+            cards=[
+                {
+                    "id": 48,
+                    "purchase_batch_id": 1,
+                    "brand": "Best Buy",
+                    "face_value": "100.00",
+                    "card_number_encrypted": "6332260074021047",
+                    "pin_encrypted": "1350",
+                    "confirmed_card_number": "6332260074021047",
+                    "confirmed_pin": "1350",
+                }
+            ],
+        )
+    )
+
+    preview = preview_package(db, package)
+
+    assert preview["conflicts"]["duplicate_cards"] == [
+        {
+            "source_id": 48,
+            "existing_id": target_card.id,
+            "brand": "Best Buy",
+            "card_ending": "1047",
+            "match_type": "credential",
+        }
+    ]
+    assert "6332260074021047" not in str(preview)
+    assert "1350" not in str(preview)
+    db.close()
+
+
+def test_sensitive_import_detects_duplicate_by_imported_source_id(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("ALLOW_SENSITIVE_TRANSFER_IMPORT", "true")
+    from app.api.data_transfer import load_package, preview_package
+
+    session_factory = make_session_factory()
+    db = session_factory()
+    target_card = GiftCard(
+        purchase_batch_id=99,
+        brand="Best Buy",
+        face_value="100.00",
+        acquisition_cost="100.00",
+        status="VERIFIED_AVAILABLE",
+        imported_from_environment="local-test",
+        imported_source_id="48",
+    )
+    db.add(target_card)
+    db.commit()
+
+    package = load_package(
+        transfer_zip(
+            {"sensitive_transfer": True},
+            cards=[
+                {
+                    "id": 48,
+                    "purchase_batch_id": 1,
+                    "brand": "Best Buy",
+                    "face_value": "100.00",
+                    "card_number_encrypted": "6332260074021047",
+                    "pin_encrypted": "1350",
+                }
+            ],
+        )
+    )
+
+    preview = preview_package(db, package)
+
+    assert preview["conflicts"]["duplicate_cards"] == [
+        {
+            "source_id": 48,
+            "existing_id": target_card.id,
+            "brand": "Best Buy",
+            "card_ending": "1047",
+            "match_type": "imported_source_id",
+        }
+    ]
+    assert "6332260074021047" not in str(preview)
+    db.close()
+
+
+def test_non_sensitive_import_uses_existing_encrypted_duplicate_behavior(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api.data_transfer import load_package, preview_package
+
+    encrypted_card = encrypt_field("6332260074021047")
+    encrypted_pin = encrypt_field("1350")
+    session_factory = make_session_factory()
+    db = session_factory()
+    target_card = GiftCard(
+        purchase_batch_id=99,
+        brand="Best Buy",
+        face_value="100.00",
+        acquisition_cost="100.00",
+        card_number_encrypted=encrypted_card,
+        pin_encrypted=encrypted_pin,
+        status="VERIFIED_AVAILABLE",
+    )
+    db.add(target_card)
+    db.commit()
+
+    package = load_package(
+        transfer_zip(
+            {"sensitive_transfer": False},
+            cards=[
+                {
+                    "id": 48,
+                    "purchase_batch_id": 1,
+                    "brand": "Best Buy",
+                    "face_value": "100.00",
+                    "card_number_encrypted": encrypted_card,
+                    "pin_encrypted": encrypted_pin,
+                }
+            ],
+        )
+    )
+
+    preview = preview_package(db, package)
+
+    assert preview["conflicts"]["duplicate_cards"][0]["match_type"] == "encrypted_value"
+    assert preview["conflicts"]["duplicate_cards"][0]["existing_id"] == target_card.id
+    assert preview["conflicts"]["duplicate_cards"][0]["card_ending"]
+    db.close()
+
+
+def test_sensitive_import_undecryptable_target_does_not_crash(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    old_key = Fernet.generate_key().decode()
+    monkeypatch.setenv("FIELD_ENCRYPTION_KEY", old_key)
+    _fernet.cache_clear()
+    bad_ciphertext = encrypt_field("6332260074021047")
+    configure_transfer_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("ALLOW_SENSITIVE_TRANSFER_IMPORT", "true")
+    from app.api.data_transfer import load_package, preview_package
+
+    session_factory = make_session_factory()
+    db = session_factory()
+    db.add(
+        GiftCard(
+            purchase_batch_id=99,
+            brand="Best Buy",
+            face_value="100.00",
+            acquisition_cost="100.00",
+            card_number_encrypted=bad_ciphertext,
+            status="VERIFIED_AVAILABLE",
+        )
+    )
+    db.commit()
+
+    package = load_package(
+        transfer_zip(
+            {"sensitive_transfer": True},
+            cards=[
+                {
+                    "id": 48,
+                    "purchase_batch_id": 1,
+                    "brand": "Best Buy",
+                    "face_value": "100.00",
+                    "card_number_encrypted": "6332260074021047",
+                }
+            ],
+        )
+    )
+
+    preview = preview_package(db, package)
+
+    assert preview["conflicts"]["duplicate_cards"] == []
+    assert preview["warnings"]["duplicate_check_limited"] == [
+        {
+            "source_id": 48,
+            "brand": "Best Buy",
+            "message": (
+                "Duplicate check was limited because an existing target "
+                "credential could not be decrypted."
+            ),
+        }
+    ]
+    assert "6332260074021047" not in str(preview)
+    db.close()
+
+
 def test_sensitive_import_requires_acknowledgement_when_enabled(
     monkeypatch,
     tmp_path,

@@ -32,6 +32,7 @@ from app.services.field_encryption import (
     UNDECRYPTABLE_CREDENTIAL_MESSAGE,
     decrypt_field,
     encrypt_field,
+    try_decrypt_field,
 )
 from app.services.upload_storage import (
     physical_upload_path,
@@ -176,6 +177,60 @@ def parse_decimal(value: str | int | float | None) -> Decimal | None:
         return None
 
     return Decimal(str(value))
+
+
+def credential_ending(value: str | None, length: int = 4) -> str | None:
+    if not value:
+        return None
+    normalized = "".join(character for character in str(value) if character.isalnum())
+    return normalized[-length:] if normalized else None
+
+
+def normalized_credential(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = "".join(character for character in str(value) if character.isalnum())
+    return normalized or None
+
+
+def source_card_values(card: dict) -> set[str]:
+    values = {
+        normalized_credential(card.get("confirmed_redemption_code")),
+        normalized_credential(card.get("confirmed_card_number")),
+        normalized_credential(card.get("card_number_encrypted")),
+    }
+    return {value for value in values if value}
+
+
+def source_pin_values(card: dict) -> set[str]:
+    values = {
+        normalized_credential(card.get("confirmed_pin")),
+        normalized_credential(card.get("pin_encrypted")),
+    }
+    return {value for value in values if value}
+
+
+def target_card_values(card: GiftCard) -> tuple[set[str], set[str], bool]:
+    unavailable = False
+    card_values: set[str] = set()
+    pin_values: set[str] = set()
+    for field in (
+        card.confirmed_redemption_code,
+        card.confirmed_card_number,
+        card.card_number_encrypted,
+    ):
+        value, field_unavailable = try_decrypt_field(field)
+        unavailable = unavailable or field_unavailable
+        normalized = normalized_credential(value)
+        if normalized:
+            card_values.add(normalized)
+    for field in (card.confirmed_pin, card.pin_encrypted):
+        value, field_unavailable = try_decrypt_field(field)
+        unavailable = unavailable or field_unavailable
+        normalized = normalized_credential(value)
+        if normalized:
+            pin_values.add(normalized)
+    return card_values, pin_values, unavailable
 
 
 def local_upload_path(path_or_url: str | None) -> Path | None:
@@ -455,25 +510,21 @@ def preview_package(db: Session, package: dict) -> dict:
 
     duplicate_cards = []
     duplicate_purchases = []
+    duplicate_check_warnings = []
 
     for card in package["cards"]:
-        if not card.get("card_number_encrypted"):
-            continue
-        duplicate = (
-            db.query(GiftCard)
-            .filter(GiftCard.brand == card.get("brand"))
-            .filter(GiftCard.card_number_encrypted == card.get("card_number_encrypted"))
-        )
-        if card.get("pin_encrypted"):
-            duplicate = duplicate.filter(GiftCard.pin_encrypted == card.get("pin_encrypted"))
-        duplicate = duplicate.first()
-        if duplicate:
-            duplicate_cards.append(
+        duplicate, payload, limited = find_duplicate_card_for_import(db, card, package)
+        if payload:
+            duplicate_cards.append(payload)
+        elif limited:
+            duplicate_check_warnings.append(
                 {
                     "source_id": card.get("id"),
-                    "existing_id": duplicate.id,
                     "brand": card.get("brand"),
-                    "card_ending": str(card.get("card_number_encrypted"))[-4:],
+                    "message": (
+                        "Duplicate check was limited because an existing target "
+                        "credential could not be decrypted."
+                    ),
                 }
             )
 
@@ -497,6 +548,9 @@ def preview_package(db: Session, package: dict) -> dict:
         "conflicts": {
             "duplicate_cards": duplicate_cards,
             "duplicate_purchases": duplicate_purchases,
+        },
+        "warnings": {
+            "duplicate_check_limited": duplicate_check_warnings,
         },
     }
 
@@ -543,6 +597,121 @@ def find_duplicate_purchase(db: Session, purchase: dict) -> PurchaseBatch | None
         .filter(PurchaseBatch.purchase_date == parse_datetime(purchase.get("purchase_date")))
         .filter(PurchaseBatch.purchase_total_paid == parse_decimal(purchase.get("purchase_total_paid")))
         .first()
+    )
+
+
+def duplicate_card_payload(
+    *,
+    source: dict,
+    duplicate: GiftCard,
+    matched_value: str | None,
+    match_type: str,
+) -> dict:
+    return {
+        "source_id": source.get("id"),
+        "existing_id": duplicate.id,
+        "brand": source.get("brand"),
+        "card_ending": credential_ending(matched_value),
+        "match_type": match_type,
+    }
+
+
+def find_sensitive_duplicate_card(
+    db: Session,
+    source: dict,
+    source_environment: str | None,
+) -> tuple[GiftCard | None, str | None, str, bool]:
+    if source_environment and source.get("id") is not None:
+        imported_duplicate = (
+            db.query(GiftCard)
+            .filter(GiftCard.imported_from_environment == source_environment)
+            .filter(GiftCard.imported_source_id == str(source.get("id")))
+            .first()
+        )
+        if imported_duplicate:
+            return (
+                imported_duplicate,
+                source.get("confirmed_redemption_code")
+                or source.get("confirmed_card_number")
+                or source.get("card_number_encrypted"),
+                "imported_source_id",
+                False,
+            )
+
+    source_cards = source_card_values(source)
+    source_pins = source_pin_values(source)
+    if not source_cards:
+        return None, None, "", False
+
+    duplicate_check_limited = False
+    candidates = (
+        db.query(GiftCard)
+        .filter(GiftCard.brand == source.get("brand"))
+        .order_by(GiftCard.id.asc())
+        .all()
+    )
+    for candidate in candidates:
+        target_cards, target_pins, unavailable = target_card_values(candidate)
+        duplicate_check_limited = duplicate_check_limited or unavailable
+        matched_cards = source_cards & target_cards
+        if not matched_cards:
+            continue
+        if source_pins and target_pins and not (source_pins & target_pins):
+            continue
+        return candidate, sorted(matched_cards)[0], "credential", duplicate_check_limited
+
+    return None, None, "", duplicate_check_limited
+
+
+def find_standard_duplicate_card(db: Session, source: dict) -> GiftCard | None:
+    if not source.get("card_number_encrypted"):
+        return None
+    duplicate = (
+        db.query(GiftCard)
+        .filter(GiftCard.brand == source.get("brand"))
+        .filter(GiftCard.card_number_encrypted == source.get("card_number_encrypted"))
+    )
+    if source.get("pin_encrypted"):
+        duplicate = duplicate.filter(GiftCard.pin_encrypted == source.get("pin_encrypted"))
+    return duplicate.first()
+
+
+def find_duplicate_card_for_import(
+    db: Session,
+    source: dict,
+    package: dict,
+) -> tuple[GiftCard | None, dict | None, bool]:
+    if package["manifest"].get("sensitive_transfer"):
+        duplicate, matched_value, match_type, limited = find_sensitive_duplicate_card(
+            db,
+            source,
+            package["manifest"].get("source_environment"),
+        )
+        if not duplicate:
+            return None, None, limited
+        return (
+            duplicate,
+            duplicate_card_payload(
+                source=source,
+                duplicate=duplicate,
+                matched_value=matched_value,
+                match_type=match_type,
+            ),
+            limited,
+        )
+
+    duplicate = find_standard_duplicate_card(db, source)
+    if not duplicate:
+        return None, None, False
+    return (
+        duplicate,
+        duplicate_card_payload(
+            source=source,
+            duplicate=duplicate,
+            matched_value=source.get("card_number_encrypted"),
+            match_type="encrypted_value",
+        ),
+        False,
     )
 
 
@@ -614,16 +783,7 @@ async def apply_transfer(
         for source in package["cards"]:
             if source.get("purchase_batch_id") not in purchase_map:
                 continue
-            duplicate = None
-            if source.get("card_number_encrypted"):
-                duplicate = (
-                    db.query(GiftCard)
-                    .filter(GiftCard.brand == source.get("brand"))
-                    .filter(GiftCard.card_number_encrypted == source.get("card_number_encrypted"))
-                )
-                if source.get("pin_encrypted"):
-                    duplicate = duplicate.filter(GiftCard.pin_encrypted == source.get("pin_encrypted"))
-                duplicate = duplicate.first()
+            duplicate, _, _ = find_duplicate_card_for_import(db, source, package)
             if duplicate and not allow_duplicates:
                 continue
 
