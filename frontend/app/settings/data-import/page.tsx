@@ -7,16 +7,19 @@ import { API_BASE_URL } from "@/lib/api";
 
 type ImportPreview = {
   manifest: {
-    export_version: string;
-    exported_at: string;
-    source_environment: string;
+    export_version?: string;
+    exported_at?: string;
+    source_environment?: string;
     sensitive_transfer?: boolean;
     warning?: string | null;
     package_type?: string;
     image_mode?: string;
-    source_record_ids: {
-      purchases: number[];
-      sales: number[];
+    include_images?: boolean;
+    binary_payload_bytes?: number;
+    image_counts?: Record<string, number>;
+    source_record_ids?: {
+      purchases?: number[];
+      sales?: number[];
     };
     sha256?: string;
   };
@@ -32,8 +35,9 @@ type ImportPreview = {
     duplicate_cards: Array<{
       source_id: number;
       existing_id: number;
-      brand: string;
-      card_ending: string;
+      brand?: string;
+      card_ending?: string;
+      match_type?: string;
     }>;
     duplicate_purchases: Array<{
       source_id: number;
@@ -42,6 +46,7 @@ type ImportPreview = {
     missing_dependencies?: Array<Record<string, unknown>>;
   };
   warnings?: {
+    duplicate_check_limited?: Array<Record<string, unknown>>;
     large_package?: {
       message: string;
       package_size_bytes: number;
@@ -87,6 +92,16 @@ const sensitiveWarningLabelClass =
   "flex items-start gap-3 font-medium text-slate-100";
 const sensitiveWarningCheckboxClass =
   "mt-1 h-4 w-4 rounded border-amber-300 bg-slate-950 accent-amber-400";
+const COUNT_KEYS = [
+  "purchases",
+  "cards",
+  "sales",
+  "purchase_payments",
+  "fuel_transactions",
+  "receipts",
+  "card_images",
+  "sale_events",
+];
 
 function backendErrorMessage(body: unknown, fallback: string) {
   if (!body || typeof body !== "object") {
@@ -104,6 +119,107 @@ function backendErrorMessage(body: unknown, fallback: string) {
     }
   }
   return fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function asNumberRecord(value: unknown): Record<string, number> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, rawValue]) => [
+      key,
+      typeof rawValue === "number" && Number.isFinite(rawValue) ? rawValue : 0,
+    ]),
+  );
+}
+
+function asArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => isRecord(item))
+    : [];
+}
+
+function formatBytes(bytes: number | undefined) {
+  if (!bytes) {
+    return "0 MB";
+  }
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function totalRecordCount(record: Record<string, number> | undefined) {
+  return Object.values(record ?? {}).reduce((sum, value) => sum + value, 0);
+}
+
+function normalizePreviewResponse(value: unknown): ImportPreview | string {
+  if (!isRecord(value)) {
+    return "Preview response was not a JSON object.";
+  }
+
+  if (!isRecord(value.manifest) || !isRecord(value.counts)) {
+    return "Preview response is missing manifest or counts.";
+  }
+
+  const conflicts = isRecord(value.conflicts) ? value.conflicts : {};
+  const rawPlan = isRecord(value.plan) ? value.plan : {};
+  const rawWarnings = isRecord(value.warnings) ? value.warnings : {};
+  const duplicateCards = asArray(conflicts.duplicate_cards).map((card) => ({
+    source_id: Number(card.source_id ?? 0),
+    existing_id: Number(card.existing_id ?? 0),
+    brand: typeof card.brand === "string" ? card.brand : undefined,
+    card_ending:
+      typeof card.card_ending === "string" ? card.card_ending : undefined,
+    match_type:
+      typeof card.match_type === "string" ? card.match_type : undefined,
+  }));
+  const duplicatePurchases = asArray(conflicts.duplicate_purchases).map(
+    (purchase) => ({
+      source_id: Number(purchase.source_id ?? 0),
+      existing_id: Number(purchase.existing_id ?? 0),
+    }),
+  );
+
+  return {
+    manifest: value.manifest as ImportPreview["manifest"],
+    counts: asNumberRecord(value.counts),
+    plan: {
+      create: asNumberRecord(rawPlan.create),
+      reuse: asNumberRecord(rawPlan.reuse),
+      missing_dependencies: asArray(rawPlan.missing_dependencies),
+      binary_payload_bytes:
+        typeof rawPlan.binary_payload_bytes === "number"
+          ? rawPlan.binary_payload_bytes
+          : 0,
+      package_size_bytes:
+        typeof rawPlan.package_size_bytes === "number"
+          ? rawPlan.package_size_bytes
+          : undefined,
+    },
+    conflicts: {
+      duplicate_cards: duplicateCards,
+      duplicate_purchases: duplicatePurchases,
+      missing_dependencies: asArray(conflicts.missing_dependencies),
+    },
+    warnings: {
+      duplicate_check_limited: asArray(rawWarnings.duplicate_check_limited),
+      large_package: isRecord(rawWarnings.large_package)
+        ? {
+            message:
+              typeof rawWarnings.large_package.message === "string"
+                ? rawWarnings.large_package.message
+                : "This package is large and may hit upload limits.",
+            package_size_bytes:
+              typeof rawWarnings.large_package.package_size_bytes === "number"
+                ? rawWarnings.large_package.package_size_bytes
+                : 0,
+          }
+        : undefined,
+    },
+  };
 }
 
 export default function DataImportPage() {
@@ -130,11 +246,34 @@ export default function DataImportPage() {
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const sensitiveImportPackage = Boolean(preview?.manifest.sensitive_transfer);
   const transferExportEnabled = capabilities.export_enabled;
   const transferImportEnabled = capabilities.import_enabled;
   const sensitiveTransferExportEnabled = capabilities.sensitive_export_enabled;
   const sensitiveTransferImportEnabled = capabilities.sensitive_import_enabled;
+  const sensitiveImportPackage = Boolean(preview?.manifest.sensitive_transfer);
+  const duplicateCards = preview?.conflicts.duplicate_cards ?? [];
+  const duplicatePurchases = preview?.conflicts.duplicate_purchases ?? [];
+  const missingDependencies = [
+    ...(preview?.conflicts.missing_dependencies ?? []),
+    ...(preview?.plan?.missing_dependencies ?? []),
+  ];
+  const blockingMissingDependencyCount = missingDependencies.length;
+  const duplicateConflictCount =
+    duplicateCards.length + duplicatePurchases.length;
+  const importBlockedByDuplicates = duplicateConflictCount > 0 && !allowDuplicates;
+  const applyImportDisabled =
+    !preview ||
+    isImporting ||
+    blockingMissingDependencyCount > 0 ||
+    importBlockedByDuplicates ||
+    (sensitiveImportPackage &&
+      (!acknowledgeSensitiveImport || !sensitiveTransferImportEnabled));
+  const noImportableRecords =
+    Boolean(preview) &&
+    totalRecordCount(preview?.plan?.create) === 0 &&
+    totalRecordCount(preview?.plan?.reuse) === 0 &&
+    totalRecordCount(preview?.manifest.image_counts) === 0 &&
+    totalRecordCount(preview?.counts) === 0;
   const pageTitle =
     transferExportEnabled && transferImportEnabled
       ? "Data Transfer"
@@ -300,7 +439,12 @@ export default function DataImportPage() {
         );
       }
 
-      setPreview((await response.json()) as ImportPreview);
+      const normalized = normalizePreviewResponse(await response.json());
+      if (typeof normalized === "string") {
+        setPreview(null);
+        throw new Error(normalized);
+      }
+      setPreview(normalized);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Preview failed.");
     } finally {
@@ -316,6 +460,14 @@ export default function DataImportPage() {
       setError(
         "Confirm that you understand this file contains sensitive credentials before importing.",
       );
+      return;
+    }
+    if (blockingMissingDependencyCount > 0) {
+      setError("Resolve missing linked records before applying this import.");
+      return;
+    }
+    if (importBlockedByDuplicates) {
+      setError("Review duplicate records or choose Import duplicates anyway.");
       return;
     }
 
@@ -589,13 +741,7 @@ export default function DataImportPage() {
             </button>
             <button
               className="h-10 cursor-pointer rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={
-                !preview ||
-                isImporting ||
-                (sensitiveImportPackage &&
-                  (!acknowledgeSensitiveImport ||
-                    !sensitiveTransferImportEnabled))
-              }
+              disabled={applyImportDisabled}
               onClick={applyImport}
               type="button"
             >
@@ -611,44 +757,70 @@ export default function DataImportPage() {
 
         {preview ? (
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-semibold">Preview</h2>
-            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-              {Object.entries(preview.counts).map(([key, value]) => (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold">Preview</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  {preview.manifest.package_type ?? "core"} package from{" "}
+                  {preview.manifest.source_environment ?? "unknown environment"}
+                </p>
+              </div>
+              <span className="inline-flex w-fit rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold uppercase text-slate-600">
+                {preview.manifest.sensitive_transfer
+                  ? "Sensitive"
+                  : "Non-sensitive"}
+              </span>
+            </div>
+
+            {noImportableRecords ? (
+              <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                No importable records found in this package.
+              </div>
+            ) : null}
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-4">
+              {COUNT_KEYS.map((key) => (
                 <div className="rounded-md border border-slate-200 p-3" key={key}>
                   <p className="text-xs font-semibold uppercase text-slate-500">
                     {key.replaceAll("_", " ")}
                   </p>
-                  <p className="mt-1 text-2xl font-semibold">{value}</p>
+                  <p className="mt-1 text-2xl font-semibold">
+                    {preview.counts[key] ?? 0}
+                  </p>
                 </div>
               ))}
             </div>
             <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-              <p>
-                Source: {preview.manifest.source_environment} · Exported{" "}
-                {preview.manifest.exported_at}
-              </p>
-              {preview.plan ? (
-                <p className="mt-1 text-slate-600">
-                  Plan: create {preview.plan.create.purchases ?? 0} purchases,{" "}
-                  {preview.plan.create.cards ?? 0} cards,{" "}
-                  {preview.plan.create.sales ?? 0} sales; reuse{" "}
-                  {preview.plan.reuse.purchases ?? 0} purchases,{" "}
-                  {preview.plan.reuse.cards ?? 0} cards,{" "}
-                  {preview.plan.reuse.sales ?? 0} sales.
+              <div className="grid gap-2 sm:grid-cols-2">
+                <p>
+                  <span className="font-semibold">Source:</span>{" "}
+                  {preview.manifest.source_environment ?? "Unknown"}
                 </p>
-              ) : null}
-              {preview.plan?.binary_payload_bytes ? (
-                <p className="mt-1 text-slate-600">
-                  Image/attachment payload:{" "}
-                  {(preview.plan.binary_payload_bytes / 1024 / 1024).toFixed(2)} MB
+                <p>
+                  <span className="font-semibold">Exported:</span>{" "}
+                  {preview.manifest.exported_at ?? "Unknown"}
                 </p>
-              ) : null}
-              {preview.plan?.package_size_bytes ? (
-                <p className="mt-1 text-slate-600">
-                  Package size:{" "}
-                  {(preview.plan.package_size_bytes / 1024 / 1024).toFixed(2)} MB
+                <p>
+                  <span className="font-semibold">Package type:</span>{" "}
+                  {preview.manifest.package_type ?? "core"}
                 </p>
-              ) : null}
+                <p>
+                  <span className="font-semibold">Images:</span>{" "}
+                  {preview.manifest.image_mode ?? "unknown"} · include images{" "}
+                  {preview.manifest.include_images ? "yes" : "no"}
+                </p>
+                <p>
+                  <span className="font-semibold">Package size:</span>{" "}
+                  {formatBytes(preview.plan?.package_size_bytes)}
+                </p>
+                <p>
+                  <span className="font-semibold">Image payload:</span>{" "}
+                  {formatBytes(
+                    preview.plan?.binary_payload_bytes ??
+                      preview.manifest.binary_payload_bytes,
+                  )}
+                </p>
+              </div>
               {preview.manifest.package_type === "linked_images" ? (
                 <p className="mt-1 font-semibold text-slate-700">
                   Linked image package. Import the matching core package first.
@@ -664,6 +836,31 @@ export default function DataImportPage() {
                   SHA256: {preview.manifest.sha256}
                 </p>
               ) : null}
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-md border border-slate-200 p-3 text-sm">
+                <p className="font-semibold text-slate-700">Create</p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {Object.entries(preview.plan?.create ?? {}).map(([key, value]) => (
+                    <p key={key}>
+                      {key.replaceAll("_", " ")}:{" "}
+                      <span className="font-semibold">{value}</span>
+                    </p>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-md border border-slate-200 p-3 text-sm">
+                <p className="font-semibold text-slate-700">Reuse</p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {Object.entries(preview.plan?.reuse ?? {}).map(([key, value]) => (
+                    <p key={key}>
+                      {key.replaceAll("_", " ")}:{" "}
+                      <span className="font-semibold">{value}</span>
+                    </p>
+                  ))}
+                </div>
+              </div>
             </div>
 
             {preview.manifest.sensitive_transfer ? (
@@ -713,16 +910,30 @@ export default function DataImportPage() {
               </div>
             ) : null}
 
-            {preview.conflicts.duplicate_cards.length > 0 ? (
+            {duplicateCards.length > 0 || duplicatePurchases.length > 0 ? (
               <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                <p className="font-semibold">Duplicate cards detected</p>
-                <ul className="mt-2 list-disc space-y-1 pl-5">
-                  {preview.conflicts.duplicate_cards.map((card) => (
+                <p className="font-semibold">Duplicate records detected</p>
+                {duplicateCards.length > 0 ? (
+                  <ul className="mt-2 list-disc space-y-1 pl-5">
+                    {duplicateCards.map((card) => (
                     <li key={`${card.source_id}-${card.existing_id}`}>
-                      {card.brand} ending {card.card_ending}: source #{card.source_id} matches existing #{card.existing_id}
+                        {card.brand ?? "Card"} ending{" "}
+                        {card.card_ending ?? "unknown"}: source #{card.source_id}{" "}
+                        matches existing #{card.existing_id}
                     </li>
-                  ))}
-                </ul>
+                    ))}
+                  </ul>
+                ) : null}
+                {duplicatePurchases.length > 0 ? (
+                  <ul className="mt-2 list-disc space-y-1 pl-5">
+                    {duplicatePurchases.map((purchase) => (
+                      <li key={`${purchase.source_id}-${purchase.existing_id}`}>
+                        Purchase source #{purchase.source_id} matches existing #
+                        {purchase.existing_id}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 <label className="mt-3 flex items-center gap-2 font-medium">
                   <input
                     checked={allowDuplicates}
@@ -734,13 +945,39 @@ export default function DataImportPage() {
               </div>
             ) : null}
 
-            {preview.plan?.missing_dependencies?.length ? (
+            {missingDependencies.length ? (
               <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                 <p className="font-semibold">Missing linked records</p>
                 <p className="mt-1">
                   This package is missing required dependencies and cannot be
                   imported safely.
                 </p>
+                <ul className="mt-2 list-disc space-y-1 pl-5">
+                  {missingDependencies.map((dependency, index) => (
+                    <li key={`${dependency.entity}-${dependency.source_id}-${index}`}>
+                      {String(dependency.entity ?? "Record")} source #
+                      {String(dependency.source_id ?? "unknown")} is missing{" "}
+                      {String(dependency.missing ?? "dependency")} source #
+                      {String(dependency.missing_source_id ?? "unknown")}
+                      {typeof dependency.message === "string"
+                        ? ` — ${dependency.message}`
+                        : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {preview.warnings?.duplicate_check_limited?.length ? (
+              <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                <p className="font-semibold">Duplicate check limited</p>
+                <ul className="mt-2 list-disc space-y-1 pl-5">
+                  {preview.warnings.duplicate_check_limited.map((warning, index) => (
+                    <li key={index}>
+                      {String(warning.message ?? "Some existing credentials could not be checked.")}
+                    </li>
+                  ))}
+                </ul>
               </div>
             ) : null}
           </section>
