@@ -141,11 +141,33 @@ def linked_image_zip(
             "card_images": len(card_images or []),
         },
     }
+    normalized_receipts = [
+        {
+            **receipt,
+            "source_environment": source_environment,
+            "source_receipt_id": receipt.get("source_receipt_id") or receipt.get("id"),
+            "source_purchase_batch_id": (
+                receipt.get("source_purchase_batch_id")
+                or receipt.get("purchase_batch_id")
+            ),
+        }
+        for receipt in (receipts or [])
+    ]
+    normalized_card_images = [
+        {
+            **image,
+            "source_environment": source_environment,
+            "source_card_image_id": image.get("source_card_image_id") or image.get("id"),
+            "source_gift_card_id": image.get("source_gift_card_id")
+            or image.get("gift_card_id"),
+        }
+        for image in (card_images or [])
+    ]
     buffer = BytesIO()
     with ZipFile(buffer, "w", ZIP_DEFLATED) as zip_file:
         zip_file.writestr("manifest.json", json.dumps(manifest, default=str))
-        zip_file.writestr("receipts.json", json.dumps(receipts or [], default=str))
-        zip_file.writestr("card_images.json", json.dumps(card_images or [], default=str))
+        zip_file.writestr("receipts.json", json.dumps(normalized_receipts, default=str))
+        zip_file.writestr("card_images.json", json.dumps(normalized_card_images, default=str))
         for filename, payload in (files or {}).items():
             zip_file.writestr(filename, payload)
     return buffer.getvalue()
@@ -823,6 +845,24 @@ def test_linked_image_package_attaches_to_imported_core_records(
     monkeypatch.setattr(data_transfer, "SessionLocal", session_factory)
     now = utc_now()
     db = session_factory()
+    db.add(
+        PurchaseBatch(
+            store_name="Existing",
+            purchase_date=now,
+            total_amount="1.00",
+            purchase_total_paid="1.00",
+        )
+    )
+    db.flush()
+    db.add(
+        GiftCard(
+            purchase_batch_id=1,
+            brand="Nike",
+            face_value="1.00",
+            acquisition_cost="1.00",
+        )
+    )
+    db.flush()
     purchase = PurchaseBatch(
         store_name="Best Buy",
         purchase_date=now,
@@ -853,7 +893,8 @@ def test_linked_image_package_attaches_to_imported_core_records(
         receipts=[
             {
                 "id": 100,
-                "purchase_batch_id": 10,
+                "purchase_batch_id": 9999,
+                "source_purchase_batch_id": 10,
                 "image_url": "/uploads/receipts/source.jpg",
                 "original_filename": "receipt.jpg",
             }
@@ -861,7 +902,8 @@ def test_linked_image_package_attaches_to_imported_core_records(
         card_images=[
             {
                 "id": 200,
-                "gift_card_id": 20,
+                "gift_card_id": 9999,
+                "source_gift_card_id": 20,
                 "image_type": "primary",
                 "original_image_url": "/uploads/card-images/source.jpg",
                 "original_filename": "card.jpg",
@@ -908,10 +950,124 @@ def test_linked_image_package_requires_core_import_first(monkeypatch, tmp_path):
 
     preview = preview_package(db, package)
 
-    assert preview["conflicts"]["missing_dependencies"][0]["missing"] == (
-        "imported_gift_card"
+    missing = preview["conflicts"]["missing_dependencies"][0]
+    assert missing["entity"] == "card_image"
+    assert missing["missing"] == "imported_gift_card"
+    assert missing["missing_source_id"] == 20
+    assert missing["source_environment"] == "local-test"
+    assert "source id 20" in missing["message"]
+    db.close()
+
+
+def test_linked_image_missing_mapping_reports_source_environment_mismatch(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api.data_transfer import load_package, preview_package
+
+    db = make_session_factory()()
+    now = utc_now()
+    purchase = PurchaseBatch(
+        store_name="Best Buy",
+        purchase_date=now,
+        total_amount="100.00",
+        purchase_total_paid="100.00",
+        imported_from_environment="test",
+        imported_source_id="10",
+        imported_at=now,
     )
-    assert "core transfer package" in preview["conflicts"]["missing_dependencies"][0]["message"]
+    db.add(purchase)
+    db.commit()
+    package = load_package(
+        linked_image_zip(
+            receipts=[
+                {
+                    "id": 100,
+                    "purchase_batch_id": 10,
+                    "image_url": "/uploads/receipts/source.jpg",
+                }
+            ],
+            source_environment="staging",
+        )
+    )
+
+    preview = preview_package(db, package)
+
+    missing = preview["conflicts"]["missing_dependencies"][0]
+    assert missing["source_environment"] == "staging"
+    assert missing["missing_source_id"] == 10
+    assert missing["source_environment_has_imported_records"] is False
+    assert "source environment 'staging'" in missing["message"]
+    db.close()
+
+
+def test_linked_image_sale_export_uses_source_card_and_purchase_ids(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api.data_transfer import (
+        collect_transfer_data,
+        image_transfer_card_images,
+        image_transfer_receipts,
+    )
+    from app.models.card_image import CardImage
+    from app.models.receipt import Receipt
+
+    session_factory = make_session_factory()
+    db = session_factory()
+    now = utc_now()
+    buyer = Buyer(name="Card Buyer")
+    purchase = PurchaseBatch(
+        store_name="Best Buy",
+        purchase_date=now,
+        total_amount="100.00",
+        purchase_total_paid="100.00",
+    )
+    db.add_all([buyer, purchase])
+    db.flush()
+    card = GiftCard(
+        purchase_batch_id=purchase.id,
+        brand="Best Buy",
+        face_value="100.00",
+        acquisition_cost="100.00",
+        status="SOLD_PENDING_PAYMENT",
+    )
+    sale = Sale(buyer_id=buyer.id, expected_payout="90.00")
+    db.add_all([card, sale])
+    db.flush()
+    receipt = Receipt(
+        purchase_batch_id=purchase.id,
+        image_url="/uploads/receipts/source.jpg",
+    )
+    card_image = CardImage(
+        gift_card_id=card.id,
+        image_type="primary",
+        original_image_url="/uploads/card-images/source.jpg",
+    )
+    db.add_all(
+        [
+            SaleGiftCard(sale_id=sale.id, gift_card_id=card.id),
+            receipt,
+            card_image,
+        ]
+    )
+    db.commit()
+
+    data = collect_transfer_data(
+        db,
+        purchase_ids=[],
+        sale_ids=[sale.id],
+        include_images=True,
+    )
+    linked_receipts = image_transfer_receipts(data["receipts"], "test")
+    linked_card_images = image_transfer_card_images(data["card_images"], "test")
+
+    assert linked_receipts[0]["source_purchase_batch_id"] == purchase.id
+    assert linked_receipts[0]["source_receipt_id"] == receipt.id
+    assert linked_card_images[0]["source_gift_card_id"] == card.id
+    assert linked_card_images[0]["source_card_image_id"] == card_image.id
     db.close()
 
 

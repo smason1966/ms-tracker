@@ -341,6 +341,49 @@ def write_image_payloads(zip_file: ZipFile, data: dict) -> None:
         )
 
 
+def source_receipt_id(receipt: dict) -> Any:
+    return receipt.get("source_receipt_id") or receipt.get("id")
+
+
+def source_card_image_id(image: dict) -> Any:
+    return image.get("source_card_image_id") or image.get("id")
+
+
+def source_receipt_purchase_id(receipt: dict) -> Any:
+    return receipt.get("source_purchase_batch_id") or receipt.get("purchase_batch_id")
+
+
+def source_card_image_gift_card_id(image: dict) -> Any:
+    return image.get("source_gift_card_id") or image.get("gift_card_id")
+
+
+def image_transfer_receipts(receipts: list[dict], source_environment: str | None) -> list[dict]:
+    return [
+        {
+            **receipt,
+            "source_environment": source_environment,
+            "source_receipt_id": receipt.get("id"),
+            "source_purchase_batch_id": receipt.get("purchase_batch_id"),
+        }
+        for receipt in receipts
+    ]
+
+
+def image_transfer_card_images(
+    card_images: list[dict],
+    source_environment: str | None,
+) -> list[dict]:
+    return [
+        {
+            **image,
+            "source_environment": source_environment,
+            "source_card_image_id": image.get("id"),
+            "source_gift_card_id": image.get("gift_card_id"),
+        }
+        for image in card_images
+    ]
+
+
 def query_by_ids(db: Session, model, ids: set[int]):
     if not ids:
         return []
@@ -593,10 +636,11 @@ def export_transfer(
             sale_ids,
             include_images=inline_images or linked_images,
         )
+        source_environment = os.getenv("MS_TRACKER_ENV", "test")
         manifest = {
             "export_version": EXPORT_VERSION,
             "exported_at": utc_now().isoformat(),
-            "source_environment": os.getenv("MS_TRACKER_ENV", "test"),
+            "source_environment": source_environment,
             "package_type": "linked_images" if linked_images else "core",
             "sensitive_transfer": sensitive,
             "warning": SENSITIVE_TRANSFER_WARNING if sensitive else None,
@@ -613,9 +657,17 @@ def export_transfer(
             },
         }
         if linked_images:
+            linked_receipts = image_transfer_receipts(
+                data["receipts"],
+                source_environment,
+            )
+            linked_card_images = image_transfer_card_images(
+                data["card_images"],
+                source_environment,
+            )
             image_data = {
-                "receipts": data["receipts"],
-                "card_images": data["card_images"],
+                "receipts": linked_receipts,
+                "card_images": linked_card_images,
             }
             manifest["sha256"] = hashlib.sha256(
                 package_json(image_data)
@@ -624,8 +676,11 @@ def export_transfer(
             buffer = BytesIO()
             with ZipFile(buffer, "w", ZIP_DEFLATED) as zip_file:
                 zip_file.writestr("manifest.json", package_json(manifest))
-                zip_file.writestr("receipts.json", package_json(data["receipts"]))
-                zip_file.writestr("card_images.json", package_json(data["card_images"]))
+                zip_file.writestr("receipts.json", package_json(linked_receipts))
+                zip_file.writestr(
+                    "card_images.json",
+                    package_json(linked_card_images),
+                )
                 write_image_payloads(zip_file, data)
 
             buffer.seek(0)
@@ -975,34 +1030,89 @@ def image_package_missing_core_records(
     source_environment: str | None,
 ) -> list[dict]:
     missing = []
+    if not source_environment:
+        missing.append(
+            {
+                "entity": "image_package",
+                "source_id": None,
+                "missing": "source_environment",
+                "missing_source_id": None,
+                "message": (
+                    "Linked image package is missing source_environment, so "
+                    "target imported records cannot be resolved."
+                ),
+            }
+        )
+        return missing
+
+    available_purchase_sources = {
+        row[0]
+        for row in db.query(PurchaseBatch.imported_source_id)
+        .filter(PurchaseBatch.imported_from_environment == source_environment)
+        .all()
+    }
+    available_card_sources = {
+        row[0]
+        for row in db.query(GiftCard.imported_source_id)
+        .filter(GiftCard.imported_from_environment == source_environment)
+        .all()
+    }
     for receipt in package["receipts"]:
+        purchase_source_id = source_receipt_purchase_id(receipt)
         if not find_imported_purchase(
             db,
-            {"id": receipt.get("purchase_batch_id")},
+            {"id": purchase_source_id},
             source_environment,
         ):
             missing.append(
                 {
                     "entity": "receipt",
-                    "source_id": receipt.get("id"),
+                    "source_id": source_receipt_id(receipt),
                     "missing": "imported_purchase_batch",
-                    "missing_source_id": receipt.get("purchase_batch_id"),
-                    "message": IMAGE_PACKAGE_CORE_REQUIRED_MESSAGE,
+                    "missing_source_id": purchase_source_id,
+                    "source_environment": source_environment,
+                    "source_environment_has_imported_records": bool(
+                        available_purchase_sources or available_card_sources
+                    ),
+                    "available_purchase_source_ids_sample": sorted(
+                        available_purchase_sources,
+                        key=str,
+                    )[:10],
+                    "message": (
+                        f"{IMAGE_PACKAGE_CORE_REQUIRED_MESSAGE} No imported "
+                        f"purchase_batch was found for source environment "
+                        f"{source_environment!r} and source id "
+                        f"{purchase_source_id!r}."
+                    ),
                 }
             )
     for image in package["card_images"]:
+        gift_card_source_id = source_card_image_gift_card_id(image)
         if not find_imported_card(
             db,
-            {"id": image.get("gift_card_id")},
+            {"id": gift_card_source_id},
             source_environment,
         ):
             missing.append(
                 {
                     "entity": "card_image",
-                    "source_id": image.get("id"),
+                    "source_id": source_card_image_id(image),
                     "missing": "imported_gift_card",
-                    "missing_source_id": image.get("gift_card_id"),
-                    "message": IMAGE_PACKAGE_CORE_REQUIRED_MESSAGE,
+                    "missing_source_id": gift_card_source_id,
+                    "source_environment": source_environment,
+                    "source_environment_has_imported_records": bool(
+                        available_purchase_sources or available_card_sources
+                    ),
+                    "available_gift_card_source_ids_sample": sorted(
+                        available_card_sources,
+                        key=str,
+                    )[:10],
+                    "message": (
+                        f"{IMAGE_PACKAGE_CORE_REQUIRED_MESSAGE} No imported "
+                        f"gift_card was found for source environment "
+                        f"{source_environment!r} and source id "
+                        f"{gift_card_source_id!r}."
+                    ),
                 }
             )
     return missing
@@ -1017,7 +1127,7 @@ def image_package_duplicate_receipts(
     for receipt in package["receipts"]:
         purchase = find_imported_purchase(
             db,
-            {"id": receipt.get("purchase_batch_id")},
+            {"id": source_receipt_purchase_id(receipt)},
             source_environment,
         )
         if not purchase:
@@ -1030,7 +1140,7 @@ def image_package_duplicate_receipts(
         else:
             continue
         if query.first():
-            duplicates.add(receipt.get("id"))
+            duplicates.add(source_receipt_id(receipt))
     return duplicates
 
 
@@ -1043,7 +1153,7 @@ def image_package_duplicate_card_images(
     for image in package["card_images"]:
         card = find_imported_card(
             db,
-            {"id": image.get("gift_card_id")},
+            {"id": source_card_image_gift_card_id(image)},
             source_environment,
         )
         if not card:
@@ -1057,7 +1167,7 @@ def image_package_duplicate_card_images(
         else:
             continue
         if query.first():
-            duplicates.add(image.get("id"))
+            duplicates.add(source_card_image_id(image))
     return duplicates
 
 
@@ -1311,18 +1421,19 @@ def apply_image_package(db: Session, package: dict) -> dict:
     created_card_images = 0
 
     for source in package["receipts"]:
-        if source.get("id") in duplicate_receipts:
+        receipt_source_id = source_receipt_id(source)
+        if receipt_source_id in duplicate_receipts:
             continue
         purchase = find_imported_purchase(
             db,
-            {"id": source.get("purchase_batch_id")},
+            {"id": source_receipt_purchase_id(source)},
             source_environment,
         )
         if not purchase:
             continue
         archive_candidates = [
             name for name in raw_zip.namelist()
-            if name.startswith(f"receipts/{source['id']}.")
+            if name.startswith(f"receipts/{receipt_source_id}.")
         ]
         image_url = (
             copy_archive_file(raw_zip, archive_candidates[0], RECEIPT_DIR)
@@ -1342,18 +1453,19 @@ def apply_image_package(db: Session, package: dict) -> dict:
         created_receipts += 1
 
     for source in package["card_images"]:
-        if source.get("id") in duplicate_card_images:
+        card_image_source_id = source_card_image_id(source)
+        if card_image_source_id in duplicate_card_images:
             continue
         card = find_imported_card(
             db,
-            {"id": source.get("gift_card_id")},
+            {"id": source_card_image_gift_card_id(source)},
             source_environment,
         )
         if not card:
             continue
         archive_candidates = [
             name for name in raw_zip.namelist()
-            if name.startswith(f"card_images/{source['id']}.")
+            if name.startswith(f"card_images/{card_image_source_id}.")
         ]
         image_url = (
             copy_archive_file(raw_zip, archive_candidates[0], CARD_IMAGE_DIR)
