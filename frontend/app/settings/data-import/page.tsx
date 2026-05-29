@@ -59,6 +59,14 @@ const DEFAULT_TRANSFER_CAPABILITIES: TransferCapabilities = {
   sensitive_export_enabled: false,
   sensitive_import_enabled: false,
 };
+const sensitiveWarningPanelClass =
+  "rounded-md border border-amber-500/60 bg-amber-950/90 p-4 text-sm text-amber-100 shadow-sm";
+const sensitiveWarningHeadingClass = "font-semibold text-amber-50";
+const sensitiveWarningTextClass = "mt-1 text-amber-100";
+const sensitiveWarningLabelClass =
+  "flex items-start gap-3 font-medium text-amber-50";
+const sensitiveWarningCheckboxClass =
+  "mt-1 h-4 w-4 rounded border-amber-300 bg-slate-950 accent-amber-400";
 
 function backendErrorMessage(body: unknown, fallback: string) {
   if (!body || typeof body !== "object") {
@@ -400,13 +408,13 @@ export default function DataImportPage() {
             </button>
           </div>
 
-          <div className="mt-5 rounded-md border border-amber-200 bg-amber-50/80 p-4 text-sm text-amber-950">
+          <div className={`mt-5 ${sensitiveWarningPanelClass}`}>
             {sensitiveTransferExportEnabled ? (
               <>
-                <label className="flex items-start gap-3 font-semibold">
+                <label className={sensitiveWarningLabelClass}>
                   <input
                     checked={includeSensitiveCredentials}
-                    className="mt-1"
+                    className={sensitiveWarningCheckboxClass}
                     onChange={(event) => {
                       setIncludeSensitiveCredentials(event.target.checked);
                       if (!event.target.checked) {
@@ -415,19 +423,21 @@ export default function DataImportPage() {
                     }}
                     type="checkbox"
                   />
-                  <span>Include sensitive credentials</span>
+                  <span className={sensitiveWarningHeadingClass}>
+                    Include sensitive credentials
+                  </span>
                 </label>
 
                 {includeSensitiveCredentials ? (
                   <div className="mt-3 space-y-3">
-                    <p>
+                    <p className="text-amber-100">
                       This export includes sensitive card numbers, PINs, and account
                       credentials. Store securely and delete after import.
                     </p>
-                    <label className="flex items-start gap-3 font-medium">
+                    <label className={sensitiveWarningLabelClass}>
                       <input
                         checked={acknowledgeSensitiveExport}
-                        className="mt-1"
+                        className={sensitiveWarningCheckboxClass}
                         onChange={(event) =>
                           setAcknowledgeSensitiveExport(event.target.checked)
                         }
@@ -451,8 +461,10 @@ export default function DataImportPage() {
               </>
             ) : (
               <div>
-                <p className="font-semibold">Sensitive credential export disabled</p>
-                <p className="mt-1">
+                <p className={sensitiveWarningHeadingClass}>
+                  Sensitive credential export disabled
+                </p>
+                <p className={sensitiveWarningTextClass}>
                   Normal transfer export remains available. Enable the sensitive
                   transfer flag only for temporary credential migration windows.
                 </p>
@@ -541,18 +553,20 @@ export default function DataImportPage() {
             </div>
 
             {preview.manifest.sensitive_transfer ? (
-              <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+              <div className={`mt-4 ${sensitiveWarningPanelClass}`}>
                 {sensitiveTransferImportEnabled ? (
                   <>
-                    <p className="font-semibold">Sensitive import acknowledgement</p>
-                    <p className="mt-1">
+                    <p className={sensitiveWarningHeadingClass}>
+                      Sensitive import acknowledgement
+                    </p>
+                    <p className={sensitiveWarningTextClass}>
                       This import contains sensitive card numbers, PINs, and account
                       credentials. Store securely and delete the ZIP after import.
                     </p>
-                    <label className="mt-3 flex items-start gap-2 font-medium">
+                    <label className={`mt-3 ${sensitiveWarningLabelClass}`}>
                       <input
                         checked={acknowledgeSensitiveImport}
-                        className="mt-1"
+                        className={sensitiveWarningCheckboxClass}
                         onChange={(event) =>
                           setAcknowledgeSensitiveImport(event.target.checked)
                         }
@@ -566,8 +580,10 @@ export default function DataImportPage() {
                   </>
                 ) : (
                   <>
-                    <p className="font-semibold">Sensitive import disabled</p>
-                    <p className="mt-1">
+                    <p className={sensitiveWarningHeadingClass}>
+                      Sensitive import disabled
+                    </p>
+                    <p className={sensitiveWarningTextClass}>
                       This package contains sensitive credentials, but sensitive
                       import is disabled for this environment.
                     </p>
