@@ -18,15 +18,22 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.buyer import Buyer
 from app.models.card_image import CardImage
+from app.models.credit_card import CreditCard
+from app.models.credit_card_reward_rule import CreditCardRewardRule
 from app.models.fuel_point_entry import FuelPointEntry
 from app.models.fuel_reward_account import FuelRewardAccount
 from app.models.gift_card import GiftCard
 from app.models.payment_account import PaymentAccount
+from app.models.player import Player
 from app.models.purchase_batch import PurchaseBatch
+from app.models.purchase_payment import PurchasePayment
 from app.models.receipt import Receipt
+from app.models.reward_program import RewardProgram
 from app.models.sale import Sale
+from app.models.sale_event import SaleEvent
 from app.models.sale_fuel_account import SaleFuelAccount
 from app.models.sale_gift_card import SaleGiftCard
+from app.models.spending_category import SpendingCategory
 from app.services.field_encryption import (
     CredentialDecryptionError,
     UNDECRYPTABLE_CREDENTIAL_MESSAGE,
@@ -281,99 +288,225 @@ def archive_file(
         return archive_name
 
 
+def archive_file_size(path_or_url: str | None) -> int:
+    if not path_or_url:
+        return 0
+
+    object_key = normalize_object_key(path_or_url)
+    try:
+        return len(storage.read(object_key))
+    except Exception:
+        source_path = local_upload_path(path_or_url)
+        if source_path is None:
+            return 0
+        return source_path.stat().st_size
+
+
 def package_json(payload: dict) -> bytes:
     return json.dumps(payload, default=json_default, indent=2, sort_keys=True).encode()
+
+
+def query_by_ids(db: Session, model, ids: set[int]):
+    if not ids:
+        return []
+    return db.query(model).filter(model.id.in_(ids)).all()
 
 
 def collect_transfer_data(
     db: Session,
     purchase_ids: list[int],
     sale_ids: list[int],
+    include_images: bool = False,
 ) -> dict:
+    purchase_id_set = set(purchase_ids)
+    sale_id_set = set(sale_ids)
+    card_id_set: set[int] = set()
+
+    for _ in range(4):
+        changed = False
+
+        if purchase_id_set:
+            for (card_id,) in (
+                db.query(GiftCard.id)
+                .filter(GiftCard.purchase_batch_id.in_(purchase_id_set))
+                .all()
+            ):
+                if card_id not in card_id_set:
+                    card_id_set.add(card_id)
+                    changed = True
+
+        if sale_id_set:
+            for link in (
+                db.query(SaleGiftCard)
+                .filter(SaleGiftCard.sale_id.in_(sale_id_set))
+                .all()
+            ):
+                if link.gift_card_id not in card_id_set:
+                    card_id_set.add(link.gift_card_id)
+                    changed = True
+
+        if card_id_set:
+            for card in query_by_ids(db, GiftCard, card_id_set):
+                if card.purchase_batch_id not in purchase_id_set:
+                    purchase_id_set.add(card.purchase_batch_id)
+                    changed = True
+
+            for (linked_sale_id,) in (
+                db.query(SaleGiftCard.sale_id)
+                .filter(SaleGiftCard.gift_card_id.in_(card_id_set))
+                .all()
+            ):
+                if linked_sale_id not in sale_id_set:
+                    sale_id_set.add(linked_sale_id)
+                    changed = True
+
+        if not changed:
+            break
+
     sale_links = (
         db.query(SaleGiftCard)
-        .filter(SaleGiftCard.sale_id.in_(sale_ids or [-1]))
+        .filter(SaleGiftCard.sale_id.in_(sale_id_set or {-1}))
         .all()
     )
-    sale_card_ids = {link.gift_card_id for link in sale_links}
-    explicit_cards = (
-        db.query(GiftCard)
-        .filter(GiftCard.purchase_batch_id.in_(purchase_ids or [-1]))
-        .all()
-    )
-    card_ids = {card.id for card in explicit_cards} | sale_card_ids
-    cards = (
-        db.query(GiftCard)
-        .filter(GiftCard.id.in_(card_ids or [-1]))
-        .all()
-    )
-    all_purchase_ids = set(purchase_ids) | {card.purchase_batch_id for card in cards}
-    purchases = (
-        db.query(PurchaseBatch)
-        .filter(PurchaseBatch.id.in_(all_purchase_ids or [-1]))
-        .all()
-    )
-    sales = db.query(Sale).filter(Sale.id.in_(sale_ids or [-1])).all()
+    for link in sale_links:
+        card_id_set.add(link.gift_card_id)
+
+    cards = query_by_ids(db, GiftCard, card_id_set)
+    for card in cards:
+        purchase_id_set.add(card.purchase_batch_id)
+
+    purchases = query_by_ids(db, PurchaseBatch, purchase_id_set)
+    sales = query_by_ids(db, Sale, sale_id_set)
     sale_fuel_links = (
         db.query(SaleFuelAccount)
-        .filter(SaleFuelAccount.sale_id.in_(sale_ids or [-1]))
+        .filter(SaleFuelAccount.sale_id.in_(sale_id_set or {-1}))
         .all()
     )
-    fuel_entry_account_ids = {
-        entry.fuel_reward_account_id
-        for entry in db.query(FuelPointEntry)
-        .filter(FuelPointEntry.purchase_batch_id.in_(all_purchase_ids or [-1]))
+    fuel_transactions = (
+        db.query(FuelPointEntry)
+        .filter(FuelPointEntry.purchase_batch_id.in_(purchase_id_set or {-1}))
         .all()
+    )
+    purchase_payments = (
+        db.query(PurchasePayment)
+        .filter(PurchasePayment.purchase_batch_id.in_(purchase_id_set or {-1}))
+        .all()
+    )
+    sale_events = (
+        db.query(SaleEvent)
+        .filter(SaleEvent.sale_id.in_(sale_id_set or {-1}))
+        .all()
+    )
+
+    fuel_account_ids = {
+        entry.fuel_reward_account_id for entry in fuel_transactions
+    } | {link.fuel_reward_account_id for link in sale_fuel_links}
+    buyer_ids = {sale.buyer_id for sale in sales if sale.buyer_id is not None} | {
+        card.buyer_id for card in cards if card.buyer_id is not None
     }
-    fuel_account_ids = fuel_entry_account_ids | {
-        link.fuel_reward_account_id for link in sale_fuel_links
-    }
-    buyer_ids = {sale.buyer_id for sale in sales}
     payment_account_ids = {
         sale.payment_account_id for sale in sales if sale.payment_account_id is not None
+    } | {
+        card.settlement_payment_account_id
+        for card in cards
+        if card.settlement_payment_account_id is not None
+    } | {
+        link.payment_account_id
+        for link in sale_links
+        if link.payment_account_id is not None
+    } | {
+        link.payment_account_id
+        for link in sale_fuel_links
+        if link.payment_account_id is not None
     }
-    buyers = db.query(Buyer).filter(Buyer.id.in_(buyer_ids or [-1])).all()
-    payment_accounts = (
-        db.query(PaymentAccount)
-        .filter(PaymentAccount.id.in_(payment_account_ids or [-1]))
-        .all()
+    credit_card_ids = {
+        purchase.credit_card_id
+        for purchase in purchases
+        if purchase.credit_card_id is not None
+    } | {
+        payment.credit_card_id
+        for payment in purchase_payments
+        if payment.credit_card_id is not None
+    }
+    player_ids = {
+        purchase.player_id for purchase in purchases if purchase.player_id is not None
+    }
+    reward_program_ids = {
+        payment.reward_program_id
+        for payment in purchase_payments
+        if payment.reward_program_id is not None
+    }
+    spending_category_ids = {
+        payment.spending_category_id
+        for payment in purchase_payments
+        if payment.spending_category_id is not None
+    }
+    reward_rule_ids = {
+        payment.matched_rule_id
+        for payment in purchase_payments
+        if payment.matched_rule_id is not None
+    }
+    credit_cards = query_by_ids(db, CreditCard, credit_card_ids)
+    players = query_by_ids(db, Player, player_ids)
+    reward_programs = query_by_ids(db, RewardProgram, reward_program_ids)
+    spending_categories = query_by_ids(db, SpendingCategory, spending_category_ids)
+    reward_rules = query_by_ids(db, CreditCardRewardRule, reward_rule_ids)
+    fuel_accounts = query_by_ids(db, FuelRewardAccount, fuel_account_ids)
+    buyer_ids.update(
+        account.buyer_id for account in fuel_accounts if account.buyer_id is not None
     )
+    buyers = query_by_ids(db, Buyer, buyer_ids)
+    payment_account_ids.update(
+        buyer.default_payment_account_id
+        for buyer in buyers
+        if buyer.default_payment_account_id is not None
+    )
+    payment_accounts = query_by_ids(db, PaymentAccount, payment_account_ids)
+    receipts = (
+        db.query(Receipt)
+        .filter(Receipt.purchase_batch_id.in_(purchase_id_set or {-1}))
+        .all()
+        if include_images
+        else []
+    )
+    card_images = (
+        db.query(CardImage)
+        .filter(CardImage.gift_card_id.in_(card_id_set or {-1}))
+        .all()
+        if include_images
+        else []
+    )
+    binary_payload_bytes = 0
+    if include_images:
+        binary_payload_bytes = sum(
+            archive_file_size(receipt.image_url) for receipt in receipts
+        ) + sum(
+            archive_file_size(image.original_image_url) for image in card_images
+        )
 
     return {
         "purchases": [row_dict(purchase) for purchase in purchases],
         "cards": [row_dict(card) for card in cards],
-        "receipts": [
-            row_dict(receipt)
-            for receipt in db.query(Receipt)
-            .filter(Receipt.purchase_batch_id.in_(all_purchase_ids or [-1]))
-            .all()
-        ],
-        "card_images": [
-            row_dict(image)
-            for image in db.query(CardImage)
-            .filter(CardImage.gift_card_id.in_(card_ids or [-1]))
-            .all()
-        ],
-        "fuel_transactions": [
-            row_dict(entry)
-            for entry in db.query(FuelPointEntry)
-            .filter(FuelPointEntry.purchase_batch_id.in_(all_purchase_ids or [-1]))
-            .all()
-        ],
+        "purchase_payments": [row_dict(payment) for payment in purchase_payments],
+        "receipts": [row_dict(receipt) for receipt in receipts],
+        "card_images": [row_dict(image) for image in card_images],
+        "fuel_transactions": [row_dict(entry) for entry in fuel_transactions],
         "sales": [row_dict(sale) for sale in sales],
         "sale_gift_cards": [row_dict(link) for link in sale_links],
-        "sale_fuel_accounts": [
-            row_dict(link)
-            for link in sale_fuel_links
-        ],
-        "fuel_accounts": [
-            row_dict(account)
-            for account in db.query(FuelRewardAccount)
-            .filter(FuelRewardAccount.id.in_(fuel_account_ids or [-1]))
-            .all()
-        ],
+        "sale_fuel_accounts": [row_dict(link) for link in sale_fuel_links],
+        "sale_events": [row_dict(event) for event in sale_events],
+        "fuel_accounts": [row_dict(account) for account in fuel_accounts],
         "buyers": [row_dict(buyer) for buyer in buyers],
         "payment_accounts": [row_dict(account) for account in payment_accounts],
+        "credit_cards": [row_dict(card) for card in credit_cards],
+        "players": [row_dict(player) for player in players],
+        "reward_programs": [row_dict(program) for program in reward_programs],
+        "spending_categories": [row_dict(category) for category in spending_categories],
+        "credit_card_reward_rules": [row_dict(rule) for rule in reward_rules],
+        "_metadata": {
+            "include_images": include_images,
+            "binary_payload_bytes": binary_payload_bytes,
+        },
     }
 
 
@@ -381,6 +514,7 @@ def collect_transfer_data(
 def export_transfer(
     purchases: str | None = None,
     sales: str | None = None,
+    include_images: bool = False,
     sensitive: bool = False,
     acknowledge_sensitive: bool = False,
 ):
@@ -414,7 +548,12 @@ def export_transfer(
                     },
                 )
 
-        data = collect_transfer_data(db, purchase_ids, sale_ids)
+        data = collect_transfer_data(
+            db,
+            purchase_ids,
+            sale_ids,
+            include_images=include_images,
+        )
         if sensitive:
             data = prepare_sensitive_transfer_data(data)
         manifest = {
@@ -427,8 +566,12 @@ def export_transfer(
                 "purchases": purchase_ids,
                 "sales": sale_ids,
             },
+            "include_images": include_images,
+            "binary_payload_bytes": data["_metadata"]["binary_payload_bytes"],
         }
-        checksum_payload = package_json(data)
+        checksum_payload = package_json(
+            {key: value for key, value in data.items() if not key.startswith("_")}
+        )
         manifest["sha256"] = hashlib.sha256(checksum_payload).hexdigest()
 
         buffer = BytesIO()
@@ -437,28 +580,41 @@ def export_transfer(
             for filename in [
                 "purchases",
                 "cards",
+                "purchase_payments",
                 "sales",
                 "fuel_transactions",
                 "receipts",
                 "card_images",
                 "sale_gift_cards",
                 "sale_fuel_accounts",
+                "sale_events",
                 "buyers",
                 "payment_accounts",
                 "fuel_accounts",
+                "credit_cards",
+                "players",
+                "reward_programs",
+                "spending_categories",
+                "credit_card_reward_rules",
             ]:
                 zip_file.writestr(f"{filename}.json", package_json(data[filename]))
 
-            for receipt in data["receipts"]:
-                archive_file(zip_file, receipt.get("image_url"), "receipts", receipt["id"])
+            if include_images:
+                for receipt in data["receipts"]:
+                    archive_file(
+                        zip_file,
+                        receipt.get("image_url"),
+                        "receipts",
+                        receipt["id"],
+                    )
 
-            for image in data["card_images"]:
-                archive_file(
-                    zip_file,
-                    image.get("original_image_url"),
-                    "card_images",
-                    image["id"],
-                )
+                for image in data["card_images"]:
+                    archive_file(
+                        zip_file,
+                        image.get("original_image_url"),
+                        "card_images",
+                        image["id"],
+                    )
 
         buffer.seek(0)
         filename = (
@@ -490,15 +646,22 @@ def load_package(contents: bytes) -> dict:
             "manifest": json.loads(zip_file.read("manifest.json")),
             "purchases": json.loads(zip_file.read("purchases.json")),
             "cards": json.loads(zip_file.read("cards.json")),
+            "purchase_payments": json.loads(zip_file.read("purchase_payments.json")) if "purchase_payments.json" in zip_file.namelist() else [],
             "sales": json.loads(zip_file.read("sales.json")),
             "fuel_transactions": json.loads(zip_file.read("fuel_transactions.json")),
             "receipts": json.loads(zip_file.read("receipts.json")) if "receipts.json" in zip_file.namelist() else [],
             "card_images": json.loads(zip_file.read("card_images.json")) if "card_images.json" in zip_file.namelist() else [],
             "sale_gift_cards": json.loads(zip_file.read("sale_gift_cards.json")) if "sale_gift_cards.json" in zip_file.namelist() else [],
             "sale_fuel_accounts": json.loads(zip_file.read("sale_fuel_accounts.json")) if "sale_fuel_accounts.json" in zip_file.namelist() else [],
+            "sale_events": json.loads(zip_file.read("sale_events.json")) if "sale_events.json" in zip_file.namelist() else [],
             "buyers": json.loads(zip_file.read("buyers.json")) if "buyers.json" in zip_file.namelist() else [],
             "payment_accounts": json.loads(zip_file.read("payment_accounts.json")) if "payment_accounts.json" in zip_file.namelist() else [],
             "fuel_accounts": json.loads(zip_file.read("fuel_accounts.json")) if "fuel_accounts.json" in zip_file.namelist() else [],
+            "credit_cards": json.loads(zip_file.read("credit_cards.json")) if "credit_cards.json" in zip_file.namelist() else [],
+            "players": json.loads(zip_file.read("players.json")) if "players.json" in zip_file.namelist() else [],
+            "reward_programs": json.loads(zip_file.read("reward_programs.json")) if "reward_programs.json" in zip_file.namelist() else [],
+            "spending_categories": json.loads(zip_file.read("spending_categories.json")) if "spending_categories.json" in zip_file.namelist() else [],
+            "credit_card_reward_rules": json.loads(zip_file.read("credit_card_reward_rules.json")) if "credit_card_reward_rules.json" in zip_file.namelist() else [],
         }
         package["_raw"] = contents
         return package
@@ -511,11 +674,16 @@ def preview_package(db: Session, package: dict) -> dict:
     duplicate_cards = []
     duplicate_purchases = []
     duplicate_check_warnings = []
+    source_environment = package["manifest"].get("source_environment")
+    duplicate_card_source_ids = set()
+    duplicate_purchase_source_ids = set()
 
     for card in package["cards"]:
         duplicate, payload, limited = find_duplicate_card_for_import(db, card, package)
         if payload:
-            duplicate_cards.append(payload)
+            duplicate_card_source_ids.add(card.get("id"))
+            if payload.get("match_type") != "imported_source_id":
+                duplicate_cards.append(payload)
         elif limited:
             duplicate_check_warnings.append(
                 {
@@ -529,11 +697,19 @@ def preview_package(db: Session, package: dict) -> dict:
             )
 
     for purchase in package["purchases"]:
-        duplicate = find_duplicate_purchase(db, purchase)
+        duplicate = find_duplicate_purchase(db, purchase, source_environment)
         if duplicate:
+            duplicate_purchase_source_ids.add(purchase.get("id"))
             duplicate_purchases.append(
                 {"source_id": purchase.get("id"), "existing_id": duplicate.id}
             )
+
+    reusable_sales = {
+        sale.get("id")
+        for sale in package["sales"]
+        if find_imported_sale(db, sale, source_environment)
+    }
+    missing_dependencies = missing_dependency_messages(package)
 
     return {
         "manifest": package["manifest"],
@@ -541,13 +717,30 @@ def preview_package(db: Session, package: dict) -> dict:
             "purchases": len(package["purchases"]),
             "cards": len(package["cards"]),
             "sales": len(package["sales"]),
+            "purchase_payments": len(package["purchase_payments"]),
             "fuel_transactions": len(package["fuel_transactions"]),
             "receipts": len(package["receipts"]),
             "card_images": len(package["card_images"]),
+            "sale_events": len(package["sale_events"]),
+        },
+        "plan": {
+            "create": {
+                "purchases": len(package["purchases"]) - len(duplicate_purchase_source_ids),
+                "cards": len(package["cards"]) - len(duplicate_card_source_ids),
+                "sales": len(package["sales"]) - len(reusable_sales),
+            },
+            "reuse": {
+                "purchases": len(duplicate_purchase_source_ids),
+                "cards": len(duplicate_card_source_ids),
+                "sales": len(reusable_sales),
+            },
+            "missing_dependencies": missing_dependencies,
+            "binary_payload_bytes": package["manifest"].get("binary_payload_bytes", 0),
         },
         "conflicts": {
             "duplicate_cards": duplicate_cards,
             "duplicate_purchases": duplicate_purchases,
+            "missing_dependencies": missing_dependencies,
         },
         "warnings": {
             "duplicate_check_limited": duplicate_check_warnings,
@@ -590,7 +783,29 @@ def copy_archive_file(zip_file: ZipFile, archive_name: str, destination_dir: Pat
     return storage.generate_view_url(stored.object_key)
 
 
-def find_duplicate_purchase(db: Session, purchase: dict) -> PurchaseBatch | None:
+def find_imported_purchase(
+    db: Session,
+    purchase: dict,
+    source_environment: str | None,
+) -> PurchaseBatch | None:
+    if not source_environment or purchase.get("id") is None:
+        return None
+    return (
+        db.query(PurchaseBatch)
+        .filter(PurchaseBatch.imported_from_environment == source_environment)
+        .filter(PurchaseBatch.imported_source_id == str(purchase.get("id")))
+        .first()
+    )
+
+
+def find_duplicate_purchase(
+    db: Session,
+    purchase: dict,
+    source_environment: str | None = None,
+) -> PurchaseBatch | None:
+    imported = find_imported_purchase(db, purchase, source_environment)
+    if imported:
+        return imported
     return (
         db.query(PurchaseBatch)
         .filter(PurchaseBatch.store_name == purchase.get("store_name"))
@@ -598,6 +813,90 @@ def find_duplicate_purchase(db: Session, purchase: dict) -> PurchaseBatch | None
         .filter(PurchaseBatch.purchase_total_paid == parse_decimal(purchase.get("purchase_total_paid")))
         .first()
     )
+
+
+def find_imported_sale(
+    db: Session,
+    sale: dict,
+    source_environment: str | None,
+) -> Sale | None:
+    if not source_environment or sale.get("id") is None:
+        return None
+    return (
+        db.query(Sale)
+        .filter(Sale.imported_from_environment == source_environment)
+        .filter(Sale.imported_source_id == str(sale.get("id")))
+        .first()
+    )
+
+
+def missing_dependency_messages(package: dict) -> list[dict]:
+    purchase_ids = {purchase.get("id") for purchase in package["purchases"]}
+    card_ids = {card.get("id") for card in package["cards"]}
+    sale_ids = {sale.get("id") for sale in package["sales"]}
+    buyer_ids = {buyer.get("id") for buyer in package["buyers"]}
+    fuel_account_ids = {account.get("id") for account in package["fuel_accounts"]}
+    messages = []
+
+    for sale in package["sales"]:
+        if sale.get("buyer_id") not in buyer_ids:
+            messages.append(
+                {
+                    "entity": "sale",
+                    "source_id": sale.get("id"),
+                    "missing": "buyer",
+                    "missing_source_id": sale.get("buyer_id"),
+                }
+            )
+    for card in package["cards"]:
+        if card.get("purchase_batch_id") not in purchase_ids:
+            messages.append(
+                {
+                    "entity": "gift_card",
+                    "source_id": card.get("id"),
+                    "missing": "purchase_batch",
+                    "missing_source_id": card.get("purchase_batch_id"),
+                }
+            )
+    for link in package["sale_gift_cards"]:
+        if link.get("sale_id") not in sale_ids:
+            messages.append(
+                {
+                    "entity": "sale_gift_card",
+                    "source_id": link.get("id"),
+                    "missing": "sale",
+                    "missing_source_id": link.get("sale_id"),
+                }
+            )
+        if link.get("gift_card_id") not in card_ids:
+            messages.append(
+                {
+                    "entity": "sale_gift_card",
+                    "source_id": link.get("id"),
+                    "missing": "gift_card",
+                    "missing_source_id": link.get("gift_card_id"),
+                }
+            )
+    for link in package["sale_fuel_accounts"]:
+        if link.get("sale_id") not in sale_ids:
+            messages.append(
+                {
+                    "entity": "sale_fuel_account",
+                    "source_id": link.get("id"),
+                    "missing": "sale",
+                    "missing_source_id": link.get("sale_id"),
+                }
+            )
+        if link.get("fuel_reward_account_id") not in fuel_account_ids:
+            messages.append(
+                {
+                    "entity": "sale_fuel_account",
+                    "source_id": link.get("id"),
+                    "missing": "fuel_reward_account",
+                    "missing_source_id": link.get("fuel_reward_account_id"),
+                }
+            )
+    return messages
 
 
 def duplicate_card_payload(
@@ -663,6 +962,21 @@ def find_sensitive_duplicate_card(
     return None, None, "", duplicate_check_limited
 
 
+def find_imported_card(
+    db: Session,
+    source: dict,
+    source_environment: str | None,
+) -> GiftCard | None:
+    if not source_environment or source.get("id") is None:
+        return None
+    return (
+        db.query(GiftCard)
+        .filter(GiftCard.imported_from_environment == source_environment)
+        .filter(GiftCard.imported_source_id == str(source.get("id")))
+        .first()
+    )
+
+
 def find_standard_duplicate_card(db: Session, source: dict) -> GiftCard | None:
     if not source.get("card_number_encrypted"):
         return None
@@ -681,6 +995,28 @@ def find_duplicate_card_for_import(
     source: dict,
     package: dict,
 ) -> tuple[GiftCard | None, dict | None, bool]:
+    imported_duplicate = find_imported_card(
+        db,
+        source,
+        package["manifest"].get("source_environment"),
+    )
+    if imported_duplicate:
+        matched_value = (
+            source.get("confirmed_redemption_code")
+            or source.get("confirmed_card_number")
+            or source.get("card_number_encrypted")
+        )
+        return (
+            imported_duplicate,
+            duplicate_card_payload(
+                source=source,
+                duplicate=imported_duplicate,
+                matched_value=matched_value,
+                match_type="imported_source_id",
+            ),
+            False,
+        )
+
     if package["manifest"].get("sensitive_transfer"):
         duplicate, matched_value, match_type, limited = find_sensitive_duplicate_card(
             db,
@@ -741,105 +1077,115 @@ async def apply_transfer(
                     "conflicts": preview["conflicts"]["duplicate_cards"],
                 },
             )
+        if preview["conflicts"].get("missing_dependencies"):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "missing_dependencies",
+                    "message": "Transfer package is missing required linked records.",
+                    "conflicts": preview["conflicts"]["missing_dependencies"],
+                },
+            )
 
         purchase_map: dict[int, int] = {}
         card_map: dict[int, int] = {}
         sale_map: dict[int, int] = {}
+        credit_card_map: dict[int, int] = {}
+        player_map: dict[int, int] = {}
+        reward_program_map: dict[int, int] = {}
+        spending_category_map: dict[int, int] = {}
+        reused_sale_source_ids: set[int] = set()
         created_purchase_count = 0
+        created_card_count = 0
+        created_sale_count = 0
         imported_at = utc_now()
         source_environment = package["manifest"].get("source_environment")
 
-        for source in package["purchases"]:
-            duplicate_purchase = find_duplicate_purchase(db, source)
-            if duplicate_purchase:
-                purchase_map[source["id"]] = duplicate_purchase.id
-                continue
+        for source in package["players"]:
+            player = db.query(Player).filter(Player.label == source["label"]).first()
+            if not player:
+                player = Player(
+                    label=source["label"],
+                    name=source.get("name"),
+                    notes=source.get("notes"),
+                    active=source.get("active", True),
+                    created_at=parse_datetime(source.get("created_at")) or imported_at,
+                    updated_at=imported_at,
+                )
+                db.add(player)
+                db.flush()
+            player_map[source["id"]] = player.id
 
-            purchase = PurchaseBatch(
-                store_name=source["store_name"],
-                purchase_date=parse_datetime(source["purchase_date"]),
-                total_amount=source.get("total_amount") or 0,
-                purchase_total_paid=source.get("purchase_total_paid"),
-                sales_tax=source.get("sales_tax"),
-                activation_fees=source.get("activation_fees"),
-                discounts=source.get("discounts"),
-                fuel_point_estimated_value=source.get("fuel_point_estimated_value"),
-                fuel_points_quantity=source.get("fuel_points_quantity"),
-                fuel_points_unit=source.get("fuel_points_unit"),
-                fuel_points_notes=source.get("fuel_points_notes"),
-                financial_notes=source.get("financial_notes"),
-                notes=source.get("notes"),
-                created_at=parse_datetime(source.get("created_at")) or imported_at,
-                updated_at=imported_at,
-                imported_from_environment=source_environment,
-                imported_source_id=str(source["id"]),
-                imported_at=imported_at,
+        for source in package["reward_programs"]:
+            program = (
+                db.query(RewardProgram)
+                .filter(RewardProgram.short_code == source["short_code"])
+                .first()
             )
-            db.add(purchase)
-            db.flush()
-            purchase_map[source["id"]] = purchase.id
-            created_purchase_count += 1
+            if not program:
+                program = RewardProgram(
+                    name=source["name"],
+                    short_code=source["short_code"],
+                    category=source.get("category") or "other",
+                    estimated_value_cents_per_point=source.get(
+                        "estimated_value_cents_per_point"
+                    ),
+                    value_unit=source.get("value_unit"),
+                    eligible_for_credit_cards=source.get(
+                        "eligible_for_credit_cards",
+                        True,
+                    ),
+                    transferable=source.get("transferable", False),
+                    active=source.get("active", True),
+                    notes=source.get("notes"),
+                    created_at=parse_datetime(source.get("created_at")) or imported_at,
+                    updated_at=imported_at,
+                )
+                db.add(program)
+                db.flush()
+            reward_program_map[source["id"]] = program.id
 
-        for source in package["cards"]:
-            if source.get("purchase_batch_id") not in purchase_map:
-                continue
-            duplicate, _, _ = find_duplicate_card_for_import(db, source, package)
-            if duplicate and not allow_duplicates:
-                continue
-
-            card = GiftCard(
-                purchase_batch_id=purchase_map[source["purchase_batch_id"]],
-                brand=source["brand"],
-                face_value=source.get("face_value") or 0,
-                acquisition_cost=source.get("acquisition_cost"),
-                status=source.get("status") or "NEEDS_VERIFICATION",
-                card_number_encrypted=encrypt_field(
-                    source.get("card_number_encrypted")
-                ),
-                pin_encrypted=encrypt_field(source.get("pin_encrypted")),
-                confirmed_card_number=encrypt_field(
-                    source.get("confirmed_card_number")
-                    or source.get("card_number_encrypted")
-                ),
-                confirmed_pin=encrypt_field(
-                    source.get("confirmed_pin") or source.get("pin_encrypted")
-                ),
-                confirmed_redemption_code=encrypt_field(
-                    source.get("confirmed_redemption_code")
-                ),
-                confirmed_at=parse_datetime(source.get("confirmed_at")),
-                confirmed_source=source.get("confirmed_source"),
-                sold_to=source.get("sold_to"),
-                sold_date=parse_date(source.get("sold_date")),
-                sale_price=source.get("sale_price"),
-                sale_notes=source.get("sale_notes"),
-                asking_price=source.get("asking_price"),
-                expected_payout=source.get("expected_payout"),
-                liquidation_rate=source.get("liquidation_rate"),
-                reserved_at=parse_datetime(source.get("reserved_at")),
-                sold_at=parse_datetime(source.get("sold_at")),
-                expected_payment_date=parse_date(source.get("expected_payment_date")),
-                settlement_received_at=parse_datetime(source.get("settlement_received_at")),
-                payout_received=source.get("payout_received"),
-                internal_notes=source.get("internal_notes"),
-                verified_balance=source.get("verified_balance"),
-                verified_at=parse_datetime(source.get("verified_at")),
-                verification_notes=source.get("verification_notes"),
-                verification_source=source.get("verification_source"),
-                verification_status=source.get("verification_status") or "PENDING",
-                detected_card_number=encrypt_field(source.get("detected_card_number")),
-                detected_pin=encrypt_field(source.get("detected_pin")),
-                notes=source.get("notes"),
-                void_reason=source.get("void_reason"),
-                created_at=parse_datetime(source.get("created_at")) or imported_at,
-                updated_at=imported_at,
-                imported_from_environment=source_environment,
-                imported_source_id=str(source["id"]),
-                imported_at=imported_at,
+        for source in package["spending_categories"]:
+            category = (
+                db.query(SpendingCategory)
+                .filter(SpendingCategory.key == source["key"])
+                .first()
             )
-            db.add(card)
-            db.flush()
-            card_map[source["id"]] = card.id
+            if not category:
+                category = SpendingCategory(
+                    key=source["key"],
+                    name=source["name"],
+                    active=source.get("active", True),
+                    notes=source.get("notes"),
+                    created_at=parse_datetime(source.get("created_at")) or imported_at,
+                )
+                db.add(category)
+                db.flush()
+            spending_category_map[source["id"]] = category.id
+
+        for source in package["credit_cards"]:
+            card = (
+                db.query(CreditCard)
+                .filter(CreditCard.nickname == source["nickname"])
+                .filter(CreditCard.last_four == source.get("last_four"))
+                .first()
+            )
+            if not card:
+                card = CreditCard(
+                    player_id=player_map.get(source.get("player_id")),
+                    nickname=source["nickname"],
+                    issuer=source.get("issuer") or "Unknown",
+                    network=source.get("network"),
+                    last_four=source.get("last_four"),
+                    credit_limit=source.get("credit_limit"),
+                    current_balance=source.get("current_balance"),
+                    is_active=source.get("is_active", True),
+                    created_at=parse_datetime(source.get("created_at")) or imported_at,
+                    updated_at=imported_at,
+                )
+                db.add(card)
+                db.flush()
+            credit_card_map[source["id"]] = card.id
 
         payment_by_source: dict[int, PaymentAccount] = {}
         for source in package["payment_accounts"]:
@@ -893,6 +1239,119 @@ async def apply_transfer(
                 db.flush()
             buyer_by_source[source["id"]] = buyer
 
+        for source in package["purchases"]:
+            duplicate_purchase = find_duplicate_purchase(
+                db,
+                source,
+                source_environment,
+            )
+            if duplicate_purchase:
+                purchase_map[source["id"]] = duplicate_purchase.id
+                continue
+
+            purchase = PurchaseBatch(
+                store_name=source["store_name"],
+                purchase_date=parse_datetime(source["purchase_date"]),
+                total_amount=source.get("total_amount") or 0,
+                purchase_total_paid=source.get("purchase_total_paid"),
+                sales_tax=source.get("sales_tax"),
+                activation_fees=source.get("activation_fees"),
+                discounts=source.get("discounts"),
+                fuel_point_estimated_value=source.get("fuel_point_estimated_value"),
+                fuel_points_quantity=source.get("fuel_points_quantity"),
+                fuel_points_unit=source.get("fuel_points_unit"),
+                fuel_points_notes=source.get("fuel_points_notes"),
+                financial_notes=source.get("financial_notes"),
+                notes=source.get("notes"),
+                credit_card_id=credit_card_map.get(source.get("credit_card_id")),
+                player_id=player_map.get(source.get("player_id")),
+                created_at=parse_datetime(source.get("created_at")) or imported_at,
+                updated_at=imported_at,
+                imported_from_environment=source_environment,
+                imported_source_id=str(source["id"]),
+                imported_at=imported_at,
+            )
+            db.add(purchase)
+            db.flush()
+            purchase_map[source["id"]] = purchase.id
+            created_purchase_count += 1
+
+        for source in package["cards"]:
+            if source.get("purchase_batch_id") not in purchase_map:
+                continue
+            duplicate, payload, _ = find_duplicate_card_for_import(db, source, package)
+            if duplicate and payload and payload.get("match_type") == "imported_source_id":
+                card_map[source["id"]] = duplicate.id
+                continue
+            if duplicate and not allow_duplicates:
+                continue
+
+            card = GiftCard(
+                purchase_batch_id=purchase_map[source["purchase_batch_id"]],
+                brand=source["brand"],
+                face_value=source.get("face_value") or 0,
+                acquisition_cost=source.get("acquisition_cost"),
+                status=source.get("status") or "NEEDS_VERIFICATION",
+                card_source=source.get("card_source") or "physical",
+                card_number_encrypted=encrypt_field(
+                    source.get("card_number_encrypted")
+                ),
+                pin_encrypted=encrypt_field(source.get("pin_encrypted")),
+                confirmed_card_number=encrypt_field(
+                    source.get("confirmed_card_number")
+                    or source.get("card_number_encrypted")
+                ),
+                confirmed_pin=encrypt_field(
+                    source.get("confirmed_pin") or source.get("pin_encrypted")
+                ),
+                confirmed_redemption_code=encrypt_field(
+                    source.get("confirmed_redemption_code")
+                ),
+                confirmed_at=parse_datetime(source.get("confirmed_at")),
+                confirmed_source=source.get("confirmed_source"),
+                sold_to=source.get("sold_to"),
+                sold_date=parse_date(source.get("sold_date")),
+                sale_price=source.get("sale_price"),
+                sale_notes=source.get("sale_notes"),
+                asking_price=source.get("asking_price"),
+                expected_payout=source.get("expected_payout"),
+                liquidation_rate=source.get("liquidation_rate"),
+                buyer_id=buyer_by_source.get(source.get("buyer_id")).id
+                if "buyer_by_source" in locals()
+                and buyer_by_source.get(source.get("buyer_id"))
+                else None,
+                reserved_at=parse_datetime(source.get("reserved_at")),
+                sold_at=parse_datetime(source.get("sold_at")),
+                expected_payment_date=parse_date(source.get("expected_payment_date")),
+                settlement_payment_account_id=(
+                    payment_by_source.get(source.get("settlement_payment_account_id")).id
+                    if "payment_by_source" in locals()
+                    and payment_by_source.get(source.get("settlement_payment_account_id"))
+                    else None
+                ),
+                settlement_received_at=parse_datetime(source.get("settlement_received_at")),
+                payout_received=source.get("payout_received"),
+                internal_notes=source.get("internal_notes"),
+                verified_balance=source.get("verified_balance"),
+                verified_at=parse_datetime(source.get("verified_at")),
+                verification_notes=source.get("verification_notes"),
+                verification_source=source.get("verification_source"),
+                verification_status=source.get("verification_status") or "PENDING",
+                detected_card_number=encrypt_field(source.get("detected_card_number")),
+                detected_pin=encrypt_field(source.get("detected_pin")),
+                notes=source.get("notes"),
+                void_reason=source.get("void_reason"),
+                created_at=parse_datetime(source.get("created_at")) or imported_at,
+                updated_at=imported_at,
+                imported_from_environment=source_environment,
+                imported_source_id=str(source["id"]),
+                imported_at=imported_at,
+            )
+            db.add(card)
+            db.flush()
+            card_map[source["id"]] = card.id
+            created_card_count += 1
+
         fuel_account_by_source: dict[int, FuelRewardAccount] = {}
         for source in package["fuel_accounts"]:
             account = (
@@ -927,11 +1386,70 @@ async def apply_transfer(
                 db.flush()
             fuel_account_by_source[source["id"]] = account
 
+        for source in package["purchase_payments"]:
+            if source.get("purchase_batch_id") not in purchase_map:
+                continue
+            existing_payment = (
+                db.query(PurchasePayment)
+                .filter(
+                    PurchasePayment.purchase_batch_id
+                    == purchase_map[source["purchase_batch_id"]]
+                )
+                .filter(PurchasePayment.payment_type == source.get("payment_type"))
+                .filter(PurchasePayment.amount == parse_decimal(source.get("amount")))
+                .first()
+            )
+            if existing_payment:
+                continue
+            db.add(
+                PurchasePayment(
+                    purchase_batch_id=purchase_map[source["purchase_batch_id"]],
+                    payment_type=source.get("payment_type") or "credit_card",
+                    credit_card_id=credit_card_map.get(source.get("credit_card_id")),
+                    reward_program_id=reward_program_map.get(
+                        source.get("reward_program_id")
+                    ),
+                    spending_category_id=spending_category_map.get(
+                        source.get("spending_category_id")
+                    ),
+                    matched_rule_id=None,
+                    amount=source.get("amount") or 0,
+                    reward_multiplier=source.get("reward_multiplier"),
+                    estimated_rewards_earned=source.get("estimated_rewards_earned"),
+                    applied_multiplier=source.get("applied_multiplier"),
+                    calculated_rewards=source.get("calculated_rewards"),
+                    reward_type=source.get("reward_type"),
+                    points_earned=source.get("points_earned"),
+                    cashback_amount=source.get("cashback_amount"),
+                    statement_credit_amount=source.get("statement_credit_amount"),
+                    purchase_discount_amount=source.get("purchase_discount_amount"),
+                    effective_savings_amount=source.get("effective_savings_amount"),
+                    priority=source.get("priority"),
+                    calculation_source=source.get("calculation_source"),
+                    credit_card_product_snapshot=source.get(
+                        "credit_card_product_snapshot"
+                    ),
+                    rewards_type=source.get("rewards_type"),
+                    notes=source.get("notes"),
+                    created_at=parse_datetime(source.get("created_at")) or imported_at,
+                )
+            )
+
         for source in package["fuel_transactions"]:
             if source.get("purchase_batch_id") not in purchase_map:
                 continue
             account = fuel_account_by_source.get(source["fuel_reward_account_id"])
             if not account:
+                continue
+            existing_entry = (
+                db.query(FuelPointEntry)
+                .filter(FuelPointEntry.purchase_batch_id == purchase_map[source["purchase_batch_id"]])
+                .filter(FuelPointEntry.fuel_reward_account_id == account.id)
+                .filter(FuelPointEntry.earned_date == parse_date(source["earned_date"]))
+                .filter(FuelPointEntry.points_earned == (source.get("points_earned") or 0))
+                .first()
+            )
+            if existing_entry:
                 continue
             entry = FuelPointEntry(
                 fuel_reward_account_id=account.id,
@@ -948,6 +1466,11 @@ async def apply_transfer(
             db.add(entry)
 
         for source in package["sales"]:
+            imported_sale = find_imported_sale(db, source, source_environment)
+            if imported_sale:
+                sale_map[source["id"]] = imported_sale.id
+                reused_sale_source_ids.add(source["id"])
+                continue
             buyer = buyer_by_source.get(source["buyer_id"])
             if not buyer:
                 continue
@@ -957,6 +1480,9 @@ async def apply_transfer(
                 expected_payout=source.get("expected_payout") or 0,
                 card_payout_rate=source.get("card_payout_rate"),
                 fuel_rate_per_1000=source.get("fuel_rate_per_1000"),
+                expected_payment_date=parse_datetime(
+                    source.get("expected_payment_date")
+                ),
                 payout_received=source.get("payout_received"),
                 payment_account_id=(
                     payment_by_source.get(source.get("payment_account_id")).id
@@ -964,6 +1490,16 @@ async def apply_transfer(
                     else None
                 ),
                 status=source.get("status") or "SOLD_PENDING_PAYMENT",
+                buyer_reference=source.get("buyer_reference"),
+                internal_tags=source.get("internal_tags"),
+                export_profile=source.get("export_profile"),
+                settlement_status_notes=source.get("settlement_status_notes"),
+                manual_payout_override_amount=source.get(
+                    "manual_payout_override_amount"
+                ),
+                linked_external_reference_ids=source.get(
+                    "linked_external_reference_ids"
+                ),
                 notes=source.get("notes"),
                 created_at=parse_datetime(source.get("created_at")) or imported_at,
                 updated_at=imported_at,
@@ -974,21 +1510,55 @@ async def apply_transfer(
             db.add(sale)
             db.flush()
             sale_map[source["id"]] = sale.id
+            created_sale_count += 1
 
         for source in package["sale_gift_cards"]:
             if source.get("sale_id") in sale_map and source.get("gift_card_id") in card_map:
+                existing_link = (
+                    db.query(SaleGiftCard)
+                    .filter(SaleGiftCard.sale_id == sale_map[source["sale_id"]])
+                    .filter(
+                        SaleGiftCard.gift_card_id == card_map[source["gift_card_id"]]
+                    )
+                    .first()
+                )
+                if existing_link:
+                    continue
                 db.add(
                     SaleGiftCard(
                         sale_id=sale_map[source["sale_id"]],
                         gift_card_id=card_map[source["gift_card_id"]],
                         expected_payout=source.get("expected_payout"),
                         payout_received=source.get("payout_received"),
+                        payment_account_id=(
+                            payment_by_source.get(
+                                source.get("payment_account_id")
+                            ).id
+                            if payment_by_source.get(source.get("payment_account_id"))
+                            else None
+                        ),
+                        settlement_received_at=parse_datetime(
+                            source.get("settlement_received_at")
+                        ),
+                        adjustment_amount=source.get("adjustment_amount"),
+                        adjustment_reason=source.get("adjustment_reason"),
+                        settlement_notes=source.get("settlement_notes"),
+                        created_at=parse_datetime(source.get("created_at"))
+                        or imported_at,
                     )
                 )
 
         for source in package["sale_fuel_accounts"]:
             account = fuel_account_by_source.get(source.get("fuel_reward_account_id"))
             if source.get("sale_id") in sale_map and account:
+                existing_link = (
+                    db.query(SaleFuelAccount)
+                    .filter(SaleFuelAccount.sale_id == sale_map[source["sale_id"]])
+                    .filter(SaleFuelAccount.fuel_reward_account_id == account.id)
+                    .first()
+                )
+                if existing_link:
+                    continue
                 db.add(
                     SaleFuelAccount(
                         sale_id=sale_map[source["sale_id"]],
@@ -999,8 +1569,43 @@ async def apply_transfer(
                         fuel_overage_override=source.get("fuel_overage_override", False),
                         overage_points=source.get("overage_points"),
                         payout_received=source.get("payout_received"),
+                        payment_account_id=(
+                            payment_by_source.get(
+                                source.get("payment_account_id")
+                            ).id
+                            if payment_by_source.get(source.get("payment_account_id"))
+                            else None
+                        ),
+                        settlement_received_at=parse_datetime(
+                            source.get("settlement_received_at")
+                        ),
+                        adjustment_amount=source.get("adjustment_amount"),
+                        adjustment_reason=source.get("adjustment_reason"),
+                        settlement_notes=source.get("settlement_notes"),
+                        created_at=parse_datetime(source.get("created_at"))
+                        or imported_at,
                     )
                 )
+
+        for source in package["sale_events"]:
+            if source.get("sale_id") not in sale_map:
+                continue
+            if source.get("sale_id") in reused_sale_source_ids:
+                continue
+            db.add(
+                SaleEvent(
+                    sale_id=sale_map[source["sale_id"]],
+                    action=source.get("action") or "imported",
+                    affected_asset_count=source.get("affected_asset_count"),
+                    user_label=source.get("user_label"),
+                    field_name=source.get("field_name"),
+                    old_value=source.get("old_value"),
+                    new_value=source.get("new_value"),
+                    reason=source.get("reason"),
+                    notes=source.get("notes"),
+                    created_at=parse_datetime(source.get("created_at")) or imported_at,
+                )
+            )
 
         raw_zip = ZipFile(BytesIO(package["_raw"]))
         for source in package["receipts"]:
@@ -1053,8 +1658,8 @@ async def apply_transfer(
             "source_environment": source_environment,
             "created": {
                 "purchases": created_purchase_count,
-                "cards": len(card_map),
-                "sales": len(sale_map),
+                "cards": created_card_count,
+                "sales": created_sale_count,
             },
             "skipped": {
                 "duplicate_cards": len(preview["conflicts"]["duplicate_cards"]),

@@ -19,6 +19,12 @@ type ImportPreview = {
     sha256?: string;
   };
   counts: Record<string, number>;
+  plan?: {
+    create: Record<string, number>;
+    reuse: Record<string, number>;
+    missing_dependencies: Array<Record<string, unknown>>;
+    binary_payload_bytes: number;
+  };
   conflicts: {
     duplicate_cards: Array<{
       source_id: number;
@@ -95,6 +101,7 @@ export default function DataImportPage() {
   const [saleIds, setSaleIds] = useState("");
   const [includeSensitiveCredentials, setIncludeSensitiveCredentials] =
     useState(false);
+  const [includeImages, setIncludeImages] = useState(false);
   const [acknowledgeSensitiveExport, setAcknowledgeSensitiveExport] =
     useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -220,6 +227,9 @@ export default function DataImportPage() {
       if (sensitive) {
         params.set("sensitive", "true");
         params.set("acknowledge_sensitive", "true");
+      }
+      if (includeImages) {
+        params.set("include_images", "true");
       }
 
       const response = await fetch(
@@ -370,6 +380,8 @@ export default function DataImportPage() {
               <h2 className="text-lg font-semibold">Export Transfer Package</h2>
               <p className="mt-1 text-sm text-slate-600">
                 Create a curated ZIP from selected purchases, sales, or both.
+                Linked cards, purchases, sales, payments, and lookup records are
+                included automatically.
               </p>
             </div>
           </div>
@@ -398,6 +410,21 @@ export default function DataImportPage() {
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
+            <label className="flex w-full items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              <input
+                checked={includeImages}
+                className="mt-1 h-4 w-4"
+                onChange={(event) => setIncludeImages(event.target.checked)}
+                type="checkbox"
+              />
+              <span>
+                <span className="block font-semibold">Include images and attachments</span>
+                <span className="mt-1 block text-slate-600">
+                  Off by default for migration packages to avoid very large ZIP
+                  files and upload limits.
+                </span>
+              </span>
+            </label>
             <button
               className="h-10 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={isExporting}
@@ -540,6 +567,22 @@ export default function DataImportPage() {
                 Source: {preview.manifest.source_environment} · Exported{" "}
                 {preview.manifest.exported_at}
               </p>
+              {preview.plan ? (
+                <p className="mt-1 text-slate-600">
+                  Plan: create {preview.plan.create.purchases ?? 0} purchases,{" "}
+                  {preview.plan.create.cards ?? 0} cards,{" "}
+                  {preview.plan.create.sales ?? 0} sales; reuse{" "}
+                  {preview.plan.reuse.purchases ?? 0} purchases,{" "}
+                  {preview.plan.reuse.cards ?? 0} cards,{" "}
+                  {preview.plan.reuse.sales ?? 0} sales.
+                </p>
+              ) : null}
+              {preview.plan?.binary_payload_bytes ? (
+                <p className="mt-1 text-slate-600">
+                  Image/attachment payload:{" "}
+                  {(preview.plan.binary_payload_bytes / 1024 / 1024).toFixed(2)} MB
+                </p>
+              ) : null}
               {preview.manifest.sensitive_transfer ? (
                 <p className="mt-1 font-semibold text-amber-700">
                   Sensitive credential transfer
@@ -610,6 +653,16 @@ export default function DataImportPage() {
                   />
                   Import duplicates anyway
                 </label>
+              </div>
+            ) : null}
+
+            {preview.plan?.missing_dependencies?.length ? (
+              <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                <p className="font-semibold">Missing linked records</p>
+                <p className="mt-1">
+                  This package is missing required dependencies and cannot be
+                  imported safely.
+                </p>
               </div>
             ) : null}
           </section>

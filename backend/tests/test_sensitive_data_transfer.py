@@ -10,7 +10,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
+from app.models.buyer import Buyer
 from app.models.gift_card import GiftCard
+from app.models.purchase_batch import PurchaseBatch
+from app.models.sale import Sale
+from app.models.sale_gift_card import SaleGiftCard
 from app.services.field_encryption import (
     ENCRYPTED_FIELD_PREFIX,
     _fernet,
@@ -54,19 +58,64 @@ def transfer_zip(manifest: dict, cards: list[dict] | None = None) -> bytes:
             }
         ],
         "cards.json": cards or [],
+        "purchase_payments.json": [],
         "sales.json": [],
         "fuel_transactions.json": [],
         "receipts.json": [],
         "card_images.json": [],
         "sale_gift_cards.json": [],
         "sale_fuel_accounts.json": [],
+        "sale_events.json": [],
         "buyers.json": [],
         "payment_accounts.json": [],
         "fuel_accounts.json": [],
+        "credit_cards.json": [],
+        "players.json": [],
+        "reward_programs.json": [],
+        "spending_categories.json": [],
+        "credit_card_reward_rules.json": [],
     }
     buffer = BytesIO()
     with ZipFile(buffer, "w", ZIP_DEFLATED) as zip_file:
         for filename, payload in payloads.items():
+            zip_file.writestr(filename, json.dumps(payload, default=str))
+    return buffer.getvalue()
+
+
+def graph_transfer_zip(payloads: dict) -> bytes:
+    now = utc_now().isoformat()
+    defaults = {
+        "manifest.json": {
+            "export_version": "1.0",
+            "exported_at": now,
+            "source_environment": "local-test",
+            "sensitive_transfer": False,
+            "include_images": False,
+            "binary_payload_bytes": 0,
+        },
+        "purchases.json": [],
+        "cards.json": [],
+        "purchase_payments.json": [],
+        "sales.json": [],
+        "fuel_transactions.json": [],
+        "receipts.json": [],
+        "card_images.json": [],
+        "sale_gift_cards.json": [],
+        "sale_fuel_accounts.json": [],
+        "sale_events.json": [],
+        "buyers.json": [],
+        "payment_accounts.json": [],
+        "fuel_accounts.json": [],
+        "credit_cards.json": [],
+        "players.json": [],
+        "reward_programs.json": [],
+        "spending_categories.json": [],
+        "credit_card_reward_rules.json": [],
+    }
+    defaults.update(payloads)
+    buffer = BytesIO()
+    with ZipFile(buffer, "w", ZIP_DEFLATED) as zip_file:
+        for filename, payload in defaults.items():
             zip_file.writestr(filename, json.dumps(payload, default=str))
     return buffer.getvalue()
 
@@ -270,15 +319,8 @@ def test_sensitive_import_detects_duplicate_by_imported_source_id(
 
     preview = preview_package(db, package)
 
-    assert preview["conflicts"]["duplicate_cards"] == [
-        {
-            "source_id": 48,
-            "existing_id": target_card.id,
-            "brand": "Best Buy",
-            "card_ending": "1047",
-            "match_type": "imported_source_id",
-        }
-    ]
+    assert preview["conflicts"]["duplicate_cards"] == []
+    assert preview["plan"]["reuse"]["cards"] == 1
     assert "6332260074021047" not in str(preview)
     db.close()
 
@@ -459,3 +501,279 @@ def test_sensitive_import_encrypts_plaintext_credentials_on_target(
         assert decrypt_field(stored.pin_encrypted) == "1350"
     finally:
         db.close()
+
+
+def test_sale_export_expands_to_purchase_and_card_dependencies(monkeypatch, tmp_path):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api.data_transfer import collect_transfer_data
+
+    session_factory = make_session_factory()
+    db = session_factory()
+    now = utc_now()
+    buyer = Buyer(name="Card Buyer")
+    purchase = PurchaseBatch(
+        store_name="Best Buy",
+        purchase_date=now,
+        total_amount="100.00",
+        purchase_total_paid="100.00",
+    )
+    db.add_all([buyer, purchase])
+    db.flush()
+    card = GiftCard(
+        purchase_batch_id=purchase.id,
+        brand="Best Buy",
+        face_value="100.00",
+        acquisition_cost="100.00",
+        status="SOLD_PENDING_PAYMENT",
+    )
+    sale = Sale(buyer_id=buyer.id, expected_payout="90.00")
+    db.add_all([card, sale])
+    db.flush()
+    db.add(SaleGiftCard(sale_id=sale.id, gift_card_id=card.id))
+    db.commit()
+
+    data = collect_transfer_data(db, purchase_ids=[], sale_ids=[sale.id])
+
+    assert [purchase["id"] for purchase in data["purchases"]] == [purchase.id]
+    assert [exported_card["id"] for exported_card in data["cards"]] == [card.id]
+    assert [exported_sale["id"] for exported_sale in data["sales"]] == [sale.id]
+    assert data["sale_gift_cards"][0]["gift_card_id"] == card.id
+    db.close()
+
+
+def test_purchase_export_includes_sold_sale_links(monkeypatch, tmp_path):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api.data_transfer import collect_transfer_data
+
+    session_factory = make_session_factory()
+    db = session_factory()
+    now = utc_now()
+    buyer = Buyer(name="Card Buyer")
+    purchase = PurchaseBatch(
+        store_name="Best Buy",
+        purchase_date=now,
+        total_amount="100.00",
+        purchase_total_paid="100.00",
+    )
+    db.add_all([buyer, purchase])
+    db.flush()
+    card = GiftCard(
+        purchase_batch_id=purchase.id,
+        brand="Best Buy",
+        face_value="100.00",
+        acquisition_cost="100.00",
+        status="SOLD_PENDING_PAYMENT",
+    )
+    sale = Sale(buyer_id=buyer.id, expected_payout="90.00")
+    db.add_all([card, sale])
+    db.flush()
+    db.add(SaleGiftCard(sale_id=sale.id, gift_card_id=card.id))
+    db.commit()
+
+    data = collect_transfer_data(db, purchase_ids=[purchase.id], sale_ids=[])
+
+    assert [exported_sale["id"] for exported_sale in data["sales"]] == [sale.id]
+    assert data["sale_gift_cards"][0]["sale_id"] == sale.id
+    db.close()
+
+
+def test_overlapping_purchase_and_sale_export_deduplicates_graph(monkeypatch, tmp_path):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api.data_transfer import collect_transfer_data
+
+    session_factory = make_session_factory()
+    db = session_factory()
+    now = utc_now()
+    buyer = Buyer(name="Card Buyer")
+    purchase = PurchaseBatch(
+        store_name="Best Buy",
+        purchase_date=now,
+        total_amount="100.00",
+        purchase_total_paid="100.00",
+    )
+    db.add_all([buyer, purchase])
+    db.flush()
+    card = GiftCard(
+        purchase_batch_id=purchase.id,
+        brand="Best Buy",
+        face_value="100.00",
+        acquisition_cost="100.00",
+        status="SOLD_PENDING_PAYMENT",
+    )
+    sale = Sale(buyer_id=buyer.id, expected_payout="90.00")
+    db.add_all([card, sale])
+    db.flush()
+    db.add(SaleGiftCard(sale_id=sale.id, gift_card_id=card.id))
+    db.commit()
+
+    data = collect_transfer_data(db, purchase_ids=[purchase.id], sale_ids=[sale.id])
+
+    assert len(data["purchases"]) == 1
+    assert len(data["cards"]) == 1
+    assert len(data["sales"]) == 1
+    assert len(data["sale_gift_cards"]) == 1
+    db.close()
+
+
+def test_graph_import_creates_shared_card_once_and_reuses_on_second_import(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api import data_transfer
+
+    session_factory = make_session_factory()
+    monkeypatch.setattr(data_transfer, "SessionLocal", session_factory)
+    now = utc_now().isoformat()
+    contents = graph_transfer_zip(
+        {
+            "purchases.json": [
+                {
+                    "id": 10,
+                    "store_name": "Best Buy",
+                    "purchase_date": now,
+                    "total_amount": "100.00",
+                    "purchase_total_paid": "100.00",
+                }
+            ],
+            "cards.json": [
+                {
+                    "id": 20,
+                    "purchase_batch_id": 10,
+                    "brand": "Best Buy",
+                    "face_value": "100.00",
+                    "acquisition_cost": "100.00",
+                    "status": "SOLD_PENDING_PAYMENT",
+                }
+            ],
+            "buyers.json": [{"id": 30, "name": "Buyer"}],
+            "sales.json": [
+                {
+                    "id": 40,
+                    "buyer_id": 30,
+                    "sold_at": now,
+                    "expected_payout": "90.00",
+                    "status": "SOLD_PENDING_PAYMENT",
+                }
+            ],
+            "sale_gift_cards.json": [
+                {
+                    "id": 50,
+                    "sale_id": 40,
+                    "gift_card_id": 20,
+                    "expected_payout": "90.00",
+                }
+            ],
+        }
+    )
+
+    first_result = asyncio.run(data_transfer.apply_transfer(FakeUpload(contents)))
+    second_result = asyncio.run(data_transfer.apply_transfer(FakeUpload(contents)))
+
+    assert first_result["created"] == {"purchases": 1, "cards": 1, "sales": 1}
+    assert second_result["created"] == {"purchases": 0, "cards": 0, "sales": 0}
+    db = session_factory()
+    try:
+        assert db.query(PurchaseBatch).count() == 1
+        assert db.query(GiftCard).count() == 1
+        assert db.query(Sale).count() == 1
+        assert db.query(SaleGiftCard).count() == 1
+    finally:
+        db.close()
+
+
+def test_graph_import_rolls_back_on_failure(monkeypatch, tmp_path):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api import data_transfer
+
+    session_factory = make_session_factory()
+    monkeypatch.setattr(data_transfer, "SessionLocal", session_factory)
+    now = utc_now().isoformat()
+    contents = graph_transfer_zip(
+        {
+            "purchases.json": [
+                {
+                    "id": 10,
+                    "store_name": "Best Buy",
+                    "purchase_date": now,
+                    "total_amount": "100.00",
+                    "purchase_total_paid": "100.00",
+                }
+            ],
+            "cards.json": [
+                {
+                    "id": 20,
+                    "purchase_batch_id": 10,
+                    "face_value": "100.00",
+                    "acquisition_cost": "100.00",
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(KeyError):
+        asyncio.run(data_transfer.apply_transfer(FakeUpload(contents)))
+
+    db = session_factory()
+    try:
+        assert db.query(PurchaseBatch).count() == 0
+        assert db.query(GiftCard).count() == 0
+    finally:
+        db.close()
+
+
+def test_image_exclusion_keeps_graph_without_attachment_records(monkeypatch, tmp_path):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api.data_transfer import collect_transfer_data
+    from app.models.card_image import CardImage
+    from app.models.receipt import Receipt
+
+    session_factory = make_session_factory()
+    db = session_factory()
+    now = utc_now()
+    purchase = PurchaseBatch(
+        store_name="Best Buy",
+        purchase_date=now,
+        total_amount="100.00",
+        purchase_total_paid="100.00",
+    )
+    db.add(purchase)
+    db.flush()
+    card = GiftCard(
+        purchase_batch_id=purchase.id,
+        brand="Best Buy",
+        face_value="100.00",
+        acquisition_cost="100.00",
+    )
+    db.add(card)
+    db.flush()
+    db.add_all(
+        [
+            Receipt(purchase_batch_id=purchase.id, image_url="/uploads/receipt.jpg"),
+            CardImage(
+                gift_card_id=card.id,
+                image_type="primary",
+                original_image_url="/uploads/card.jpg",
+            ),
+        ]
+    )
+    db.commit()
+
+    without_images = collect_transfer_data(
+        db,
+        purchase_ids=[purchase.id],
+        sale_ids=[],
+        include_images=False,
+    )
+    with_images = collect_transfer_data(
+        db,
+        purchase_ids=[purchase.id],
+        sale_ids=[],
+        include_images=True,
+    )
+
+    assert without_images["receipts"] == []
+    assert without_images["card_images"] == []
+    assert len(with_images["receipts"]) == 1
+    assert len(with_images["card_images"]) == 1
+    db.close()
