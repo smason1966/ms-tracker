@@ -1,18 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { ChangeEvent, useState } from "react";
+import { ChangeEvent, useEffect, useState } from "react";
 
 import { API_BASE_URL } from "@/lib/api";
-
-const TRANSFER_EXPORT_ENABLED =
-  process.env.NEXT_PUBLIC_ALLOW_TRANSFER_EXPORT !== "false";
-const TRANSFER_IMPORT_ENABLED =
-  process.env.NEXT_PUBLIC_ALLOW_TRANSFER_IMPORT !== "false";
-const SENSITIVE_TRANSFER_EXPORT_ENABLED =
-  process.env.NEXT_PUBLIC_ALLOW_SENSITIVE_TRANSFER_EXPORT === "true";
-const SENSITIVE_TRANSFER_IMPORT_ENABLED =
-  process.env.NEXT_PUBLIC_ALLOW_SENSITIVE_TRANSFER_IMPORT === "true";
 
 type ImportPreview = {
   manifest: {
@@ -55,7 +46,43 @@ type ImportResult = {
   };
 };
 
+type TransferCapabilities = {
+  export_enabled: boolean;
+  import_enabled: boolean;
+  sensitive_export_enabled: boolean;
+  sensitive_import_enabled: boolean;
+};
+
+const DEFAULT_TRANSFER_CAPABILITIES: TransferCapabilities = {
+  export_enabled: true,
+  import_enabled: true,
+  sensitive_export_enabled: false,
+  sensitive_import_enabled: false,
+};
+
+function backendErrorMessage(body: unknown, fallback: string) {
+  if (!body || typeof body !== "object") {
+    return fallback;
+  }
+
+  const detail = (body as { detail?: unknown }).detail;
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (detail && typeof detail === "object") {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+  return fallback;
+}
+
 export default function DataImportPage() {
+  const [capabilities, setCapabilities] = useState<TransferCapabilities>(
+    DEFAULT_TRANSFER_CAPABILITIES,
+  );
+  const [isLoadingCapabilities, setIsLoadingCapabilities] = useState(true);
   const [purchaseIds, setPurchaseIds] = useState("");
   const [saleIds, setSaleIds] = useState("");
   const [includeSensitiveCredentials, setIncludeSensitiveCredentials] =
@@ -73,36 +100,64 @@ export default function DataImportPage() {
   const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sensitiveImportPackage = Boolean(preview?.manifest.sensitive_transfer);
+  const transferExportEnabled = capabilities.export_enabled;
+  const transferImportEnabled = capabilities.import_enabled;
+  const sensitiveTransferExportEnabled = capabilities.sensitive_export_enabled;
+  const sensitiveTransferImportEnabled = capabilities.sensitive_import_enabled;
   const pageTitle =
-    TRANSFER_EXPORT_ENABLED && TRANSFER_IMPORT_ENABLED
+    transferExportEnabled && transferImportEnabled
       ? "Data Transfer"
-      : TRANSFER_EXPORT_ENABLED
+      : transferExportEnabled
         ? "Data Export"
         : "Data Import";
   const pageDescription =
-    TRANSFER_EXPORT_ENABLED && TRANSFER_IMPORT_ENABLED
+    transferExportEnabled && transferImportEnabled
       ? "Export and import curated purchase/sale transfer packages between environments."
-      : TRANSFER_EXPORT_ENABLED
+      : transferExportEnabled
         ? "Export curated purchase/sale transfer packages for another environment."
         : "Preview and import curated purchase/sale transfer packages from another environment.";
 
-  function backendErrorMessage(body: unknown, fallback: string) {
-    if (!body || typeof body !== "object") {
-      return fallback;
-    }
+  useEffect(() => {
+    let isMounted = true;
 
-    const detail = (body as { detail?: unknown }).detail;
-    if (typeof detail === "string") {
-      return detail;
-    }
-    if (detail && typeof detail === "object") {
-      const message = (detail as { message?: unknown }).message;
-      if (typeof message === "string") {
-        return message;
+    async function loadCapabilities() {
+      setIsLoadingCapabilities(true);
+      try {
+        const response = await fetch(`${API_BASE_URL}/data-transfer/capabilities`);
+        if (!response.ok) {
+          const body = await response.json().catch(() => null);
+          throw new Error(
+            backendErrorMessage(
+              body,
+              `Failed to load transfer capabilities (${response.status})`,
+            ),
+          );
+        }
+        const data = (await response.json()) as TransferCapabilities;
+        if (isMounted) {
+          setCapabilities(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Failed to load transfer capabilities.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingCapabilities(false);
+        }
       }
     }
-    return fallback;
-  }
+
+    loadCapabilities();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   function filenameFromDisposition(disposition: string | null) {
     if (!disposition) {
@@ -294,7 +349,13 @@ export default function DataImportPage() {
           </p>
         ) : null}
 
-        {TRANSFER_EXPORT_ENABLED ? (
+        {isLoadingCapabilities ? (
+          <section className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">
+            Loading transfer capabilities...
+          </section>
+        ) : null}
+
+        {transferExportEnabled ? (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
             <div>
@@ -340,7 +401,7 @@ export default function DataImportPage() {
           </div>
 
           <div className="mt-5 rounded-md border border-amber-200 bg-amber-50/80 p-4 text-sm text-amber-950">
-            {SENSITIVE_TRANSFER_EXPORT_ENABLED ? (
+            {sensitiveTransferExportEnabled ? (
               <>
                 <label className="flex items-start gap-3 font-semibold">
                   <input
@@ -401,7 +462,7 @@ export default function DataImportPage() {
         </section>
         ) : null}
 
-        {TRANSFER_IMPORT_ENABLED ? (
+        {transferImportEnabled ? (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4">
             <h2 className="text-lg font-semibold">Import Transfer Package</h2>
@@ -434,7 +495,7 @@ export default function DataImportPage() {
                 isImporting ||
                 (sensitiveImportPackage &&
                   (!acknowledgeSensitiveImport ||
-                    !SENSITIVE_TRANSFER_IMPORT_ENABLED))
+                    !sensitiveTransferImportEnabled))
               }
               onClick={applyImport}
               type="button"
@@ -481,7 +542,7 @@ export default function DataImportPage() {
 
             {preview.manifest.sensitive_transfer ? (
               <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
-                {SENSITIVE_TRANSFER_IMPORT_ENABLED ? (
+                {sensitiveTransferImportEnabled ? (
                   <>
                     <p className="font-semibold">Sensitive import acknowledgement</p>
                     <p className="mt-1">

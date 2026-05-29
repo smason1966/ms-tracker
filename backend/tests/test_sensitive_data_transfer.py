@@ -93,6 +93,22 @@ def test_sensitive_export_disabled_by_default(monkeypatch, tmp_path):
     assert exc.value.detail == SENSITIVE_TRANSFER_DISABLED_MESSAGE
 
 
+def test_transfer_capabilities_reflect_sensitive_flags(monkeypatch, tmp_path):
+    configure_transfer_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("ALLOW_SENSITIVE_TRANSFER_EXPORT", "true")
+    monkeypatch.setenv("ALLOW_SENSITIVE_TRANSFER_IMPORT", "true")
+    from app.api.data_transfer import data_transfer_capabilities
+
+    capabilities = data_transfer_capabilities()
+
+    assert capabilities == {
+        "export_enabled": True,
+        "import_enabled": True,
+        "sensitive_export_enabled": True,
+        "sensitive_import_enabled": True,
+    }
+
+
 def test_sensitive_export_requires_explicit_acknowledgement(monkeypatch, tmp_path):
     configure_transfer_env(monkeypatch, tmp_path)
     monkeypatch.setenv("ALLOW_SENSITIVE_TRANSFER_EXPORT", "true")

@@ -100,6 +100,16 @@ def require_sensitive_acknowledgement(acknowledge_sensitive: bool) -> None:
         )
 
 
+@router.get("/capabilities")
+def data_transfer_capabilities():
+    return {
+        "export_enabled": True,
+        "import_enabled": True,
+        "sensitive_export_enabled": sensitive_export_enabled(),
+        "sensitive_import_enabled": sensitive_import_enabled(),
+    }
+
+
 def json_default(value: Any):
     if isinstance(value, Decimal):
         return str(value)
