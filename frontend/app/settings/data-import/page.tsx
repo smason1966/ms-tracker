@@ -5,6 +5,15 @@ import { ChangeEvent, useState } from "react";
 
 import { API_BASE_URL } from "@/lib/api";
 
+const TRANSFER_EXPORT_ENABLED =
+  process.env.NEXT_PUBLIC_ALLOW_TRANSFER_EXPORT !== "false";
+const TRANSFER_IMPORT_ENABLED =
+  process.env.NEXT_PUBLIC_ALLOW_TRANSFER_IMPORT !== "false";
+const SENSITIVE_TRANSFER_EXPORT_ENABLED =
+  process.env.NEXT_PUBLIC_ALLOW_SENSITIVE_TRANSFER_EXPORT === "true";
+const SENSITIVE_TRANSFER_IMPORT_ENABLED =
+  process.env.NEXT_PUBLIC_ALLOW_SENSITIVE_TRANSFER_IMPORT === "true";
+
 type ImportPreview = {
   manifest: {
     export_version: string;
@@ -64,6 +73,18 @@ export default function DataImportPage() {
   const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sensitiveImportPackage = Boolean(preview?.manifest.sensitive_transfer);
+  const pageTitle =
+    TRANSFER_EXPORT_ENABLED && TRANSFER_IMPORT_ENABLED
+      ? "Data Transfer"
+      : TRANSFER_EXPORT_ENABLED
+        ? "Data Export"
+        : "Data Import";
+  const pageDescription =
+    TRANSFER_EXPORT_ENABLED && TRANSFER_IMPORT_ENABLED
+      ? "Export and import curated purchase/sale transfer packages between environments."
+      : TRANSFER_EXPORT_ENABLED
+        ? "Export curated purchase/sale transfer packages for another environment."
+        : "Preview and import curated purchase/sale transfer packages from another environment.";
 
   function backendErrorMessage(body: unknown, fallback: string) {
     if (!body || typeof body !== "object") {
@@ -257,14 +278,13 @@ export default function DataImportPage() {
             Back to Settings
           </Link>
           <p className="text-sm font-medium uppercase tracking-wide text-slate-500">
-            Settings / Data Import
+            Settings / {pageTitle}
           </p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-            Data Import
+            {pageTitle}
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-slate-600">
-            Preview and import curated purchase/sale transfer packages from test
-            into production.
+            {pageDescription}
           </p>
         </header>
 
@@ -274,6 +294,7 @@ export default function DataImportPage() {
           </p>
         ) : null}
 
+        {TRANSFER_EXPORT_ENABLED ? (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
             <div>
@@ -319,54 +340,68 @@ export default function DataImportPage() {
           </div>
 
           <div className="mt-5 rounded-md border border-amber-200 bg-amber-50/80 p-4 text-sm text-amber-950">
-            <label className="flex items-start gap-3 font-semibold">
-              <input
-                checked={includeSensitiveCredentials}
-                className="mt-1"
-                onChange={(event) => {
-                  setIncludeSensitiveCredentials(event.target.checked);
-                  if (!event.target.checked) {
-                    setAcknowledgeSensitiveExport(false);
-                  }
-                }}
-                type="checkbox"
-              />
-              <span>Include sensitive credentials</span>
-            </label>
-
-            {includeSensitiveCredentials ? (
-              <div className="mt-3 space-y-3">
-                <p>
-                  This export includes sensitive card numbers, PINs, and account
-                  credentials. Store securely and delete after import.
-                </p>
-                <label className="flex items-start gap-3 font-medium">
+            {SENSITIVE_TRANSFER_EXPORT_ENABLED ? (
+              <>
+                <label className="flex items-start gap-3 font-semibold">
                   <input
-                    checked={acknowledgeSensitiveExport}
+                    checked={includeSensitiveCredentials}
                     className="mt-1"
-                    onChange={(event) =>
-                      setAcknowledgeSensitiveExport(event.target.checked)
-                    }
+                    onChange={(event) => {
+                      setIncludeSensitiveCredentials(event.target.checked);
+                      if (!event.target.checked) {
+                        setAcknowledgeSensitiveExport(false);
+                      }
+                    }}
                     type="checkbox"
                   />
-                  <span>
-                    I understand this file contains sensitive credentials and
-                    will delete it after import.
-                  </span>
+                  <span>Include sensitive credentials</span>
                 </label>
-                <button
-                  className="h-10 cursor-pointer rounded-md border border-amber-500 bg-amber-900 px-4 text-sm font-semibold text-amber-50 transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={!acknowledgeSensitiveExport || isExporting}
-                  onClick={() => exportTransfer(true)}
-                  type="button"
-                >
-                  {isExporting ? "Exporting..." : "Export Sensitive Transfer"}
-                </button>
+
+                {includeSensitiveCredentials ? (
+                  <div className="mt-3 space-y-3">
+                    <p>
+                      This export includes sensitive card numbers, PINs, and account
+                      credentials. Store securely and delete after import.
+                    </p>
+                    <label className="flex items-start gap-3 font-medium">
+                      <input
+                        checked={acknowledgeSensitiveExport}
+                        className="mt-1"
+                        onChange={(event) =>
+                          setAcknowledgeSensitiveExport(event.target.checked)
+                        }
+                        type="checkbox"
+                      />
+                      <span>
+                        I understand this file contains sensitive credentials and
+                        will delete it after import.
+                      </span>
+                    </label>
+                    <button
+                      className="h-10 cursor-pointer rounded-md border border-amber-500 bg-amber-900 px-4 text-sm font-semibold text-amber-50 transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={!acknowledgeSensitiveExport || isExporting}
+                      onClick={() => exportTransfer(true)}
+                      type="button"
+                    >
+                      {isExporting ? "Exporting..." : "Export Sensitive Transfer"}
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div>
+                <p className="font-semibold">Sensitive credential export disabled</p>
+                <p className="mt-1">
+                  Normal transfer export remains available. Enable the sensitive
+                  transfer flag only for temporary credential migration windows.
+                </p>
               </div>
-            ) : null}
+            )}
           </div>
         </section>
+        ) : null}
 
+        {TRANSFER_IMPORT_ENABLED ? (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4">
             <h2 className="text-lg font-semibold">Import Transfer Package</h2>
@@ -397,7 +432,9 @@ export default function DataImportPage() {
               disabled={
                 !preview ||
                 isImporting ||
-                (sensitiveImportPackage && !acknowledgeSensitiveImport)
+                (sensitiveImportPackage &&
+                  (!acknowledgeSensitiveImport ||
+                    !SENSITIVE_TRANSFER_IMPORT_ENABLED))
               }
               onClick={applyImport}
               type="button"
@@ -406,6 +443,11 @@ export default function DataImportPage() {
             </button>
           </div>
         </section>
+        ) : (
+          <section className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">
+            Import is disabled for this environment.
+          </section>
+        )}
 
         {preview ? (
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -439,25 +481,37 @@ export default function DataImportPage() {
 
             {preview.manifest.sensitive_transfer ? (
               <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
-                <p className="font-semibold">Sensitive import acknowledgement</p>
-                <p className="mt-1">
-                  This import contains sensitive card numbers, PINs, and account
-                  credentials. Store securely and delete the ZIP after import.
-                </p>
-                <label className="mt-3 flex items-start gap-2 font-medium">
-                  <input
-                    checked={acknowledgeSensitiveImport}
-                    className="mt-1"
-                    onChange={(event) =>
-                      setAcknowledgeSensitiveImport(event.target.checked)
-                    }
-                    type="checkbox"
-                  />
-                  <span>
-                    I understand this file contains sensitive credentials and
-                    will delete it after import.
-                  </span>
-                </label>
+                {SENSITIVE_TRANSFER_IMPORT_ENABLED ? (
+                  <>
+                    <p className="font-semibold">Sensitive import acknowledgement</p>
+                    <p className="mt-1">
+                      This import contains sensitive card numbers, PINs, and account
+                      credentials. Store securely and delete the ZIP after import.
+                    </p>
+                    <label className="mt-3 flex items-start gap-2 font-medium">
+                      <input
+                        checked={acknowledgeSensitiveImport}
+                        className="mt-1"
+                        onChange={(event) =>
+                          setAcknowledgeSensitiveImport(event.target.checked)
+                        }
+                        type="checkbox"
+                      />
+                      <span>
+                        I understand this file contains sensitive credentials and
+                        will delete it after import.
+                      </span>
+                    </label>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-semibold">Sensitive import disabled</p>
+                    <p className="mt-1">
+                      This package contains sensitive credentials, but sensitive
+                      import is disabled for this environment.
+                    </p>
+                  </>
+                )}
               </div>
             ) : null}
 

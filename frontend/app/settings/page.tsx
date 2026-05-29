@@ -96,9 +96,9 @@ const advancedSettingsCards = [
   },
   {
     id: "data-import",
-    title: "Data Import",
+    title: "Data Transfer",
     description:
-      "Preview and import curated transfer ZIPs from test into production.",
+      "Export and import curated purchase/sale transfer packages between environments.",
     href: "/settings/data-import",
   },
   {
