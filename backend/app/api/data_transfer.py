@@ -27,7 +27,12 @@ from app.models.receipt import Receipt
 from app.models.sale import Sale
 from app.models.sale_fuel_account import SaleFuelAccount
 from app.models.sale_gift_card import SaleGiftCard
-from app.services.field_encryption import encrypt_field
+from app.services.field_encryption import (
+    CredentialDecryptionError,
+    UNDECRYPTABLE_CREDENTIAL_MESSAGE,
+    decrypt_field,
+    encrypt_field,
+)
 from app.services.upload_storage import (
     physical_upload_path,
     upload_dir,
@@ -40,6 +45,59 @@ router = APIRouter(prefix="/data-transfer", tags=["data-transfer"])
 EXPORT_VERSION = "1.0"
 CARD_IMAGE_DIR = upload_dir("card-images")
 RECEIPT_DIR = upload_dir("receipts")
+SENSITIVE_TRANSFER_DISABLED_MESSAGE = (
+    "Sensitive transfer export/import is disabled for this environment."
+)
+SENSITIVE_TRANSFER_WARNING = (
+    "This transfer contains sensitive card numbers, PINs, and account credentials. "
+    "Store securely and delete after import."
+)
+CARD_SENSITIVE_FIELDS = {
+    "card_number_encrypted",
+    "pin_encrypted",
+    "confirmed_card_number",
+    "confirmed_pin",
+    "confirmed_redemption_code",
+    "detected_card_number",
+    "detected_pin",
+}
+FUEL_ACCOUNT_SENSITIVE_FIELDS = {"login_password"}
+
+
+def env_flag_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def sensitive_export_enabled() -> bool:
+    return env_flag_enabled("ALLOW_SENSITIVE_TRANSFER_EXPORT")
+
+
+def sensitive_import_enabled() -> bool:
+    return env_flag_enabled("ALLOW_SENSITIVE_TRANSFER_IMPORT")
+
+
+def require_sensitive_transfer_enabled(kind: str) -> None:
+    enabled = (
+        sensitive_export_enabled()
+        if kind == "export"
+        else sensitive_import_enabled()
+    )
+    if not enabled:
+        raise HTTPException(
+            status_code=403,
+            detail=SENSITIVE_TRANSFER_DISABLED_MESSAGE,
+        )
+
+
+def require_sensitive_acknowledgement(acknowledge_sensitive: bool) -> None:
+    if not acknowledge_sensitive:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "sensitive_transfer_acknowledgement_required",
+                "message": SENSITIVE_TRANSFER_WARNING,
+            },
+        )
 
 
 def json_default(value: Any):
@@ -62,6 +120,34 @@ def row_dict(row, exclude: set[str] | None = None) -> dict:
         for column in row.__table__.columns
         if column.name not in excluded
     }
+
+
+def decrypt_sensitive_fields(row: dict, fields: set[str]) -> dict:
+    decrypted_row = dict(row)
+    for field in fields:
+        if field not in decrypted_row:
+            continue
+        try:
+            decrypted_row[field] = decrypt_field(decrypted_row[field])
+        except CredentialDecryptionError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=UNDECRYPTABLE_CREDENTIAL_MESSAGE,
+            ) from exc
+    return decrypted_row
+
+
+def prepare_sensitive_transfer_data(data: dict) -> dict:
+    sensitive_data = dict(data)
+    sensitive_data["cards"] = [
+        decrypt_sensitive_fields(card, CARD_SENSITIVE_FIELDS)
+        for card in data["cards"]
+    ]
+    sensitive_data["fuel_accounts"] = [
+        decrypt_sensitive_fields(account, FUEL_ACCOUNT_SENSITIVE_FIELDS)
+        for account in data["fuel_accounts"]
+    ]
+    return sensitive_data
 
 
 def parse_ids(value: str | None) -> list[int]:
@@ -227,12 +313,21 @@ def collect_transfer_data(
 
 
 @router.get("/export")
-def export_transfer(purchases: str | None = None, sales: str | None = None):
+def export_transfer(
+    purchases: str | None = None,
+    sales: str | None = None,
+    sensitive: bool = False,
+    acknowledge_sensitive: bool = False,
+):
     purchase_ids = parse_ids(purchases)
     sale_ids = parse_ids(sales)
 
     if not purchase_ids and not sale_ids:
         raise HTTPException(status_code=400, detail="Select purchases or sales to export")
+
+    if sensitive:
+        require_sensitive_transfer_enabled("export")
+        require_sensitive_acknowledgement(acknowledge_sensitive)
 
     db: Session = SessionLocal()
 
@@ -255,10 +350,14 @@ def export_transfer(purchases: str | None = None, sales: str | None = None):
                 )
 
         data = collect_transfer_data(db, purchase_ids, sale_ids)
+        if sensitive:
+            data = prepare_sensitive_transfer_data(data)
         manifest = {
             "export_version": EXPORT_VERSION,
             "exported_at": utc_now().isoformat(),
             "source_environment": os.getenv("MS_TRACKER_ENV", "test"),
+            "sensitive_transfer": sensitive,
+            "warning": SENSITIVE_TRANSFER_WARNING if sensitive else None,
             "source_record_ids": {
                 "purchases": purchase_ids,
                 "sales": sale_ids,
@@ -341,6 +440,9 @@ def load_package(contents: bytes) -> dict:
 
 
 def preview_package(db: Session, package: dict) -> dict:
+    if package["manifest"].get("sensitive_transfer"):
+        require_sensitive_transfer_enabled("import")
+
     duplicate_cards = []
     duplicate_purchases = []
 
@@ -435,9 +537,18 @@ def find_duplicate_purchase(db: Session, purchase: dict) -> PurchaseBatch | None
 
 
 @router.post("/import/apply")
-async def apply_transfer(file: UploadFile = File(...), allow_duplicates: bool = False):
+async def apply_transfer(
+    file: UploadFile = File(...),
+    allow_duplicates: bool = False,
+    acknowledge_sensitive: bool = False,
+):
     contents = await file.read()
     package = load_package(contents)
+    is_sensitive_transfer = bool(package["manifest"].get("sensitive_transfer"))
+    if is_sensitive_transfer:
+        require_sensitive_transfer_enabled("import")
+        require_sensitive_acknowledgement(acknowledge_sensitive)
+
     db: Session = SessionLocal()
 
     try:
