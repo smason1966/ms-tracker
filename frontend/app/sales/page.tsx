@@ -191,6 +191,34 @@ function saleToEditForm(sale: Sale): SaleEditForm {
   };
 }
 
+async function saleEditErrorMessage(response: Response) {
+  const body = await response.text().catch(() => "");
+
+  if (body) {
+    try {
+      const parsed = JSON.parse(body) as { detail?: unknown };
+      const detail = parsed.detail ?? parsed;
+
+      if (typeof detail === "string") {
+        return detail;
+      }
+
+      if (
+        detail &&
+        typeof detail === "object" &&
+        "message" in detail &&
+        typeof detail.message === "string"
+      ) {
+        return detail.message;
+      }
+    } catch {
+      // Fall through to the status-based message below.
+    }
+  }
+
+  return `Failed to edit sale (${response.status}).`;
+}
+
 function statusLabel(status: string) {
   if (status === "VOIDED") {
     return "Voided";
@@ -423,6 +451,7 @@ function SalesContent() {
   const [isVoiding, setIsVoiding] = useState(false);
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
   const [editForm, setEditForm] = useState<SaleEditForm | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -638,9 +667,11 @@ function SalesContent() {
   function openEditSale(sale: Sale) {
     setEditingSale(sale);
     setEditForm(saleToEditForm(sale));
+    setEditError(null);
   }
 
   function updateEditForm(field: keyof SaleEditForm, value: string) {
+    setEditError(null);
     setEditForm((current) => (current ? { ...current, [field]: value } : current));
   }
 
@@ -727,33 +758,36 @@ function SalesContent() {
     }
 
     setIsSavingEdit(true);
-    setError(null);
+    setEditError(null);
 
     const endpoint = `${API_BASE_URL}/sales/${editingSale.id}`;
+    const payload = editPayload();
+
+    if (!payload) {
+      setEditError("Unable to prepare sale edit payload.");
+      setIsSavingEdit(false);
+      return;
+    }
 
     try {
       const response = await fetch(endpoint, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editPayload()),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
-        const body = await response.text();
-        console.error("Edit sale failed", {
-          endpoint,
-          status: response.status,
-          body,
-        });
-        throw new Error(`Failed to edit sale #${editingSale.id} (${response.status})`);
+        setEditError(await saleEditErrorMessage(response));
+        return;
       }
 
       setEditingSale(null);
       setEditForm(null);
+      setEditError(null);
       setCopyMessage(`Sale #${editingSale.id} updated with audit history.`);
       await loadSales();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to edit sale.");
+      setEditError(err instanceof Error ? err.message : "Failed to edit sale.");
     } finally {
       setIsSavingEdit(false);
     }
@@ -1367,6 +1401,12 @@ function SalesContent() {
                   edit records this warning in audit history and does not
                   automatically regenerate exports.
                 </p>
+              </div>
+            ) : null}
+
+            {editError ? (
+              <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-800">
+                {editError}
               </div>
             ) : null}
 
