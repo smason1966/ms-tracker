@@ -18,6 +18,25 @@ type PurchaseBatch = {
   notes: string | null;
 };
 
+type PurchaseRewardAuditRow = {
+  purchase_id: number;
+  store_name: string;
+  purchase_date: string;
+  paid_amount: string | number | null;
+  payment_count: number;
+  credit_card_payment_count: number;
+  reward_transaction_count: number;
+  funding_status: string;
+  reward_status: string;
+  issues: string[];
+  recommended_action: string;
+};
+
+type PurchaseRewardAuditResponse = {
+  count: number;
+  purchases: PurchaseRewardAuditRow[];
+};
+
 function formatCurrency(value: string | number | null) {
   if (value === null || value === "") {
     return "-";
@@ -68,10 +87,14 @@ export default function PurchasesPage() {
 function PurchasesContent() {
   const searchParams = useSearchParams();
   const [purchases, setPurchases] = useState<PurchaseBatch[]>([]);
+  const [rewardAuditRows, setRewardAuditRows] = useState<PurchaseRewardAuditRow[]>([]);
   const [search, setSearch] = useState("");
   const [selectedPurchaseIds, setSelectedPurchaseIds] = useState<number[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const isReceiptAudit = searchParams.get("receiptAudit") === "true";
+  const isRewardAudit = searchParams.get("rewardAudit") === "true";
 
   useEffect(() => {
     async function loadPurchases() {
@@ -79,13 +102,22 @@ function PurchasesContent() {
       setError(null);
 
       try {
-        const response = await fetch(`${API_BASE_URL}/purchase-batches/`);
+        const endpoint = isRewardAudit
+          ? `${API_BASE_URL}/purchase-batches/reward-audit`
+          : `${API_BASE_URL}/purchase-batches/`;
+        const response = await fetch(endpoint);
 
         if (!response.ok) {
           throw new Error(`Failed to load purchases (${response.status})`);
         }
 
-        setPurchases((await response.json()) as PurchaseBatch[]);
+        if (isRewardAudit) {
+          const data = (await response.json()) as PurchaseRewardAuditResponse;
+          setRewardAuditRows(data.purchases);
+        } else {
+          setPurchases((await response.json()) as PurchaseBatch[]);
+          setRewardAuditRows([]);
+        }
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Failed to load purchases.",
@@ -98,11 +130,10 @@ function PurchasesContent() {
     queueMicrotask(() => {
       void loadPurchases();
     });
-  }, []);
+  }, [isRewardAudit]);
 
   const filteredPurchases = useMemo(() => {
     const query = search.trim().toLowerCase();
-    const isReceiptAudit = searchParams.get("receiptAudit") === "true";
 
     return purchases.filter((purchase) => {
       if (
@@ -131,8 +162,30 @@ function PurchasesContent() {
 
       return searchable.includes(query);
     });
-  }, [purchases, search, searchParams]);
-  const isReceiptAudit = searchParams.get("receiptAudit") === "true";
+  }, [isReceiptAudit, purchases, search]);
+  const filteredRewardAuditRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    if (!query) {
+      return rewardAuditRows;
+    }
+
+    return rewardAuditRows.filter((row) =>
+      [
+        String(row.purchase_id),
+        row.store_name,
+        row.purchase_date,
+        String(row.paid_amount ?? ""),
+        row.funding_status,
+        row.reward_status,
+        row.recommended_action,
+        row.issues.join(" "),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [rewardAuditRows, search]);
   const selectedExportHref = `${API_BASE_URL}/data-transfer/export?purchases=${selectedPurchaseIds.join(",")}`;
 
   return (
@@ -148,7 +201,7 @@ function PurchasesContent() {
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-600">
               Start a new purchase, continue card intake, or find previous
-              purchase batches.
+              purchase batches and reward funding issues.
             </p>
           </div>
           <Link
@@ -171,6 +224,13 @@ function PurchasesContent() {
           </div>
         ) : null}
 
+        {isRewardAudit ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+            Showing purchases missing reward inputs or needing reward
+            recalculation.
+          </div>
+        ) : null}
+
         <section className="grid gap-4 md:grid-cols-3">
           <Link
             className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md active:translate-y-0"
@@ -186,9 +246,13 @@ function PurchasesContent() {
             <p className="mt-2 text-sm text-slate-600">
               {isLoading
                 ? "Loading purchase history..."
-                : `${purchases.length} purchase batch${
-                    purchases.length === 1 ? "" : "es"
-                  } tracked.`}
+                : isRewardAudit
+                  ? `${rewardAuditRows.length} purchase${
+                      rewardAuditRows.length === 1 ? "" : "s"
+                    } need reward review.`
+                  : `${purchases.length} purchase batch${
+                      purchases.length === 1 ? "" : "es"
+                    } tracked.`}
             </p>
           </div>
           <label className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -203,10 +267,40 @@ function PurchasesContent() {
           </label>
         </section>
 
+        <section className="grid gap-4 md:grid-cols-2">
+          <Link
+            className={`rounded-lg border p-4 text-sm shadow-sm transition hover:-translate-y-0.5 hover:shadow-md active:translate-y-0 ${
+              isRewardAudit
+                ? "border-amber-300 bg-amber-50 text-amber-950"
+                : "border-slate-200 bg-white text-slate-700"
+            }`}
+            href="/purchases?rewardAudit=true"
+          >
+            <p className="font-semibold">Purchases missing reward inputs</p>
+            <p className="mt-1">
+              Find missing funding rows, missing credit cards, and reward
+              transaction mismatches.
+            </p>
+          </Link>
+          <Link
+            className={`rounded-lg border p-4 text-sm shadow-sm transition hover:-translate-y-0.5 hover:shadow-md active:translate-y-0 ${
+              isReceiptAudit
+                ? "border-amber-300 bg-amber-50 text-amber-950"
+                : "border-slate-200 bg-white text-slate-700"
+            }`}
+            href="/purchases?receiptAudit=true"
+          >
+            <p className="font-semibold">Purchases missing receipts</p>
+            <p className="mt-1">Find purchases missing receipt audit trail.</p>
+          </Link>
+        </section>
+
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-5 py-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <h2 className="text-lg font-semibold">Purchase History</h2>
+              <h2 className="text-lg font-semibold">
+                {isRewardAudit ? "Reward Funding Audit" : "Purchase History"}
+              </h2>
               {selectedPurchaseIds.length > 0 ? (
                 <a
                   className="inline-flex h-9 cursor-pointer items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
@@ -217,7 +311,9 @@ function PurchasesContent() {
               ) : null}
             </div>
             <p className="text-sm text-slate-500">
-              Open a batch to view receipts, financials, payments, and cards.
+              {isRewardAudit
+                ? "Open a purchase to add funding rows or recalculate rewards."
+                : "Open a batch to view receipts, financials, payments, and cards."}
             </p>
           </div>
 
@@ -225,6 +321,124 @@ function PurchasesContent() {
             <p className="px-5 py-8 text-sm text-slate-500">
               Loading purchases...
             </p>
+          ) : isRewardAudit ? (
+            filteredRewardAuditRows.length === 0 ? (
+              <div className="px-5 py-8 text-sm text-slate-500">
+                <p className="font-medium text-slate-900">
+                  No reward funding issues found.
+                </p>
+                <p className="mt-1">
+                  Purchases with credit card funding have matching reward
+                  transactions.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="hidden md:block">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                      <tr>
+                        <th className="px-5 py-3">Purchase</th>
+                        <th className="px-5 py-3">Date</th>
+                        <th className="px-5 py-3">Paid</th>
+                        <th className="px-5 py-3">Funding Status</th>
+                        <th className="px-5 py-3">Reward Status</th>
+                        <th className="px-5 py-3">Recommended Action</th>
+                        <th className="px-5 py-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {filteredRewardAuditRows.map((row) => (
+                        <tr className="transition hover:bg-slate-50" key={row.purchase_id}>
+                          <td className="px-5 py-3">
+                            <div className="font-semibold text-slate-950">
+                              {row.store_name}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              Purchase #{row.purchase_id}
+                            </div>
+                          </td>
+                          <td className="px-5 py-3">
+                            {formatDate(row.purchase_date)}
+                          </td>
+                          <td className="px-5 py-3">
+                            {formatCurrency(row.paid_amount)}
+                          </td>
+                          <td className="px-5 py-3 text-slate-700">
+                            {row.funding_status.replaceAll("_", " ")}
+                            <div className="text-xs text-slate-500">
+                              {row.payment_count} payment row
+                              {row.payment_count === 1 ? "" : "s"} ·{" "}
+                              {row.credit_card_payment_count} credit card
+                            </div>
+                          </td>
+                          <td className="px-5 py-3 text-slate-700">
+                            {row.reward_status.replaceAll("_", " ")}
+                            <div className="text-xs text-slate-500">
+                              {row.reward_transaction_count} reward transaction
+                              {row.reward_transaction_count === 1 ? "" : "s"}
+                            </div>
+                          </td>
+                          <td className="px-5 py-3 font-medium text-slate-900">
+                            {row.recommended_action}
+                          </td>
+                          <td className="px-5 py-3 text-right">
+                            <Link
+                              className="inline-flex h-10 cursor-pointer items-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 active:bg-slate-200"
+                              href={`/purchases/${row.purchase_id}`}
+                            >
+                              Fix
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="divide-y divide-slate-200 md:hidden">
+                  {filteredRewardAuditRows.map((row) => (
+                    <Link
+                      className="block space-y-3 px-5 py-4 transition hover:bg-slate-50 active:bg-slate-100"
+                      href={`/purchases/${row.purchase_id}`}
+                      key={row.purchase_id}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold">{row.store_name}</p>
+                          <p className="text-sm text-slate-500">
+                            {formatDate(row.purchase_date)}
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">
+                          {row.recommended_action}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <p className="text-xs font-medium text-slate-500">
+                            Paid
+                          </p>
+                          <p className="font-semibold">
+                            {formatCurrency(row.paid_amount)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-medium text-slate-500">
+                            Issue
+                          </p>
+                          <p className="font-semibold">
+                            {row.issues
+                              .map((issue) => issue.replaceAll("_", " "))
+                              .join(", ")}
+                          </p>
+                        </div>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              </>
+            )
           ) : filteredPurchases.length === 0 ? (
             <div className="px-5 py-8 text-sm text-slate-500">
               <p className="font-medium text-slate-900">No purchases found.</p>

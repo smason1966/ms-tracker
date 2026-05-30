@@ -176,3 +176,53 @@ def test_recalculate_rewards_is_idempotent(monkeypatch):
         assert transactions[0].points_earned == Decimal("1504.7600")
     finally:
         db.close()
+
+
+def test_reward_audit_lists_purchase_missing_funding_inputs(monkeypatch):
+    session_factory = make_session_factory()
+    purchase_id, _, _ = seed_purchase_59_style_batch(session_factory)
+    monkeypatch.setattr(purchase_batches, "SessionLocal", session_factory)
+
+    audit = purchase_batches.list_purchase_batches_with_reward_issues()
+
+    assert audit["count"] == 1
+    row = audit["purchases"][0]
+    assert row["purchase_id"] == purchase_id
+    assert row["issues"] == ["no_purchase_payments"]
+    assert row["recommended_action"] == "Add funding payment"
+
+
+def test_reward_audit_detects_reward_transaction_mismatch(monkeypatch):
+    session_factory = make_session_factory()
+    purchase_id, card_id, category_id = seed_purchase_59_style_batch(session_factory)
+    monkeypatch.setattr(purchase_payments, "SessionLocal", session_factory)
+    monkeypatch.setattr(purchase_batches, "SessionLocal", session_factory)
+    purchase_payments.add_purchase_payment(
+        purchase_id,
+        purchase_payments.PurchasePaymentCreate(
+            payment_type="CREDIT_CARD",
+            credit_card_id=card_id,
+            amount=Decimal("1504.76"),
+            spending_category_id=category_id,
+        ),
+    )
+    db = session_factory()
+    try:
+        transaction = (
+            db.query(CreditCardRewardTransaction)
+            .filter(CreditCardRewardTransaction.purchase_id == purchase_id)
+            .one()
+        )
+        transaction.points_earned = Decimal("1.0000")
+        transaction.rewards_earned = Decimal("1.0000")
+        db.commit()
+    finally:
+        db.close()
+
+    audit = purchase_batches.list_purchase_batches_with_reward_issues()
+
+    assert audit["count"] == 1
+    row = audit["purchases"][0]
+    assert row["purchase_id"] == purchase_id
+    assert "reward_transaction_mismatch" in row["issues"]
+    assert row["recommended_action"] == "Generate/Recalculate Rewards"

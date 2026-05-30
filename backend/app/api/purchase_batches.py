@@ -400,6 +400,182 @@ def serialize_purchase_batch(db: Session, batch: PurchaseBatch) -> dict:
     }
 
 
+def rewards_match(left: Decimal, right: Decimal) -> bool:
+    return to_decimal(left).quantize(Decimal("0.0001")) == to_decimal(right).quantize(
+        Decimal("0.0001")
+    )
+
+
+def purchase_reward_audit_row(db: Session, batch: PurchaseBatch) -> dict | None:
+    payments = (
+        db.query(PurchasePayment)
+        .filter(PurchasePayment.purchase_batch_id == batch.id)
+        .order_by(PurchasePayment.created_at.asc())
+        .all()
+    )
+    reward_transactions = (
+        db.query(CreditCardRewardTransaction)
+        .filter(CreditCardRewardTransaction.purchase_id == batch.id)
+        .all()
+    )
+    credit_card_payments = [
+        payment for payment in payments if payment.payment_type == "CREDIT_CARD"
+    ]
+    eligible_payments = [
+        payment
+        for payment in credit_card_payments
+        if payment.credit_card_id is not None
+        and payment.amount is not None
+        and to_decimal(payment.amount) > 0
+    ]
+    issues: list[str] = []
+
+    if not payments:
+        issues.append("no_purchase_payments")
+    elif not credit_card_payments:
+        issues.append("no_credit_card_payments")
+
+    if any(payment.credit_card_id is None for payment in credit_card_payments):
+        issues.append("credit_card_payment_missing_credit_card")
+
+    if any(
+        payment.amount is None or to_decimal(payment.amount) <= 0
+        for payment in credit_card_payments
+    ):
+        issues.append("credit_card_payment_missing_amount")
+
+    if eligible_payments and not reward_transactions:
+        issues.append("missing_reward_transaction")
+
+    expected = {
+        "qualifying_spend": Decimal("0"),
+        "rewards_earned": Decimal("0"),
+        "points_earned": Decimal("0"),
+        "cashback_amount": Decimal("0"),
+        "statement_credit_amount": Decimal("0"),
+        "purchase_discount_amount": Decimal("0"),
+        "effective_savings_amount": Decimal("0"),
+    }
+    for payment in eligible_payments:
+        card = db.query(CreditCard).filter(CreditCard.id == payment.credit_card_id).first()
+        if not card:
+            issues.append("credit_card_payment_missing_credit_card")
+            continue
+        spending_category_id = payment.spending_category_id or get_purchase_spending_category_id(
+            db,
+            batch,
+        )
+        resolution = resolve_reward_for_purchase_payment(
+            db,
+            purchase=batch,
+            card=card,
+            spending_category_id=spending_category_id,
+        )
+        components = calculate_reward_components(
+            purchase=batch,
+            amount=to_decimal(payment.amount),
+            reward_type=resolution["reward_type"],
+            multiplier=to_decimal(resolution["final_multiplier"]),
+            value=to_decimal(resolution["rule_value"]),
+        )
+        expected["qualifying_spend"] += to_decimal(payment.amount)
+        for key in (
+            "rewards_earned",
+            "points_earned",
+            "cashback_amount",
+            "statement_credit_amount",
+            "purchase_discount_amount",
+            "effective_savings_amount",
+        ):
+            expected[key] += components[key]
+
+    actual = {
+        "qualifying_spend": sum(
+            (to_decimal(transaction.qualifying_spend) for transaction in reward_transactions),
+            Decimal("0"),
+        ),
+        "rewards_earned": sum(
+            (to_decimal(transaction.rewards_earned) for transaction in reward_transactions),
+            Decimal("0"),
+        ),
+        "points_earned": sum(
+            (to_decimal(transaction.points_earned) for transaction in reward_transactions),
+            Decimal("0"),
+        ),
+        "cashback_amount": sum(
+            (to_decimal(transaction.cashback_amount) for transaction in reward_transactions),
+            Decimal("0"),
+        ),
+        "statement_credit_amount": sum(
+            (
+                to_decimal(transaction.statement_credit_amount)
+                for transaction in reward_transactions
+            ),
+            Decimal("0"),
+        ),
+        "purchase_discount_amount": sum(
+            (
+                to_decimal(transaction.purchase_discount_amount)
+                for transaction in reward_transactions
+            ),
+            Decimal("0"),
+        ),
+        "effective_savings_amount": sum(
+            (
+                to_decimal(transaction.effective_savings_amount)
+                for transaction in reward_transactions
+            ),
+            Decimal("0"),
+        ),
+    }
+    if reward_transactions and eligible_payments and any(
+        not rewards_match(expected[key], actual[key]) for key in expected
+    ):
+        issues.append("reward_transaction_mismatch")
+
+    if not issues:
+        return None
+
+    recommended_action = "Add funding payment"
+    if "missing_reward_transaction" in issues or "reward_transaction_mismatch" in issues:
+        recommended_action = "Generate/Recalculate Rewards"
+    if (
+        "credit_card_payment_missing_credit_card" in issues
+        or "credit_card_payment_missing_amount" in issues
+    ):
+        recommended_action = "Correct funding payment"
+
+    return {
+        "purchase_id": batch.id,
+        "store_name": batch.store_name,
+        "purchase_date": batch.purchase_date,
+        "paid_amount": batch.purchase_total_paid,
+        "payment_count": len(payments),
+        "credit_card_payment_count": len(credit_card_payments),
+        "reward_transaction_count": len(reward_transactions),
+        "funding_status": ", ".join(
+            issue
+            for issue in issues
+            if issue
+            in {
+                "no_purchase_payments",
+                "no_credit_card_payments",
+                "credit_card_payment_missing_credit_card",
+                "credit_card_payment_missing_amount",
+            }
+        )
+        or "credit_card_funding_recorded",
+        "reward_status": ", ".join(
+            issue
+            for issue in issues
+            if issue in {"missing_reward_transaction", "reward_transaction_mismatch"}
+        )
+        or "not_checked",
+        "issues": issues,
+        "recommended_action": recommended_action,
+    }
+
+
 def purchase_delete_report(db: Session, batch: PurchaseBatch) -> dict:
     cards = (
         db.query(GiftCard)
@@ -709,6 +885,29 @@ def list_purchase_batches_needing_receipts():
             reverse=True,
         )
         return [serialize_purchase_batch(db, batch) for batch in purchases]
+    finally:
+        db.close()
+
+
+@router.get("/reward-audit")
+def list_purchase_batches_with_reward_issues():
+    db: Session = SessionLocal()
+
+    try:
+        purchases = (
+            db.query(PurchaseBatch)
+            .order_by(PurchaseBatch.purchase_date.desc(), PurchaseBatch.id.desc())
+            .all()
+        )
+        rows = [
+            row
+            for batch in purchases
+            if (row := purchase_reward_audit_row(db, batch)) is not None
+        ]
+        return {
+            "count": len(rows),
+            "purchases": rows,
+        }
     finally:
         db.close()
         
