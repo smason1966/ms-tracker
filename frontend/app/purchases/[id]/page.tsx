@@ -298,7 +298,8 @@ export default function PurchaseDetailPage() {
   const [isEditingFinancials, setIsEditingFinancials] = useState(false);
   const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
   const [isLoadingPayments, setIsLoadingPayments] = useState(true);
-  const [hasLoadedPayments, setHasLoadedPayments] = useState(false);
+  const [paymentsLoadedForPurchaseId, setPaymentsLoadedForPurchaseId] =
+    useState<string | null>(null);
   const [isLoadingReceipts, setIsLoadingReceipts] = useState(true);
   const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
   const [isLoadingGiftCards, setIsLoadingGiftCards] = useState(true);
@@ -377,16 +378,21 @@ export default function PurchaseDetailPage() {
     Boolean(selectedFuelAccountId) &&
     currentFuelAccountId !== selectedFuelAccountId;
   const rewardTransactions = purchase?.reward_transactions ?? [];
+  const paymentsLoadedForCurrentPurchase =
+    paymentsLoadedForPurchaseId === purchaseId && !isLoadingPayments;
   const hasCreditCardFunding = payments.some(
     (payment) =>
-      payment.payment_type === "CREDIT_CARD" && payment.credit_card_id !== null,
+      payment.payment_type?.toUpperCase() === "CREDIT_CARD" &&
+      payment.credit_card_id !== null,
   );
   const showMissingFundingDiagnostic =
-    hasLoadedPayments && payments.length === 0;
+    paymentsLoadedForCurrentPurchase && payments.length === 0;
   const showMissingCreditCardFundingDiagnostic =
-    hasLoadedPayments && payments.length > 0 && !hasCreditCardFunding;
+    paymentsLoadedForCurrentPurchase &&
+    payments.length > 0 &&
+    !hasCreditCardFunding;
   const showMissingRewardDiagnostic =
-    hasLoadedPayments &&
+    paymentsLoadedForCurrentPurchase &&
     payments.length > 0 &&
     hasCreditCardFunding &&
     rewardTransactions.length === 0;
@@ -723,7 +729,7 @@ export default function PurchaseDetailPage() {
       }
 
       setIsLoadingPayments(true);
-      setHasLoadedPayments(false);
+      setPaymentsLoadedForPurchaseId(null);
       setPayments([]);
       setPaymentsError(null);
 
@@ -738,7 +744,7 @@ export default function PurchaseDetailPage() {
 
         if (isMounted) {
           setPayments(data);
-          setHasLoadedPayments(true);
+          setPaymentsLoadedForPurchaseId(purchaseId);
         }
       } catch (err) {
         if (isMounted) {
@@ -1257,7 +1263,7 @@ export default function PurchaseDetailPage() {
       throw new Error(`Failed to refresh payments (${response.status})`);
     }
     setPayments((await response.json()) as PurchasePayment[]);
-    setHasLoadedPayments(true);
+    setPaymentsLoadedForPurchaseId(purchaseId);
   }
 
   function beginEditFundingPayment(payment: PurchasePayment) {
