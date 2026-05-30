@@ -189,6 +189,8 @@ type FundingPaymentForm = {
   notes: string;
 };
 
+type PaymentsStatus = "loading" | "loaded" | "error";
+
 type PurchaseDeleteReport = {
   can_delete: boolean;
   blocking_dependencies: { message?: string }[];
@@ -297,7 +299,8 @@ export default function PurchaseDetailPage() {
   const [cardImageInputKey, setCardImageInputKey] = useState(0);
   const [isEditingFinancials, setIsEditingFinancials] = useState(false);
   const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
-  const [isLoadingPayments, setIsLoadingPayments] = useState(true);
+  const [paymentsStatus, setPaymentsStatus] =
+    useState<PaymentsStatus>("loading");
   const [paymentsLoadedForPurchaseId, setPaymentsLoadedForPurchaseId] =
     useState<string | null>(null);
   const [isLoadingReceipts, setIsLoadingReceipts] = useState(true);
@@ -378,23 +381,24 @@ export default function PurchaseDetailPage() {
     Boolean(selectedFuelAccountId) &&
     currentFuelAccountId !== selectedFuelAccountId;
   const rewardTransactions = purchase?.reward_transactions ?? [];
-  const paymentsLoadedForCurrentPurchase =
-    paymentsLoadedForPurchaseId === purchaseId && !isLoadingPayments;
-  const hasCreditCardFunding = payments.some(
+  const paymentsLoaded =
+    paymentsStatus === "loaded" && paymentsLoadedForPurchaseId === purchaseId;
+  const purchaseLoaded = !isLoadingPurchase && Boolean(purchase);
+  const hasAnyPayment = payments.length > 0;
+  const hasCreditCardPayment = payments.some(
     (payment) =>
       payment.payment_type?.toUpperCase() === "CREDIT_CARD" &&
       payment.credit_card_id !== null,
   );
-  const showMissingFundingDiagnostic =
-    paymentsLoadedForCurrentPurchase && payments.length === 0;
-  const showMissingCreditCardFundingDiagnostic =
-    paymentsLoadedForCurrentPurchase &&
-    payments.length > 0 &&
-    !hasCreditCardFunding;
-  const showMissingRewardDiagnostic =
-    paymentsLoadedForCurrentPurchase &&
-    payments.length > 0 &&
-    hasCreditCardFunding &&
+  const shouldShowNoFundingWarning =
+    purchaseLoaded && paymentsLoaded && !hasAnyPayment;
+  const shouldShowMissingCreditCardFundingWarning =
+    purchaseLoaded && paymentsLoaded && hasAnyPayment && !hasCreditCardPayment;
+  const shouldShowMissingRewardWarning =
+    purchaseLoaded &&
+    paymentsLoaded &&
+    hasAnyPayment &&
+    hasCreditCardPayment &&
     rewardTransactions.length === 0;
   const defaultFundingAmount =
     editingFundingPaymentId !== null ||
@@ -728,7 +732,7 @@ export default function PurchaseDetailPage() {
         return;
       }
 
-      setIsLoadingPayments(true);
+      setPaymentsStatus("loading");
       setPaymentsLoadedForPurchaseId(null);
       setPayments([]);
       setPaymentsError(null);
@@ -745,16 +749,14 @@ export default function PurchaseDetailPage() {
         if (isMounted) {
           setPayments(data);
           setPaymentsLoadedForPurchaseId(purchaseId);
+          setPaymentsStatus("loaded");
         }
       } catch (err) {
         if (isMounted) {
           setPaymentsError(
             err instanceof Error ? err.message : "Failed to load payments.",
           );
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoadingPayments(false);
+          setPaymentsStatus("error");
         }
       }
     }
@@ -1264,6 +1266,7 @@ export default function PurchaseDetailPage() {
     }
     setPayments((await response.json()) as PurchasePayment[]);
     setPaymentsLoadedForPurchaseId(purchaseId);
+    setPaymentsStatus("loaded");
   }
 
   function beginEditFundingPayment(payment: PurchasePayment) {
@@ -2418,7 +2421,7 @@ export default function PurchaseDetailPage() {
             </button>
           </div>
 
-          {showMissingFundingDiagnostic ? (
+          {shouldShowNoFundingWarning ? (
             <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               <p className="font-semibold">No funding/payment rows recorded.</p>
               <p className="mt-1">
@@ -2428,7 +2431,7 @@ export default function PurchaseDetailPage() {
             </div>
           ) : null}
 
-          {showMissingRewardDiagnostic ? (
+          {shouldShowMissingRewardWarning ? (
             <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               <p className="font-semibold">Rewards have not been generated.</p>
               <p className="mt-1">
@@ -2456,7 +2459,7 @@ export default function PurchaseDetailPage() {
             </p>
           ) : null}
 
-          {isLoadingPayments ? (
+          {paymentsStatus === "loading" ? (
             <p className="mt-4 text-sm text-slate-500">Loading funding rows...</p>
           ) : paymentsError ? (
             <p className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-700">
@@ -2695,25 +2698,25 @@ export default function PurchaseDetailPage() {
             Rewards are generated from CREDIT_CARD funding rows.
           </p>
 
-          {isLoadingPayments ? (
+          {paymentsStatus === "loading" ? (
             <p className="mt-4 text-sm text-slate-500">Loading funding rows...</p>
           ) : null}
 
-          {showMissingFundingDiagnostic ? (
+          {shouldShowNoFundingWarning ? (
             <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
               Missing funding payment: add a CREDIT_CARD payment row before
               recalculating rewards.
             </p>
           ) : null}
 
-          {showMissingCreditCardFundingDiagnostic ? (
+          {shouldShowMissingCreditCardFundingWarning ? (
             <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
               Missing credit card funding: add a CREDIT_CARD payment row before
               recalculating rewards.
             </p>
           ) : null}
 
-          {showMissingRewardDiagnostic ? (
+          {shouldShowMissingRewardWarning ? (
             <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
               No reward transaction found. Check funding card, spending
               category, and matching reward rules, then recalculate.
