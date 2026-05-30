@@ -1,5 +1,6 @@
 import json
 import asyncio
+from decimal import Decimal
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -15,6 +16,7 @@ from app.models.credit_card import CreditCard
 from app.models.credit_card_reward_rule import CreditCardRewardRule
 from app.models.gift_card import GiftCard
 from app.models.purchase_batch import PurchaseBatch
+from app.models.purchase_payment import PurchasePayment
 from app.models.reward_program import RewardProgram
 from app.models.sale import Sale
 from app.models.sale_gift_card import SaleGiftCard
@@ -1447,6 +1449,85 @@ def reward_setup_zip() -> bytes:
     return buffer.getvalue()
 
 
+def funding_card_transfer_zip(
+    *,
+    nickname: str | None = "Amex Business Gold",
+    credit_limit: str | None = None,
+) -> bytes:
+    now = utc_now().isoformat()
+    payloads = {
+        "manifest.json": {
+            "export_version": "1.0",
+            "exported_at": now,
+            "source_environment": "local-test",
+            "package_type": "core",
+            "source_record_ids": {"purchases": [59], "sales": []},
+        },
+        "purchases.json": [
+            {
+                "id": 59,
+                "store_name": "Fred Meyer",
+                "purchase_date": now,
+                "total_amount": "22.00",
+                "purchase_total_paid": "22.00",
+            }
+        ],
+        "cards.json": [],
+        "purchase_payments.json": [
+            {
+                "id": 501,
+                "purchase_batch_id": 59,
+                "payment_type": "CREDIT_CARD",
+                "credit_card_id": 10,
+                "amount": "22.00",
+                "reward_program_id": 7,
+            }
+        ],
+        "sales.json": [],
+        "fuel_transactions.json": [],
+        "receipts.json": [],
+        "card_images.json": [],
+        "sale_gift_cards.json": [],
+        "sale_fuel_accounts.json": [],
+        "sale_events.json": [],
+        "buyers.json": [],
+        "payment_accounts.json": [],
+        "fuel_accounts.json": [],
+        "players.json": [],
+        "credit_cards.json": [
+            {
+                "id": 10,
+                "nickname": nickname,
+                "issuer": "American Express",
+                "network": "American Express",
+                "last_four": "3422",
+                "reward_program_id": 7,
+                "credit_limit": credit_limit,
+                "current_balance": "22.00",
+                "rewards_type": "OTHER",
+            }
+        ],
+        "reward_programs.json": [
+            {
+                "id": 7,
+                "name": "Membership Rewards",
+                "short_code": "MR",
+                "category": "Bank",
+                "eligible_for_credit_cards": True,
+                "active": True,
+            }
+        ],
+        "spending_categories.json": [],
+        "stores.json": [],
+        "credit_card_reward_rules.json": [],
+    }
+    buffer = BytesIO()
+    with ZipFile(buffer, "w", ZIP_DEFLATED) as zip_file:
+        for filename, payload in payloads.items():
+            zip_file.writestr(filename, json.dumps(payload, default=str))
+    return buffer.getvalue()
+
+
 def test_reward_setup_import_uses_natural_keys_and_updates_card(monkeypatch, tmp_path):
     configure_transfer_env(monkeypatch, tmp_path)
     from app.api import data_transfer
@@ -1533,3 +1614,105 @@ def test_reward_setup_preview_skips_rule_when_target_card_missing(monkeypatch, t
     assert preview["plan"]["skipped"]["credit_card_reward_rules"] == 2
     assert preview["plan"]["skipped_reward_rules"][0]["missing"] == ["credit_card"]
     db.close()
+
+
+def test_transfer_import_creates_missing_funding_card_with_safe_defaults(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api import data_transfer
+
+    session_factory = make_session_factory()
+    monkeypatch.setattr(data_transfer, "SessionLocal", session_factory)
+
+    result = asyncio.run(
+        data_transfer.apply_transfer(FakeUpload(funding_card_transfer_zip()))
+    )
+
+    assert result["created"]["purchases"] == 1
+    db = session_factory()
+    try:
+        card = (
+            db.query(CreditCard)
+            .filter(CreditCard.nickname == "Amex Business Gold")
+            .one()
+        )
+        payment = db.query(PurchasePayment).one()
+        program = db.query(RewardProgram).filter(RewardProgram.short_code == "MR").one()
+
+        assert card.credit_limit == Decimal("0.00")
+        assert card.current_balance == Decimal("22.00")
+        assert card.current_spend_progress == Decimal("0.00")
+        assert card.minimum_payment_paid is False
+        assert card.autopay_enabled is False
+        assert card.reports_to_ex is False
+        assert card.reports_to_tu is False
+        assert card.reports_to_eq is False
+        assert card.is_active is True
+        assert card.reward_program_id == program.id
+        assert payment.credit_card_id == card.id
+        assert payment.reward_program_id == program.id
+    finally:
+        db.close()
+
+
+def test_transfer_import_reuses_created_funding_card_and_payment(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api import data_transfer
+
+    session_factory = make_session_factory()
+    monkeypatch.setattr(data_transfer, "SessionLocal", session_factory)
+    contents = funding_card_transfer_zip()
+
+    asyncio.run(data_transfer.apply_transfer(FakeUpload(contents)))
+    asyncio.run(data_transfer.apply_transfer(FakeUpload(contents)))
+
+    db = session_factory()
+    try:
+        assert (
+            db.query(CreditCard)
+            .filter(CreditCard.nickname == "Amex Business Gold")
+            .count()
+            == 1
+        )
+        assert (
+            db.query(PurchaseBatch)
+            .filter(PurchaseBatch.imported_source_id == "59")
+            .count()
+            == 1
+        )
+        assert db.query(PurchasePayment).count() == 1
+    finally:
+        db.close()
+
+
+def test_transfer_import_rejects_unresolvable_credit_card_before_flush(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api import data_transfer
+
+    session_factory = make_session_factory()
+    monkeypatch.setattr(data_transfer, "SessionLocal", session_factory)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            data_transfer.apply_transfer(
+                FakeUpload(funding_card_transfer_zip(nickname=None))
+            )
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Credit card transfer record is missing nickname."
+    db = session_factory()
+    try:
+        assert db.query(PurchaseBatch).count() == 0
+        assert db.query(CreditCard).count() == 0
+        assert db.query(PurchasePayment).count() == 0
+    finally:
+        db.close()

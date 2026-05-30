@@ -13,6 +13,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
@@ -202,6 +203,34 @@ def parse_decimal(value: str | int | float | None) -> Decimal | None:
         return None
 
     return Decimal(str(value))
+
+
+def parse_decimal_default(value: str | int | float | None, default: Decimal) -> Decimal:
+    parsed = parse_decimal(value)
+    return parsed if parsed is not None else default
+
+
+def parse_bool_default(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        return default
+    return bool(value)
+
+
+def validate_transfer_credit_card(source: dict) -> None:
+    if not str(source.get("nickname") or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Credit card transfer record is missing nickname.",
+        )
 
 
 def credential_ending(value: str | None, length: int = 4) -> str | None:
@@ -1133,6 +1162,9 @@ def preview_package(db: Session, package: dict) -> dict:
     if package["manifest"].get("package_type") == "linked_images":
         return preview_image_package(db, package)
 
+    for source in package.get("credit_cards", []):
+        validate_transfer_credit_card(source)
+
     duplicate_cards = []
     duplicate_purchases = []
     duplicate_check_warnings = []
@@ -2037,18 +2069,88 @@ async def apply_transfer(
         for source in package["credit_cards"]:
             card = find_credit_card_by_natural_key(db, source)
             if not card:
+                validate_transfer_credit_card(source)
                 card = CreditCard(
                     player_id=player_map.get(source.get("player_id")),
-                    nickname=source["nickname"],
+                    nickname=str(source["nickname"]).strip(),
                     issuer=source.get("issuer") or "Unknown",
                     network=source.get("network"),
                     last_four=source.get("last_four"),
                     reward_program_id=reward_program_map.get(source.get("reward_program_id")),
-                    credit_limit=source.get("credit_limit"),
-                    current_balance=source.get("current_balance"),
+                    credit_limit=parse_decimal_default(
+                        source.get("credit_limit"),
+                        Decimal("0"),
+                    ),
+                    current_balance=parse_decimal_default(
+                        source.get("current_balance"),
+                        Decimal("0"),
+                    ),
+                    statement_balance=parse_decimal(source.get("statement_balance")),
+                    statement_paid_amount=parse_decimal(
+                        source.get("statement_paid_amount")
+                    ),
+                    available_credit=parse_decimal(source.get("available_credit")),
+                    reported_utilization=parse_decimal(
+                        source.get("reported_utilization")
+                    ),
+                    minimum_payment_due=parse_decimal(
+                        source.get("minimum_payment_due")
+                    ),
+                    minimum_payment_paid=parse_bool_default(
+                        source.get("minimum_payment_paid"),
+                        False,
+                    ),
+                    autopay_enabled=parse_bool_default(
+                        source.get("autopay_enabled"),
+                        False,
+                    ),
+                    payment_due_date=parse_date(source.get("payment_due_date")),
+                    next_statement_close_date=parse_date(
+                        source.get("next_statement_close_date")
+                    ),
+                    preferred_utilization=parse_decimal(
+                        source.get("preferred_utilization")
+                    ),
+                    apr=parse_decimal(source.get("apr")),
+                    payment_options=source.get("payment_options"),
+                    statement_close_day=source.get("statement_close_day"),
+                    payment_due_day=source.get("payment_due_day"),
+                    opened_date=parse_date(source.get("opened_date")),
+                    date_last_used=parse_date(source.get("date_last_used")),
+                    date_last_product_change=parse_date(
+                        source.get("date_last_product_change")
+                    ),
+                    date_closed=parse_date(source.get("date_closed")),
+                    date_last_cli=parse_date(source.get("date_last_cli")),
+                    annual_fee=parse_decimal(source.get("annual_fee")),
+                    signup_bonus_points=source.get("signup_bonus_points"),
+                    signup_bonus_spend=parse_decimal(
+                        source.get("signup_bonus_spend")
+                    ),
+                    signup_bonus_deadline=parse_date(
+                        source.get("signup_bonus_deadline")
+                    ),
+                    current_spend_progress=parse_decimal_default(
+                        source.get("current_spend_progress"),
+                        Decimal("0"),
+                    ),
                     rewards_type=source.get("rewards_type") or "OTHER",
-                    rewards_rate=source.get("rewards_rate"),
-                    is_active=source.get("is_active", True),
+                    rewards_rate=parse_decimal(source.get("rewards_rate")),
+                    category_tags=source.get("category_tags"),
+                    is_active=parse_bool_default(source.get("is_active"), True),
+                    reports_to_ex=parse_bool_default(
+                        source.get("reports_to_ex"),
+                        False,
+                    ),
+                    reports_to_tu=parse_bool_default(
+                        source.get("reports_to_tu"),
+                        False,
+                    ),
+                    reports_to_eq=parse_bool_default(
+                        source.get("reports_to_eq"),
+                        False,
+                    ),
+                    notes=source.get("notes"),
                     created_at=parse_datetime(source.get("created_at")) or imported_at,
                     updated_at=imported_at,
                 )
@@ -2611,6 +2713,15 @@ async def apply_transfer(
                 "duplicate_cards": len(preview["conflicts"]["duplicate_cards"]),
             },
         }
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Transfer import could not save one or more records because "
+                "required data is missing or invalid."
+            ),
+        ) from exc
     except Exception:
         db.rollback()
         raise
