@@ -735,6 +735,180 @@ def test_graph_import_creates_shared_card_once_and_reuses_on_second_import(
         db.close()
 
 
+def test_preview_reuses_exact_imported_purchases_without_duplicate_conflict(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api.data_transfer import load_package, preview_package
+
+    session_factory = make_session_factory()
+    db = session_factory()
+    now = utc_now()
+    db.add(
+        PurchaseBatch(
+            store_name="Best Buy",
+            purchase_date=now,
+            total_amount="100.00",
+            purchase_total_paid="100.00",
+            imported_from_environment="local-test",
+            imported_source_id="32",
+            imported_at=now,
+        )
+    )
+    db.commit()
+    contents = graph_transfer_zip(
+        {
+            "purchases.json": [
+                {
+                    "id": 32,
+                    "store_name": "Best Buy",
+                    "purchase_date": now.isoformat(),
+                    "total_amount": "100.00",
+                    "purchase_total_paid": "100.00",
+                },
+                {
+                    "id": 33,
+                    "store_name": "Best Buy",
+                    "purchase_date": now.isoformat(),
+                    "total_amount": "100.00",
+                    "purchase_total_paid": "100.00",
+                },
+            ],
+        }
+    )
+
+    preview = preview_package(db, load_package(contents))
+
+    assert preview["plan"]["reuse"]["purchases"] == 1
+    assert preview["plan"]["create"]["purchases"] == 1
+    assert preview["conflicts"]["duplicate_purchases"] == []
+    db.close()
+
+
+def test_fuzzy_duplicate_purchase_without_source_mapping_still_conflicts(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api.data_transfer import load_package, preview_package
+
+    session_factory = make_session_factory()
+    db = session_factory()
+    now = utc_now()
+    existing = PurchaseBatch(
+        store_name="Best Buy",
+        purchase_date=now,
+        total_amount="100.00",
+        purchase_total_paid="100.00",
+    )
+    db.add(existing)
+    db.commit()
+    contents = graph_transfer_zip(
+        {
+            "purchases.json": [
+                {
+                    "id": 33,
+                    "store_name": "Best Buy",
+                    "purchase_date": now.isoformat(),
+                    "total_amount": "100.00",
+                    "purchase_total_paid": "100.00",
+                },
+            ],
+        }
+    )
+
+    preview = preview_package(db, load_package(contents))
+
+    assert preview["plan"]["reuse"]["purchases"] == 0
+    assert preview["plan"]["create"]["purchases"] == 0
+    assert preview["conflicts"]["duplicate_purchases"] == [
+        {"source_id": 33, "existing_id": existing.id}
+    ]
+    db.close()
+
+
+def test_exact_card_and_sale_source_mapping_reuse_does_not_block_preview(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api.data_transfer import load_package, preview_package
+
+    session_factory = make_session_factory()
+    db = session_factory()
+    now = utc_now()
+    buyer = Buyer(name="Buyer")
+    purchase = PurchaseBatch(
+        store_name="Best Buy",
+        purchase_date=now,
+        total_amount="100.00",
+        purchase_total_paid="100.00",
+        imported_from_environment="local-test",
+        imported_source_id="10",
+        imported_at=now,
+    )
+    db.add_all([buyer, purchase])
+    db.flush()
+    card = GiftCard(
+        purchase_batch_id=purchase.id,
+        brand="Best Buy",
+        face_value="100.00",
+        acquisition_cost="100.00",
+        imported_from_environment="local-test",
+        imported_source_id="20",
+        imported_at=now,
+    )
+    sale = Sale(
+        buyer_id=buyer.id,
+        expected_payout="90.00",
+        imported_from_environment="local-test",
+        imported_source_id="30",
+        imported_at=now,
+    )
+    db.add_all([card, sale])
+    db.commit()
+    contents = graph_transfer_zip(
+        {
+            "purchases.json": [
+                {
+                    "id": 10,
+                    "store_name": "Best Buy",
+                    "purchase_date": now.isoformat(),
+                    "total_amount": "100.00",
+                    "purchase_total_paid": "100.00",
+                }
+            ],
+            "cards.json": [
+                {
+                    "id": 20,
+                    "purchase_batch_id": 10,
+                    "brand": "Best Buy",
+                    "face_value": "100.00",
+                    "acquisition_cost": "100.00",
+                }
+            ],
+            "buyers.json": [{"id": 40, "name": "Buyer"}],
+            "sales.json": [
+                {
+                    "id": 30,
+                    "buyer_id": 40,
+                    "sold_at": now.isoformat(),
+                    "expected_payout": "90.00",
+                }
+            ],
+        }
+    )
+
+    preview = preview_package(db, load_package(contents))
+
+    assert preview["plan"]["reuse"]["cards"] == 1
+    assert preview["plan"]["reuse"]["sales"] == 1
+    assert preview["conflicts"]["duplicate_cards"] == []
+    assert preview["conflicts"]["duplicate_purchases"] == []
+    db.close()
+
+
 def test_graph_import_rolls_back_on_failure(monkeypatch, tmp_path):
     configure_transfer_env(monkeypatch, tmp_path)
     from app.api import data_transfer

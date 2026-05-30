@@ -851,7 +851,9 @@ export default function DataImportPage() {
                 </div>
               </div>
               <div className="rounded-md border border-slate-200 p-3 text-sm">
-                <p className="font-semibold text-slate-700">Reuse</p>
+                <p className="font-semibold text-slate-700">
+                  Reusing already imported records
+                </p>
                 <div className="mt-2 grid grid-cols-2 gap-2">
                   {Object.entries(preview.plan?.reuse ?? {}).map(([key, value]) => (
                     <p key={key}>
@@ -912,7 +914,11 @@ export default function DataImportPage() {
 
             {duplicateCards.length > 0 || duplicatePurchases.length > 0 ? (
               <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                <p className="font-semibold">Duplicate records detected</p>
+                <p className="font-semibold">Duplicate conflicts detected</p>
+                <p className="mt-1">
+                  These records do not have an exact imported source match, but
+                  look similar to existing target records.
+                </p>
                 {duplicateCards.length > 0 ? (
                   <ul className="mt-2 list-disc space-y-1 pl-5">
                     {duplicateCards.map((card) => (

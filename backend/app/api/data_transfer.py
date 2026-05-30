@@ -800,13 +800,17 @@ def preview_package(db: Session, package: dict) -> dict:
     duplicate_check_warnings = []
     source_environment = package["manifest"].get("source_environment")
     duplicate_card_source_ids = set()
+    exact_card_source_ids = set()
     duplicate_purchase_source_ids = set()
+    exact_purchase_source_ids = set()
 
     for card in package["cards"]:
         duplicate, payload, limited = find_duplicate_card_for_import(db, card, package)
         if payload:
-            duplicate_card_source_ids.add(card.get("id"))
-            if payload.get("match_type") != "imported_source_id":
+            if payload.get("match_type") == "imported_source_id":
+                exact_card_source_ids.add(card.get("id"))
+            else:
+                duplicate_card_source_ids.add(card.get("id"))
                 duplicate_cards.append(payload)
         elif limited:
             duplicate_check_warnings.append(
@@ -821,7 +825,11 @@ def preview_package(db: Session, package: dict) -> dict:
             )
 
     for purchase in package["purchases"]:
-        duplicate = find_duplicate_purchase(db, purchase, source_environment)
+        imported_purchase = find_imported_purchase(db, purchase, source_environment)
+        if imported_purchase:
+            exact_purchase_source_ids.add(purchase.get("id"))
+            continue
+        duplicate = find_fuzzy_duplicate_purchase(db, purchase, source_environment)
         if duplicate:
             duplicate_purchase_source_ids.add(purchase.get("id"))
             duplicate_purchases.append(
@@ -856,13 +864,17 @@ def preview_package(db: Session, package: dict) -> dict:
         },
         "plan": {
             "create": {
-                "purchases": len(package["purchases"]) - len(duplicate_purchase_source_ids),
-                "cards": len(package["cards"]) - len(duplicate_card_source_ids),
+                "purchases": len(package["purchases"])
+                - len(exact_purchase_source_ids)
+                - len(duplicate_purchase_source_ids),
+                "cards": len(package["cards"])
+                - len(exact_card_source_ids)
+                - len(duplicate_card_source_ids),
                 "sales": len(package["sales"]) - len(reusable_sales),
             },
             "reuse": {
-                "purchases": len(duplicate_purchase_source_ids),
-                "cards": len(duplicate_card_source_ids),
+                "purchases": len(exact_purchase_source_ids),
+                "cards": len(exact_card_source_ids),
                 "sales": len(reusable_sales),
             },
             "missing_dependencies": missing_dependencies,
@@ -939,13 +951,26 @@ def find_duplicate_purchase(
     imported = find_imported_purchase(db, purchase, source_environment)
     if imported:
         return imported
-    return (
+    return find_fuzzy_duplicate_purchase(db, purchase, source_environment)
+
+
+def find_fuzzy_duplicate_purchase(
+    db: Session,
+    purchase: dict,
+    source_environment: str | None = None,
+) -> PurchaseBatch | None:
+    query = (
         db.query(PurchaseBatch)
         .filter(PurchaseBatch.store_name == purchase.get("store_name"))
         .filter(PurchaseBatch.purchase_date == parse_datetime(purchase.get("purchase_date")))
         .filter(PurchaseBatch.purchase_total_paid == parse_decimal(purchase.get("purchase_total_paid")))
-        .first()
     )
+    if source_environment:
+        query = query.filter(
+            (PurchaseBatch.imported_from_environment.is_(None))
+            | (PurchaseBatch.imported_from_environment != source_environment)
+        )
+    return query.first()
 
 
 def find_imported_sale(
