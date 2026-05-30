@@ -298,6 +298,7 @@ export default function PurchaseDetailPage() {
   const [isEditingFinancials, setIsEditingFinancials] = useState(false);
   const [isLoadingPurchase, setIsLoadingPurchase] = useState(true);
   const [isLoadingPayments, setIsLoadingPayments] = useState(true);
+  const [hasLoadedPayments, setHasLoadedPayments] = useState(false);
   const [isLoadingReceipts, setIsLoadingReceipts] = useState(true);
   const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
   const [isLoadingGiftCards, setIsLoadingGiftCards] = useState(true);
@@ -381,9 +382,11 @@ export default function PurchaseDetailPage() {
       payment.payment_type === "CREDIT_CARD" && payment.credit_card_id !== null,
   );
   const showMissingFundingDiagnostic =
-    !isLoadingPayments && payments.length === 0;
+    hasLoadedPayments && payments.length === 0;
+  const showMissingCreditCardFundingDiagnostic =
+    hasLoadedPayments && payments.length > 0 && !hasCreditCardFunding;
   const showMissingRewardDiagnostic =
-    !isLoadingPayments &&
+    hasLoadedPayments &&
     payments.length > 0 &&
     hasCreditCardFunding &&
     rewardTransactions.length === 0;
@@ -720,6 +723,8 @@ export default function PurchaseDetailPage() {
       }
 
       setIsLoadingPayments(true);
+      setHasLoadedPayments(false);
+      setPayments([]);
       setPaymentsError(null);
 
       try {
@@ -733,6 +738,7 @@ export default function PurchaseDetailPage() {
 
         if (isMounted) {
           setPayments(data);
+          setHasLoadedPayments(true);
         }
       } catch (err) {
         if (isMounted) {
@@ -1251,6 +1257,7 @@ export default function PurchaseDetailPage() {
       throw new Error(`Failed to refresh payments (${response.status})`);
     }
     setPayments((await response.json()) as PurchasePayment[]);
+    setHasLoadedPayments(true);
   }
 
   function beginEditFundingPayment(payment: PurchasePayment) {
@@ -2444,7 +2451,7 @@ export default function PurchaseDetailPage() {
           ) : null}
 
           {isLoadingPayments ? (
-            <p className="mt-4 text-sm text-slate-500">Loading payments...</p>
+            <p className="mt-4 text-sm text-slate-500">Loading funding rows...</p>
           ) : paymentsError ? (
             <p className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-700">
               {paymentsError}
@@ -2682,6 +2689,10 @@ export default function PurchaseDetailPage() {
             Rewards are generated from CREDIT_CARD funding rows.
           </p>
 
+          {isLoadingPayments ? (
+            <p className="mt-4 text-sm text-slate-500">Loading funding rows...</p>
+          ) : null}
+
           {showMissingFundingDiagnostic ? (
             <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
               Missing funding payment: add a CREDIT_CARD payment row before
@@ -2689,7 +2700,14 @@ export default function PurchaseDetailPage() {
             </p>
           ) : null}
 
-          {hasCreditCardFunding && rewardTransactions.length === 0 ? (
+          {showMissingCreditCardFundingDiagnostic ? (
+            <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
+              Missing credit card funding: add a CREDIT_CARD payment row before
+              recalculating rewards.
+            </p>
+          ) : null}
+
+          {showMissingRewardDiagnostic ? (
             <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
               No reward transaction found. Check funding card, spending
               category, and matching reward rules, then recalculate.
