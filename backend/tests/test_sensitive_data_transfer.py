@@ -1453,6 +1453,7 @@ def funding_card_transfer_zip(
     *,
     nickname: str | None = "Amex Business Gold",
     credit_limit: str | None = None,
+    payment_type: str | None = "CREDIT_CARD",
 ) -> bytes:
     now = utc_now().isoformat()
     payloads = {
@@ -1477,7 +1478,7 @@ def funding_card_transfer_zip(
             {
                 "id": 501,
                 "purchase_batch_id": 59,
-                "payment_type": "CREDIT_CARD",
+                "payment_type": payment_type,
                 "credit_card_id": 10,
                 "amount": "22.00",
                 "reward_program_id": 7,
@@ -1686,6 +1687,29 @@ def test_transfer_import_reuses_created_funding_card_and_payment(
             == 1
         )
         assert db.query(PurchasePayment).count() == 1
+    finally:
+        db.close()
+
+
+def test_transfer_import_reuses_payment_when_type_defaults(
+    monkeypatch,
+    tmp_path,
+):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api import data_transfer
+
+    session_factory = make_session_factory()
+    monkeypatch.setattr(data_transfer, "SessionLocal", session_factory)
+    contents = funding_card_transfer_zip(payment_type=None)
+
+    asyncio.run(data_transfer.apply_transfer(FakeUpload(contents)))
+    asyncio.run(data_transfer.apply_transfer(FakeUpload(contents)))
+
+    db = session_factory()
+    try:
+        payment = db.query(PurchasePayment).one()
+        assert payment.payment_type == "credit_card"
+        assert payment.amount == Decimal("22.00")
     finally:
         db.close()
 

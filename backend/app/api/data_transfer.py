@@ -448,6 +448,322 @@ def find_reward_rule_by_natural_key(
     return query.first()
 
 
+def get_or_create_reward_program(
+    db: Session,
+    source: dict,
+    imported_at: datetime,
+) -> RewardProgram:
+    program = find_reward_program_by_natural_key(db, source)
+    if program:
+        return program
+
+    program = RewardProgram(
+        name=source["name"],
+        short_code=source["short_code"],
+        category=source.get("category") or "other",
+        estimated_value_cents_per_point=source.get(
+            "estimated_value_cents_per_point"
+        ),
+        value_unit=source.get("value_unit"),
+        eligible_for_credit_cards=source.get("eligible_for_credit_cards", True),
+        transferable=source.get("transferable", False),
+        active=source.get("active", True),
+        notes=source.get("notes"),
+        created_at=parse_datetime(source.get("created_at")) or imported_at,
+        updated_at=imported_at,
+    )
+    db.add(program)
+    db.flush()
+    return program
+
+
+def get_or_create_spending_category(
+    db: Session,
+    source: dict,
+    imported_at: datetime,
+) -> SpendingCategory:
+    category = find_spending_category_by_natural_key(db, source)
+    if category:
+        return category
+
+    category = SpendingCategory(
+        key=source["key"],
+        name=source["name"],
+        active=source.get("active", True),
+        notes=source.get("notes"),
+        created_at=parse_datetime(source.get("created_at")) or imported_at,
+    )
+    db.add(category)
+    db.flush()
+    return category
+
+
+def get_or_create_store(
+    db: Session,
+    source: dict,
+    *,
+    spending_category_map: dict[int, int],
+    reward_program_map: dict[int, int],
+    imported_at: datetime,
+) -> Store:
+    store = find_store_by_natural_key(db, source)
+    if not store:
+        store = Store(
+            name=source["name"],
+            store_type=source.get("store_type"),
+            retailer_group=source.get("retailer_group"),
+            merchant_category=source.get("merchant_category"),
+            merchant_type=source.get("merchant_type"),
+            spending_category_id=spending_category_map.get(
+                source.get("spending_category_id")
+            ),
+            reward_program_id=reward_program_map.get(source.get("reward_program_id")),
+            active=source.get("active", True),
+            earns_fuel_points=source.get("earns_fuel_points", False),
+            default_fuel_multiplier=source.get("default_fuel_multiplier"),
+            notes=source.get("notes"),
+            created_at=parse_datetime(source.get("created_at")) or imported_at,
+        )
+        db.add(store)
+        db.flush()
+        return store
+
+    if store.merchant_type is None and source.get("merchant_type"):
+        store.merchant_type = source.get("merchant_type")
+    if store.merchant_category is None and source.get("merchant_category"):
+        store.merchant_category = source.get("merchant_category")
+    if (
+        store.spending_category_id is None
+        and source.get("spending_category_id") in spending_category_map
+    ):
+        store.spending_category_id = spending_category_map[
+            source.get("spending_category_id")
+        ]
+    if (
+        store.reward_program_id is None
+        and source.get("reward_program_id") in reward_program_map
+    ):
+        store.reward_program_id = reward_program_map[source.get("reward_program_id")]
+    return store
+
+
+def transfer_credit_card_kwargs(
+    source: dict,
+    *,
+    player_map: dict[int, int],
+    reward_program_map: dict[int, int],
+    imported_at: datetime,
+) -> dict:
+    validate_transfer_credit_card(source)
+    # Some deployed databases predate nullable credit limits. Keep required
+    # numeric/boolean columns explicit so transfer imports are portable.
+    return {
+        "player_id": player_map.get(source.get("player_id")),
+        "nickname": str(source["nickname"]).strip(),
+        "issuer": source.get("issuer") or "Unknown",
+        "network": source.get("network"),
+        "last_four": source.get("last_four"),
+        "reward_program_id": reward_program_map.get(source.get("reward_program_id")),
+        "credit_limit": parse_decimal_default(source.get("credit_limit"), Decimal("0")),
+        "current_balance": parse_decimal_default(
+            source.get("current_balance"),
+            Decimal("0"),
+        ),
+        "statement_balance": parse_decimal(source.get("statement_balance")),
+        "statement_paid_amount": parse_decimal(source.get("statement_paid_amount")),
+        "available_credit": parse_decimal(source.get("available_credit")),
+        "reported_utilization": parse_decimal(source.get("reported_utilization")),
+        "minimum_payment_due": parse_decimal(source.get("minimum_payment_due")),
+        "minimum_payment_paid": parse_bool_default(
+            source.get("minimum_payment_paid"),
+            False,
+        ),
+        "autopay_enabled": parse_bool_default(source.get("autopay_enabled"), False),
+        "payment_due_date": parse_date(source.get("payment_due_date")),
+        "next_statement_close_date": parse_date(
+            source.get("next_statement_close_date")
+        ),
+        "preferred_utilization": parse_decimal(source.get("preferred_utilization")),
+        "apr": parse_decimal(source.get("apr")),
+        "payment_options": source.get("payment_options"),
+        "statement_close_day": source.get("statement_close_day"),
+        "payment_due_day": source.get("payment_due_day"),
+        "opened_date": parse_date(source.get("opened_date")),
+        "date_last_used": parse_date(source.get("date_last_used")),
+        "date_last_product_change": parse_date(source.get("date_last_product_change")),
+        "date_closed": parse_date(source.get("date_closed")),
+        "date_last_cli": parse_date(source.get("date_last_cli")),
+        "annual_fee": parse_decimal(source.get("annual_fee")),
+        "signup_bonus_points": source.get("signup_bonus_points"),
+        "signup_bonus_spend": parse_decimal(source.get("signup_bonus_spend")),
+        "signup_bonus_deadline": parse_date(source.get("signup_bonus_deadline")),
+        "current_spend_progress": parse_decimal_default(
+            source.get("current_spend_progress"),
+            Decimal("0"),
+        ),
+        "rewards_type": source.get("rewards_type") or "OTHER",
+        "rewards_rate": parse_decimal(source.get("rewards_rate")),
+        "category_tags": source.get("category_tags"),
+        "is_active": parse_bool_default(source.get("is_active"), True),
+        "reports_to_ex": parse_bool_default(source.get("reports_to_ex"), False),
+        "reports_to_tu": parse_bool_default(source.get("reports_to_tu"), False),
+        "reports_to_eq": parse_bool_default(source.get("reports_to_eq"), False),
+        "notes": source.get("notes"),
+        "created_at": parse_datetime(source.get("created_at")) or imported_at,
+        "updated_at": imported_at,
+    }
+
+
+def resolve_import_credit_card(
+    db: Session,
+    source: dict,
+    *,
+    player_map: dict[int, int],
+    reward_program_map: dict[int, int],
+    imported_at: datetime,
+) -> CreditCard:
+    card = find_credit_card_by_natural_key(db, source)
+    if not card:
+        card = CreditCard(
+            **transfer_credit_card_kwargs(
+                source,
+                player_map=player_map,
+                reward_program_map=reward_program_map,
+                imported_at=imported_at,
+            )
+        )
+        db.add(card)
+        db.flush()
+        return card
+
+    if (
+        card.reward_program_id is None
+        and source.get("reward_program_id") in reward_program_map
+    ):
+        card.reward_program_id = reward_program_map[source.get("reward_program_id")]
+    if source.get("rewards_type") and (
+        not card.rewards_type or card.rewards_type == "OTHER"
+    ):
+        card.rewards_type = source.get("rewards_type")
+    if card.rewards_rate is None and source.get("rewards_rate") is not None:
+        card.rewards_rate = parse_decimal(source.get("rewards_rate"))
+    card.updated_at = imported_at
+    return card
+
+
+def resolve_import_reward_rule(
+    db: Session,
+    source: dict,
+    *,
+    credit_card_map: dict[int, int],
+    spending_category_map: dict[int, int],
+    reward_program_map: dict[int, int],
+    store_map: dict[int, int],
+    imported_at: datetime,
+) -> CreditCardRewardRule | None:
+    card_id = credit_card_map.get(source.get("credit_card_id"))
+    category_id = spending_category_map.get(source.get("spending_category_id"))
+    program_id = reward_program_map.get(source.get("reward_program_id"))
+    store_id = store_map.get(source.get("store_id"))
+    if not card_id or not category_id:
+        return None
+    if source.get("reward_program_id") is not None and not program_id:
+        return None
+    if source.get("store_id") is not None and not store_id:
+        return None
+
+    existing_rule = find_reward_rule_by_natural_key(
+        db,
+        source,
+        credit_card_id=card_id,
+        spending_category_id=category_id,
+        reward_program_id=program_id,
+        store_id=store_id,
+    )
+    if existing_rule:
+        return existing_rule
+
+    rule = CreditCardRewardRule(
+        credit_card_id=card_id,
+        spending_category_id=category_id,
+        store_id=store_id,
+        reward_program_id=program_id,
+        reward_type=source.get("reward_type") or "points",
+        merchant_type=source.get("merchant_type"),
+        multiplier=source.get("multiplier") or 1,
+        value=source.get("value"),
+        priority=source.get("priority") or 100,
+        effective_start_date=parse_date(source.get("effective_start_date"))
+        or date(1970, 1, 1),
+        effective_end_date=parse_date(source.get("effective_end_date")),
+        active=source.get("active", True),
+        notes=source.get("notes"),
+        created_at=parse_datetime(source.get("created_at")) or imported_at,
+    )
+    db.add(rule)
+    db.flush()
+    return rule
+
+
+def find_existing_import_purchase_payment(
+    db: Session,
+    source: dict,
+    *,
+    purchase_map: dict[int, int],
+) -> PurchasePayment | None:
+    purchase_id = purchase_map.get(source.get("purchase_batch_id"))
+    if not purchase_id:
+        return None
+    payment_type = source.get("payment_type") or "credit_card"
+    amount = parse_decimal_default(source.get("amount"), Decimal("0"))
+    return (
+        db.query(PurchasePayment)
+        .filter(PurchasePayment.purchase_batch_id == purchase_id)
+        .filter(PurchasePayment.payment_type == payment_type)
+        .filter(PurchasePayment.amount == amount)
+        .first()
+    )
+
+
+def build_import_purchase_payment(
+    source: dict,
+    *,
+    purchase_map: dict[int, int],
+    credit_card_map: dict[int, int],
+    reward_program_map: dict[int, int],
+    spending_category_map: dict[int, int],
+    reward_rule_map: dict[int, int],
+    imported_at: datetime,
+) -> PurchasePayment:
+    return PurchasePayment(
+        purchase_batch_id=purchase_map[source["purchase_batch_id"]],
+        payment_type=source.get("payment_type") or "credit_card",
+        credit_card_id=credit_card_map.get(source.get("credit_card_id")),
+        reward_program_id=reward_program_map.get(source.get("reward_program_id")),
+        spending_category_id=spending_category_map.get(
+            source.get("spending_category_id")
+        ),
+        matched_rule_id=reward_rule_map.get(source.get("matched_rule_id")),
+        amount=parse_decimal_default(source.get("amount"), Decimal("0")),
+        reward_multiplier=source.get("reward_multiplier"),
+        estimated_rewards_earned=source.get("estimated_rewards_earned"),
+        applied_multiplier=source.get("applied_multiplier"),
+        calculated_rewards=source.get("calculated_rewards"),
+        reward_type=source.get("reward_type"),
+        points_earned=source.get("points_earned"),
+        cashback_amount=source.get("cashback_amount"),
+        statement_credit_amount=source.get("statement_credit_amount"),
+        purchase_discount_amount=source.get("purchase_discount_amount"),
+        effective_savings_amount=source.get("effective_savings_amount"),
+        priority=source.get("priority"),
+        calculation_source=source.get("calculation_source"),
+        credit_card_product_snapshot=source.get("credit_card_product_snapshot"),
+        rewards_type=source.get("rewards_type"),
+        notes=source.get("notes"),
+        created_at=parse_datetime(source.get("created_at")) or imported_at,
+    )
+
+
 def local_upload_path(path_or_url: str | None) -> Path | None:
     if not path_or_url:
         return None
@@ -1983,235 +2299,47 @@ async def apply_transfer(
             player_map[source["id"]] = player.id
 
         for source in package["reward_programs"]:
-            program = find_reward_program_by_natural_key(db, source)
-            if not program:
-                program = RewardProgram(
-                    name=source["name"],
-                    short_code=source["short_code"],
-                    category=source.get("category") or "other",
-                    estimated_value_cents_per_point=source.get(
-                        "estimated_value_cents_per_point"
-                    ),
-                    value_unit=source.get("value_unit"),
-                    eligible_for_credit_cards=source.get(
-                        "eligible_for_credit_cards",
-                        True,
-                    ),
-                    transferable=source.get("transferable", False),
-                    active=source.get("active", True),
-                    notes=source.get("notes"),
-                    created_at=parse_datetime(source.get("created_at")) or imported_at,
-                    updated_at=imported_at,
-                )
-                db.add(program)
-                db.flush()
+            program = get_or_create_reward_program(db, source, imported_at)
             reward_program_map[source["id"]] = program.id
 
         for source in package["spending_categories"]:
-            category = find_spending_category_by_natural_key(db, source)
-            if not category:
-                category = SpendingCategory(
-                    key=source["key"],
-                    name=source["name"],
-                    active=source.get("active", True),
-                    notes=source.get("notes"),
-                    created_at=parse_datetime(source.get("created_at")) or imported_at,
-                )
-                db.add(category)
-                db.flush()
+            category = get_or_create_spending_category(db, source, imported_at)
             spending_category_map[source["id"]] = category.id
 
         store_map: dict[int, int] = {}
         for source in package.get("stores", []):
-            store = find_store_by_natural_key(db, source)
-            if not store:
-                store = Store(
-                    name=source["name"],
-                    store_type=source.get("store_type"),
-                    retailer_group=source.get("retailer_group"),
-                    merchant_category=source.get("merchant_category"),
-                    merchant_type=source.get("merchant_type"),
-                    spending_category_id=spending_category_map.get(
-                        source.get("spending_category_id")
-                    ),
-                    reward_program_id=reward_program_map.get(
-                        source.get("reward_program_id")
-                    ),
-                    active=source.get("active", True),
-                    earns_fuel_points=source.get("earns_fuel_points", False),
-                    default_fuel_multiplier=source.get("default_fuel_multiplier"),
-                    notes=source.get("notes"),
-                    created_at=parse_datetime(source.get("created_at")) or imported_at,
-                )
-                db.add(store)
-                db.flush()
-            else:
-                if store.merchant_type is None and source.get("merchant_type"):
-                    store.merchant_type = source.get("merchant_type")
-                if store.merchant_category is None and source.get("merchant_category"):
-                    store.merchant_category = source.get("merchant_category")
-                if (
-                    store.spending_category_id is None
-                    and source.get("spending_category_id") in spending_category_map
-                ):
-                    store.spending_category_id = spending_category_map[
-                        source.get("spending_category_id")
-                    ]
-                if (
-                    store.reward_program_id is None
-                    and source.get("reward_program_id") in reward_program_map
-                ):
-                    store.reward_program_id = reward_program_map[
-                        source.get("reward_program_id")
-                    ]
+            store = get_or_create_store(
+                db,
+                source,
+                spending_category_map=spending_category_map,
+                reward_program_map=reward_program_map,
+                imported_at=imported_at,
+            )
             store_map[source["id"]] = store.id
 
         for source in package["credit_cards"]:
-            card = find_credit_card_by_natural_key(db, source)
-            if not card:
-                validate_transfer_credit_card(source)
-                card = CreditCard(
-                    player_id=player_map.get(source.get("player_id")),
-                    nickname=str(source["nickname"]).strip(),
-                    issuer=source.get("issuer") or "Unknown",
-                    network=source.get("network"),
-                    last_four=source.get("last_four"),
-                    reward_program_id=reward_program_map.get(source.get("reward_program_id")),
-                    credit_limit=parse_decimal_default(
-                        source.get("credit_limit"),
-                        Decimal("0"),
-                    ),
-                    current_balance=parse_decimal_default(
-                        source.get("current_balance"),
-                        Decimal("0"),
-                    ),
-                    statement_balance=parse_decimal(source.get("statement_balance")),
-                    statement_paid_amount=parse_decimal(
-                        source.get("statement_paid_amount")
-                    ),
-                    available_credit=parse_decimal(source.get("available_credit")),
-                    reported_utilization=parse_decimal(
-                        source.get("reported_utilization")
-                    ),
-                    minimum_payment_due=parse_decimal(
-                        source.get("minimum_payment_due")
-                    ),
-                    minimum_payment_paid=parse_bool_default(
-                        source.get("minimum_payment_paid"),
-                        False,
-                    ),
-                    autopay_enabled=parse_bool_default(
-                        source.get("autopay_enabled"),
-                        False,
-                    ),
-                    payment_due_date=parse_date(source.get("payment_due_date")),
-                    next_statement_close_date=parse_date(
-                        source.get("next_statement_close_date")
-                    ),
-                    preferred_utilization=parse_decimal(
-                        source.get("preferred_utilization")
-                    ),
-                    apr=parse_decimal(source.get("apr")),
-                    payment_options=source.get("payment_options"),
-                    statement_close_day=source.get("statement_close_day"),
-                    payment_due_day=source.get("payment_due_day"),
-                    opened_date=parse_date(source.get("opened_date")),
-                    date_last_used=parse_date(source.get("date_last_used")),
-                    date_last_product_change=parse_date(
-                        source.get("date_last_product_change")
-                    ),
-                    date_closed=parse_date(source.get("date_closed")),
-                    date_last_cli=parse_date(source.get("date_last_cli")),
-                    annual_fee=parse_decimal(source.get("annual_fee")),
-                    signup_bonus_points=source.get("signup_bonus_points"),
-                    signup_bonus_spend=parse_decimal(
-                        source.get("signup_bonus_spend")
-                    ),
-                    signup_bonus_deadline=parse_date(
-                        source.get("signup_bonus_deadline")
-                    ),
-                    current_spend_progress=parse_decimal_default(
-                        source.get("current_spend_progress"),
-                        Decimal("0"),
-                    ),
-                    rewards_type=source.get("rewards_type") or "OTHER",
-                    rewards_rate=parse_decimal(source.get("rewards_rate")),
-                    category_tags=source.get("category_tags"),
-                    is_active=parse_bool_default(source.get("is_active"), True),
-                    reports_to_ex=parse_bool_default(
-                        source.get("reports_to_ex"),
-                        False,
-                    ),
-                    reports_to_tu=parse_bool_default(
-                        source.get("reports_to_tu"),
-                        False,
-                    ),
-                    reports_to_eq=parse_bool_default(
-                        source.get("reports_to_eq"),
-                        False,
-                    ),
-                    notes=source.get("notes"),
-                    created_at=parse_datetime(source.get("created_at")) or imported_at,
-                    updated_at=imported_at,
-                )
-                db.add(card)
-                db.flush()
-            else:
-                if (
-                    card.reward_program_id is None
-                    and source.get("reward_program_id") in reward_program_map
-                ):
-                    card.reward_program_id = reward_program_map[source.get("reward_program_id")]
-                if (
-                    source.get("rewards_type")
-                    and (not card.rewards_type or card.rewards_type == "OTHER")
-                ):
-                    card.rewards_type = source.get("rewards_type")
-                if card.rewards_rate is None and source.get("rewards_rate") is not None:
-                    card.rewards_rate = source.get("rewards_rate")
-                card.updated_at = imported_at
+            card = resolve_import_credit_card(
+                db,
+                source,
+                player_map=player_map,
+                reward_program_map=reward_program_map,
+                imported_at=imported_at,
+            )
             credit_card_map[source["id"]] = card.id
 
         reward_rule_map: dict[int, int] = {}
         for source in package.get("credit_card_reward_rules", []):
-            card_id = credit_card_map.get(source.get("credit_card_id"))
-            category_id = spending_category_map.get(source.get("spending_category_id"))
-            program_id = reward_program_map.get(source.get("reward_program_id"))
-            store_id = store_map.get(source.get("store_id"))
-            if not card_id or not category_id:
-                continue
-            if source.get("reward_program_id") is not None and not program_id:
-                continue
-            if source.get("store_id") is not None and not store_id:
-                continue
-            existing_rule = find_reward_rule_by_natural_key(
+            rule = resolve_import_reward_rule(
                 db,
                 source,
-                credit_card_id=card_id,
-                spending_category_id=category_id,
-                reward_program_id=program_id,
-                store_id=store_id,
+                credit_card_map=credit_card_map,
+                spending_category_map=spending_category_map,
+                reward_program_map=reward_program_map,
+                store_map=store_map,
+                imported_at=imported_at,
             )
-            if not existing_rule:
-                existing_rule = CreditCardRewardRule(
-                    credit_card_id=card_id,
-                    spending_category_id=category_id,
-                    store_id=store_id,
-                    reward_program_id=program_id,
-                    reward_type=source.get("reward_type") or "points",
-                    merchant_type=source.get("merchant_type"),
-                    multiplier=source.get("multiplier") or 1,
-                    value=source.get("value"),
-                    priority=source.get("priority") or 100,
-                    effective_start_date=parse_date(source.get("effective_start_date")) or date(1970, 1, 1),
-                    effective_end_date=parse_date(source.get("effective_end_date")),
-                    active=source.get("active", True),
-                    notes=source.get("notes"),
-                    created_at=parse_datetime(source.get("created_at")) or imported_at,
-                )
-                db.add(existing_rule)
-                db.flush()
-            reward_rule_map[source["id"]] = existing_rule.id
+            if rule:
+                reward_rule_map[source["id"]] = rule.id
 
         payment_by_source: dict[int, PaymentAccount] = {}
         for source in package["payment_accounts"]:
@@ -2415,49 +2543,21 @@ async def apply_transfer(
         for source in package["purchase_payments"]:
             if source.get("purchase_batch_id") not in purchase_map:
                 continue
-            existing_payment = (
-                db.query(PurchasePayment)
-                .filter(
-                    PurchasePayment.purchase_batch_id
-                    == purchase_map[source["purchase_batch_id"]]
-                )
-                .filter(PurchasePayment.payment_type == source.get("payment_type"))
-                .filter(PurchasePayment.amount == parse_decimal(source.get("amount")))
-                .first()
-            )
-            if existing_payment:
+            if find_existing_import_purchase_payment(
+                db,
+                source,
+                purchase_map=purchase_map,
+            ):
                 continue
             db.add(
-                PurchasePayment(
-                    purchase_batch_id=purchase_map[source["purchase_batch_id"]],
-                    payment_type=source.get("payment_type") or "credit_card",
-                    credit_card_id=credit_card_map.get(source.get("credit_card_id")),
-                    reward_program_id=reward_program_map.get(
-                        source.get("reward_program_id")
-                    ),
-                    spending_category_id=spending_category_map.get(
-                        source.get("spending_category_id")
-                    ),
-                    matched_rule_id=reward_rule_map.get(source.get("matched_rule_id")),
-                    amount=source.get("amount") or 0,
-                    reward_multiplier=source.get("reward_multiplier"),
-                    estimated_rewards_earned=source.get("estimated_rewards_earned"),
-                    applied_multiplier=source.get("applied_multiplier"),
-                    calculated_rewards=source.get("calculated_rewards"),
-                    reward_type=source.get("reward_type"),
-                    points_earned=source.get("points_earned"),
-                    cashback_amount=source.get("cashback_amount"),
-                    statement_credit_amount=source.get("statement_credit_amount"),
-                    purchase_discount_amount=source.get("purchase_discount_amount"),
-                    effective_savings_amount=source.get("effective_savings_amount"),
-                    priority=source.get("priority"),
-                    calculation_source=source.get("calculation_source"),
-                    credit_card_product_snapshot=source.get(
-                        "credit_card_product_snapshot"
-                    ),
-                    rewards_type=source.get("rewards_type"),
-                    notes=source.get("notes"),
-                    created_at=parse_datetime(source.get("created_at")) or imported_at,
+                build_import_purchase_payment(
+                    source,
+                    purchase_map=purchase_map,
+                    credit_card_map=credit_card_map,
+                    reward_program_map=reward_program_map,
+                    spending_category_map=spending_category_map,
+                    reward_rule_map=reward_rule_map,
+                    imported_at=imported_at,
                 )
             )
 
