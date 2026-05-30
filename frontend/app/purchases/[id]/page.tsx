@@ -315,6 +315,8 @@ export default function PurchaseDetailPage() {
   const [isSavingFuelPoints, setIsSavingFuelPoints] = useState(false);
   const [isAddingFundingPayment, setIsAddingFundingPayment] = useState(false);
   const [editingFundingPaymentId, setEditingFundingPaymentId] = useState<number | null>(null);
+  const [deletingFundingPaymentId, setDeletingFundingPaymentId] =
+    useState<number | null>(null);
   const [isRecalculatingRewards, setIsRecalculatingRewards] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [movingGiftCardId, setMovingGiftCardId] = useState<number | null>(null);
@@ -1392,6 +1394,61 @@ export default function PurchaseDetailPage() {
     }
   }
 
+  async function handleDeleteFundingPayment(payment: PurchasePayment) {
+    if (!purchaseId || deletingFundingPaymentId !== null) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${payment.payment_type.replace("_", " ").toLowerCase()} funding row #${payment.id}? Rewards will be recalculated.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingFundingPaymentId(payment.id);
+    setFundingError(null);
+    setFundingMessage(null);
+    setRewardRecalculationMessage(null);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/purchase-payments/${payment.id}`,
+        {
+          method: "DELETE",
+        },
+      );
+
+      if (!response.ok) {
+        const bodyText = await response.text();
+        throw new Error(
+          apiErrorDetail(bodyText) ||
+            `Failed to delete funding payment (${response.status})`,
+        );
+      }
+
+      if (editingFundingPaymentId === payment.id) {
+        setEditingFundingPaymentId(null);
+        setFundingPaymentForm(emptyFundingPaymentForm);
+      }
+      setFundingMessage("Funding payment deleted and rewards recalculated.");
+      await Promise.all([
+        refreshPurchaseDetails(),
+        loadDeleteReport({ showLoading: false }),
+        refreshPurchasePayments(),
+      ]);
+    } catch (err) {
+      setFundingError(
+        err instanceof Error
+          ? err.message
+          : "Failed to delete funding payment.",
+      );
+    } finally {
+      setDeletingFundingPaymentId(null);
+    }
+  }
+
   async function handleRecalculateRewards() {
     if (!purchaseId) {
       return;
@@ -2432,11 +2489,22 @@ export default function PurchaseDetailPage() {
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right">
                         <button
-                          className="inline-flex h-8 items-center rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                          className="inline-flex h-8 items-center rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                          disabled={deletingFundingPaymentId !== null}
                           onClick={() => beginEditFundingPayment(payment)}
                           type="button"
                         >
                           Edit
+                        </button>
+                        <button
+                          className="ml-2 inline-flex h-8 items-center rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:text-red-300"
+                          disabled={deletingFundingPaymentId !== null}
+                          onClick={() => handleDeleteFundingPayment(payment)}
+                          type="button"
+                        >
+                          {deletingFundingPaymentId === payment.id
+                            ? "Deleting..."
+                            : "Delete"}
                         </button>
                       </td>
                     </tr>

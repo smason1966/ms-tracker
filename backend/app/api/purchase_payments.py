@@ -239,6 +239,9 @@ def add_purchase_payment(
         db.commit()
         db.refresh(payment)
         return payment
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -271,6 +274,9 @@ def delete_purchase_payment(payment_id: int):
         db.commit()
 
         return {"deleted": True}
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

@@ -266,6 +266,41 @@ def test_edit_purchase_payment_recalculates_rewards(monkeypatch):
         db.close()
 
 
+def test_delete_credit_card_purchase_payment_removes_reward_transaction(monkeypatch):
+    session_factory = make_session_factory()
+    purchase_id, card_id, category_id = seed_purchase_59_style_batch(session_factory)
+    monkeypatch.setattr(purchase_payments, "SessionLocal", session_factory)
+    payment = purchase_payments.add_purchase_payment(
+        purchase_id,
+        purchase_payments.PurchasePaymentCreate(
+            payment_type="CREDIT_CARD",
+            credit_card_id=card_id,
+            amount=Decimal("1504.76"),
+            spending_category_id=category_id,
+        ),
+    )
+
+    result = purchase_payments.delete_purchase_payment(payment.id)
+
+    assert result == {"deleted": True}
+    db = session_factory()
+    try:
+        assert (
+            db.query(PurchasePayment)
+            .filter(PurchasePayment.purchase_batch_id == purchase_id)
+            .count()
+            == 0
+        )
+        assert (
+            db.query(CreditCardRewardTransaction)
+            .filter(CreditCardRewardTransaction.purchase_id == purchase_id)
+            .count()
+            == 0
+        )
+    finally:
+        db.close()
+
+
 def test_recalculate_rewards_is_idempotent(monkeypatch):
     session_factory = make_session_factory()
     purchase_id, card_id, category_id = seed_purchase_59_style_batch(session_factory)
