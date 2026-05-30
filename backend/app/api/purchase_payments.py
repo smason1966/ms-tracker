@@ -275,6 +275,86 @@ def delete_purchase_payment(payment_id: int):
         db.close()
 
 
+@router.patch("/purchase-payments/{payment_id}")
+def update_purchase_payment(payment_id: int, payload: PurchasePaymentCreate):
+    db: Session = SessionLocal()
+
+    try:
+        payment = (
+            db.query(PurchasePayment)
+            .filter(PurchasePayment.id == payment_id)
+            .first()
+        )
+
+        if not payment:
+            raise HTTPException(status_code=404, detail="Payment not found")
+
+        purchase_batch_id = payment.purchase_batch_id
+        apply_credit_card_payment_delta(
+            db,
+            payment.payment_type,
+            payment.credit_card_id,
+            -Decimal(payment.amount),
+        )
+        payment_type = normalize_payment_type(payload.payment_type)
+
+        if payment_type != "CREDIT_CARD" and payload.credit_card_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="credit_card_id is only allowed for CREDIT_CARD payments",
+            )
+
+        if payload.amount <= 0:
+            raise HTTPException(status_code=400, detail="Payment amount must be positive")
+
+        purchase = (
+            db.query(PurchaseBatch)
+            .filter(PurchaseBatch.id == purchase_batch_id)
+            .first()
+        )
+
+        if not purchase:
+            raise HTTPException(status_code=404, detail="Purchase batch not found")
+
+        reward_estimate = calculate_reward_estimate(db, purchase, payload)
+        payment.payment_type = payment_type
+        payment.credit_card_id = payload.credit_card_id
+        payment.spending_category_id = reward_estimate["spending_category_id"]
+        payment.reward_program_id = reward_estimate["reward_program_id"]
+        payment.matched_rule_id = reward_estimate["matched_rule_id"]
+        payment.amount = payload.amount
+        payment.reward_multiplier = reward_estimate["reward_multiplier"]
+        payment.estimated_rewards_earned = reward_estimate["estimated_rewards_earned"]
+        payment.applied_multiplier = reward_estimate["reward_multiplier"]
+        payment.calculated_rewards = reward_estimate["estimated_rewards_earned"]
+        payment.reward_type = reward_estimate["reward_type"]
+        payment.points_earned = reward_estimate["points_earned"]
+        payment.cashback_amount = reward_estimate["cashback_amount"]
+        payment.statement_credit_amount = reward_estimate["statement_credit_amount"]
+        payment.purchase_discount_amount = reward_estimate["purchase_discount_amount"]
+        payment.effective_savings_amount = reward_estimate["effective_savings_amount"]
+        payment.priority = reward_estimate["priority"]
+        payment.calculation_source = reward_estimate["calculation_source"]
+        payment.credit_card_product_snapshot = reward_estimate["product_snapshot"]
+        payment.rewards_type = reward_estimate["rewards_type"]
+        payment.notes = payload.notes
+        apply_credit_card_payment_delta(
+            db,
+            payment.payment_type,
+            payment.credit_card_id,
+            Decimal(payment.amount),
+        )
+        sync_automatic_reward_transactions(db, purchase_batch_id)
+        db.commit()
+        db.refresh(payment)
+        return payment
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 @router.put("/purchase-batches/{purchase_batch_id}/payments")
 def replace_purchase_payments(
     purchase_batch_id: int,

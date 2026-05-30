@@ -101,6 +101,66 @@ def seed_purchase_59_style_batch(session_factory):
     return purchase_id, card_id, category_id
 
 
+def seed_purchase_58_style_batch(session_factory):
+    purchase_id, card_id, category_id = seed_purchase_59_style_batch(session_factory)
+    db = session_factory()
+    try:
+        db.add_all(
+            [
+                PurchasePayment(
+                    purchase_batch_id=purchase_id,
+                    payment_type="CASH",
+                    amount=Decimal("0.40"),
+                ),
+                PurchasePayment(
+                    purchase_batch_id=purchase_id,
+                    payment_type="CREDIT_CARD",
+                    credit_card_id=card_id,
+                    spending_category_id=category_id,
+                    amount=Decimal("1499.60"),
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+    return purchase_id, card_id, category_id
+
+
+def test_purchase_58_style_split_funding_recalculation_is_stable(monkeypatch):
+    session_factory = make_session_factory()
+    purchase_id, _, _ = seed_purchase_58_style_batch(session_factory)
+    monkeypatch.setattr(purchase_batches, "SessionLocal", session_factory)
+
+    first = purchase_batches.recalculate_purchase_rewards(purchase_id)
+    second = purchase_batches.recalculate_purchase_rewards(purchase_id)
+
+    assert first["transaction_count"] == 1
+    assert second["transaction_count"] == 1
+
+    db = session_factory()
+    try:
+        payments = (
+            db.query(PurchasePayment)
+            .filter(PurchasePayment.purchase_batch_id == purchase_id)
+            .order_by(PurchasePayment.id.asc())
+            .all()
+        )
+        transactions = (
+            db.query(CreditCardRewardTransaction)
+            .filter(CreditCardRewardTransaction.purchase_id == purchase_id)
+            .all()
+        )
+        assert [(payment.payment_type, payment.amount) for payment in payments] == [
+            ("CASH", Decimal("0.40")),
+            ("CREDIT_CARD", Decimal("1499.60")),
+        ]
+        assert len(transactions) == 1
+        assert transactions[0].qualifying_spend == Decimal("1499.60")
+    finally:
+        db.close()
+
+
 def test_purchase_without_payments_has_missing_funding_diagnostic(monkeypatch):
     session_factory = make_session_factory()
     purchase_id, _, _ = seed_purchase_59_style_batch(session_factory)
@@ -134,6 +194,76 @@ def test_add_credit_card_purchase_payment_calculates_reward_fields(monkeypatch):
     assert payment.reward_multiplier == Decimal("1.0000")
     assert payment.calculated_rewards == Decimal("1504.7600")
     assert payment.points_earned == Decimal("1504.7600")
+
+
+def test_add_cash_purchase_payment_persists_without_reward_transaction(monkeypatch):
+    session_factory = make_session_factory()
+    purchase_id, _, _ = seed_purchase_59_style_batch(session_factory)
+    monkeypatch.setattr(purchase_payments, "SessionLocal", session_factory)
+
+    payment = purchase_payments.add_purchase_payment(
+        purchase_id,
+        purchase_payments.PurchasePaymentCreate(
+            payment_type="CASH",
+            amount=Decimal("0.40"),
+        ),
+    )
+
+    assert payment.payment_type == "CASH"
+    assert payment.credit_card_id is None
+    db = session_factory()
+    try:
+        assert (
+            db.query(PurchasePayment)
+            .filter(PurchasePayment.purchase_batch_id == purchase_id)
+            .count()
+            == 1
+        )
+        assert (
+            db.query(CreditCardRewardTransaction)
+            .filter(CreditCardRewardTransaction.purchase_id == purchase_id)
+            .count()
+            == 0
+        )
+    finally:
+        db.close()
+
+
+def test_edit_purchase_payment_recalculates_rewards(monkeypatch):
+    session_factory = make_session_factory()
+    purchase_id, card_id, category_id = seed_purchase_59_style_batch(session_factory)
+    monkeypatch.setattr(purchase_payments, "SessionLocal", session_factory)
+    payment = purchase_payments.add_purchase_payment(
+        purchase_id,
+        purchase_payments.PurchasePaymentCreate(
+            payment_type="CASH",
+            amount=Decimal("0.40"),
+        ),
+    )
+
+    updated = purchase_payments.update_purchase_payment(
+        payment.id,
+        purchase_payments.PurchasePaymentCreate(
+            payment_type="CREDIT_CARD",
+            credit_card_id=card_id,
+            amount=Decimal("1499.60"),
+            spending_category_id=category_id,
+        ),
+    )
+
+    assert updated.payment_type == "CREDIT_CARD"
+    assert updated.credit_card_id == card_id
+    db = session_factory()
+    try:
+        transactions = (
+            db.query(CreditCardRewardTransaction)
+            .filter(CreditCardRewardTransaction.purchase_id == purchase_id)
+            .all()
+        )
+        assert len(transactions) == 1
+        assert transactions[0].qualifying_spend == Decimal("1499.60")
+    finally:
+        db.close()
 
 
 def test_recalculate_rewards_is_idempotent(monkeypatch):

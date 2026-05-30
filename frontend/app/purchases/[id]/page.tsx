@@ -182,6 +182,7 @@ type FuelPointCorrectionForm = {
 };
 
 type FundingPaymentForm = {
+  payment_type: string;
   credit_card_id: string;
   amount: string;
   spending_category_id: string;
@@ -233,6 +234,7 @@ const emptyFuelPointCorrectionForm: FuelPointCorrectionForm = {
 };
 
 const emptyFundingPaymentForm: FundingPaymentForm = {
+  payment_type: "CREDIT_CARD",
   credit_card_id: "",
   amount: "",
   spending_category_id: "",
@@ -312,6 +314,7 @@ export default function PurchaseDetailPage() {
   const [isEditingFuelPoints, setIsEditingFuelPoints] = useState(false);
   const [isSavingFuelPoints, setIsSavingFuelPoints] = useState(false);
   const [isAddingFundingPayment, setIsAddingFundingPayment] = useState(false);
+  const [editingFundingPaymentId, setEditingFundingPaymentId] = useState<number | null>(null);
   const [isRecalculatingRewards, setIsRecalculatingRewards] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [movingGiftCardId, setMovingGiftCardId] = useState<number | null>(null);
@@ -383,6 +386,8 @@ export default function PurchaseDetailPage() {
     hasCreditCardFunding &&
     rewardTransactions.length === 0;
   const defaultFundingAmount =
+    editingFundingPaymentId !== null ||
+    fundingPaymentForm.payment_type !== "CREDIT_CARD" ||
     purchase?.purchase_total_paid === null ||
     purchase?.purchase_total_paid === undefined
       ? ""
@@ -1230,9 +1235,44 @@ export default function PurchaseDetailPage() {
     setFundingPaymentForm((currentForm) => ({
       ...currentForm,
       [field]: value,
+      ...(field === "payment_type" && value !== "CREDIT_CARD"
+        ? { credit_card_id: "" }
+        : {}),
     }));
     setFundingError(null);
     setFundingMessage(null);
+  }
+
+  async function refreshPurchasePayments() {
+    const response = await fetch(paymentsUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to refresh payments (${response.status})`);
+    }
+    setPayments((await response.json()) as PurchasePayment[]);
+  }
+
+  function beginEditFundingPayment(payment: PurchasePayment) {
+    setEditingFundingPaymentId(payment.id);
+    setFundingPaymentForm({
+      payment_type: payment.payment_type,
+      credit_card_id: payment.credit_card_id ? String(payment.credit_card_id) : "",
+      amount: String(payment.amount ?? ""),
+      spending_category_id: payment.spending_category_id
+        ? String(payment.spending_category_id)
+        : "",
+      notes: payment.notes ?? "",
+    });
+    setFundingError(null);
+    setFundingMessage(null);
+  }
+
+  function cancelFundingPaymentEdit() {
+    if (isAddingFundingPayment) {
+      return;
+    }
+    setEditingFundingPaymentId(null);
+    setFundingPaymentForm(emptyFundingPaymentForm);
+    setFundingError(null);
   }
 
   function creditCardLabel(cardId: number | null | undefined) {
@@ -1272,14 +1312,16 @@ export default function PurchaseDetailPage() {
     return String(transaction.rewards_earned);
   }
 
-  async function handleAddFundingPayment(event: FormEvent<HTMLFormElement>) {
+  async function handleSaveFundingPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!purchaseId) {
       return;
     }
 
-    if (!fundingPaymentForm.credit_card_id) {
+    const paymentType = fundingPaymentForm.payment_type || "CREDIT_CARD";
+
+    if (paymentType === "CREDIT_CARD" && !fundingPaymentForm.credit_card_id) {
       setFundingError("Choose the credit card used to fund this purchase.");
       return;
     }
@@ -1295,14 +1337,21 @@ export default function PurchaseDetailPage() {
     setRewardRecalculationMessage(null);
 
     try {
-      const response = await fetch(paymentsUrl, {
-        method: "POST",
+      const endpoint =
+        editingFundingPaymentId === null
+          ? paymentsUrl
+          : `${API_BASE_URL}/purchase-payments/${editingFundingPaymentId}`;
+      const response = await fetch(endpoint, {
+        method: editingFundingPaymentId === null ? "POST" : "PATCH",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          payment_type: "CREDIT_CARD",
-          credit_card_id: Number(fundingPaymentForm.credit_card_id),
+          payment_type: paymentType,
+          credit_card_id:
+            paymentType === "CREDIT_CARD"
+              ? Number(fundingPaymentForm.credit_card_id)
+              : null,
           amount: selectedFundingAmount,
           spending_category_id: selectedFundingCategoryId
             ? Number(selectedFundingCategoryId)
@@ -1318,23 +1367,25 @@ export default function PurchaseDetailPage() {
         const bodyText = await response.text();
         throw new Error(
           apiErrorDetail(bodyText) ||
-            `Failed to add funding payment (${response.status})`,
+            `Failed to save funding payment (${response.status})`,
         );
       }
 
-      setFundingMessage("Funding payment added and rewards recalculated.");
+      setFundingMessage(
+        editingFundingPaymentId === null
+          ? "Funding payment added and rewards recalculated."
+          : "Funding payment updated and rewards recalculated.",
+      );
+      setEditingFundingPaymentId(null);
       setFundingPaymentForm(emptyFundingPaymentForm);
       await Promise.all([
         refreshPurchaseDetails(),
         loadDeleteReport({ showLoading: false }),
+        refreshPurchasePayments(),
       ]);
-      const paymentsResponse = await fetch(paymentsUrl);
-      if (paymentsResponse.ok) {
-        setPayments((await paymentsResponse.json()) as PurchasePayment[]);
-      }
     } catch (err) {
       setFundingError(
-        err instanceof Error ? err.message : "Failed to add funding payment.",
+        err instanceof Error ? err.message : "Failed to save funding payment.",
       );
     } finally {
       setIsAddingFundingPayment(false);
@@ -1378,11 +1429,7 @@ export default function PurchaseDetailPage() {
               result.updated_count ?? 0
             } updated.`,
       );
-      await refreshPurchaseDetails();
-      const paymentsResponse = await fetch(paymentsUrl);
-      if (paymentsResponse.ok) {
-        setPayments((await paymentsResponse.json()) as PurchasePayment[]);
-      }
+      await Promise.all([refreshPurchaseDetails(), refreshPurchasePayments()]);
     } catch (err) {
       setFundingError(
         err instanceof Error
@@ -2353,6 +2400,7 @@ export default function PurchaseDetailPage() {
                     <th className="px-4 py-3">Amount</th>
                     <th className="px-4 py-3">Reward Calc</th>
                     <th className="px-4 py-3">Notes</th>
+                    <th className="px-4 py-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 bg-white">
@@ -2382,6 +2430,15 @@ export default function PurchaseDetailPage() {
                       <td className="px-4 py-3 text-slate-600">
                         {payment.notes || ""}
                       </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        <button
+                          className="inline-flex h-8 items-center rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                          onClick={() => beginEditFundingPayment(payment)}
+                          type="button"
+                        >
+                          Edit
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -2391,24 +2448,62 @@ export default function PurchaseDetailPage() {
 
           <form
             className="mt-5 grid gap-4 rounded-md border border-slate-200 bg-slate-50 p-4 md:grid-cols-4"
-            onSubmit={handleAddFundingPayment}
+            onSubmit={handleSaveFundingPayment}
           >
-            <label className="space-y-2 text-sm font-medium text-slate-700 md:col-span-2">
+            <div className="md:col-span-4">
+              <p className="text-sm font-semibold text-slate-900">
+                {editingFundingPaymentId === null
+                  ? "Add Funding Payment"
+                  : `Edit Funding Payment #${editingFundingPaymentId}`}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Use CASH for small split tender rows and CREDIT_CARD for reward
+                generating funding rows.
+              </p>
+            </div>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Payment Type</span>
+              <select
+                className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                disabled={isAddingFundingPayment}
+                onChange={(event) =>
+                  updateFundingPaymentFormField(
+                    "payment_type",
+                    event.target.value,
+                  )
+                }
+                value={fundingPaymentForm.payment_type}
+              >
+                <option value="CREDIT_CARD">Credit Card</option>
+                <option value="CASH">Cash</option>
+              </select>
+            </label>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700">
               <span>Credit Card</span>
               <select
                 className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                disabled={isLoadingCreditCards || isAddingFundingPayment}
+                disabled={
+                  isLoadingCreditCards ||
+                  isAddingFundingPayment ||
+                  fundingPaymentForm.payment_type !== "CREDIT_CARD"
+                }
                 onChange={(event) =>
                   updateFundingPaymentFormField(
                     "credit_card_id",
                     event.target.value,
                   )
                 }
-                required
+                required={fundingPaymentForm.payment_type === "CREDIT_CARD"}
                 value={fundingPaymentForm.credit_card_id}
               >
                 <option value="">
-                  {isLoadingCreditCards ? "Loading cards..." : "Select funding card"}
+                  {fundingPaymentForm.payment_type !== "CREDIT_CARD"
+                    ? "Not needed for cash"
+                    : isLoadingCreditCards
+                      ? "Loading cards..."
+                      : "Select funding card"}
                 </option>
                 {creditCards
                   .filter((card) => card.is_active)
@@ -2473,17 +2568,33 @@ export default function PurchaseDetailPage() {
             </label>
 
             <div className="flex items-end">
-              <button
-                className="h-11 w-full rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-                disabled={
-                  isAddingFundingPayment ||
-                  isLoadingCreditCards ||
-                  creditCards.length === 0
-                }
-                type="submit"
-              >
-                {isAddingFundingPayment ? "Adding..." : "Add Funding Payment"}
-              </button>
+              <div className="grid w-full gap-2">
+                <button
+                  className="h-11 w-full rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                  disabled={
+                    isAddingFundingPayment ||
+                    (fundingPaymentForm.payment_type === "CREDIT_CARD" &&
+                      (isLoadingCreditCards || creditCards.length === 0))
+                  }
+                  type="submit"
+                >
+                  {isAddingFundingPayment
+                    ? "Saving..."
+                    : editingFundingPaymentId === null
+                      ? "Add Funding Payment"
+                      : "Save Funding Payment"}
+                </button>
+                {editingFundingPaymentId !== null ? (
+                  <button
+                    className="h-10 w-full rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                    disabled={isAddingFundingPayment}
+                    onClick={cancelFundingPaymentEdit}
+                    type="button"
+                  >
+                    Cancel Edit
+                  </button>
+                ) : null}
+              </div>
             </div>
           </form>
         </section>
