@@ -4,7 +4,7 @@ This guide documents the sanitized staging build pattern used for Dotopoly/MS Tr
 
 Never commit real `.env` files, passwords, `SESSION_SECRET`, `FIELD_ENCRYPTION_KEY`, htpasswd contents, TLS private keys, database dumps, backups, uploaded card images, receipt images, or OCR artifacts.
 
-## Staging Shape
+## Deployment Shape
 
 Staging uses:
 
@@ -16,6 +16,16 @@ Staging uses:
 - Postgres 16 named volume: `dotopoly_test_postgres_data`
 - Upload bind mount: `/opt/dotopoly/data/dev/uploads:/app/uploads`
 
+Production uses:
+
+- Frontend: `https://dotopoly.com`
+- Same-origin API: `https://dotopoly.com/api`
+- Optional direct API host: `https://api.dotopoly.com`
+- Frontend container bound to `127.0.0.1:3001`
+- API container bound to `127.0.0.1:8001`
+- Postgres 16 named volume: `dotopoly_prod_postgres_data`
+- Upload bind mount: `/opt/dotopoly/data/prod/uploads:/app/uploads`
+
 The frontend should be built with:
 
 ```sh
@@ -23,6 +33,12 @@ NEXT_PUBLIC_API_BASE_URL=https://test.dotopoly.com/api
 ```
 
 That keeps browser API calls same-origin through Nginx instead of calling the API host directly.
+
+For production, use:
+
+```sh
+NEXT_PUBLIC_API_BASE_URL=https://dotopoly.com/api
+```
 
 ## Files To Install
 
@@ -90,10 +106,20 @@ Enter the password interactively if prompted. Do not put admin passwords in shel
 
 ## Build And Start
 
-From `/opt/dotopoly/app`:
+Always take a backup before a production or staging deploy:
 
 ```sh
-git pull origin staging
+sudo /opt/dotopoly/backup-test.sh
+sudo /opt/dotopoly/backup-prod.sh
+```
+
+Use the script for the environment you are deploying. Confirm the backup file was created before pulling new code.
+
+From `/opt/dotopoly/app`, deploy staging with:
+
+```sh
+git fetch origin
+git pull --ff-only origin staging
 docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml build api web
 docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml up -d api web
 docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml exec api alembic upgrade head
@@ -104,11 +130,14 @@ The frontend image runs `npm run build` during `docker compose build`. The test/
 For production, use the production env and compose file with the same build-then-start sequence:
 
 ```sh
-git pull origin staging
+git fetch origin
+git pull --ff-only origin staging
 docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml build api web
 docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml up -d api web
 docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml exec api alembic upgrade head
 ```
+
+The order matters: build first, then start. Avoid `up --build` during normal deploys because it can blur whether the image is compiling or serving traffic.
 
 Wait for the web healthcheck to become healthy before judging Nginx 502s during deploy:
 
@@ -116,7 +145,40 @@ Wait for the web healthcheck to become healthy before judging Nginx 502s during 
 docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml ps web
 ```
 
+Useful health checks:
+
+```sh
+docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml ps
+docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml logs --tail=100 api
+docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml logs --tail=100 web
+curl -i -u USERNAME:PASSWORD https://test.dotopoly.com/api/auth/session
+```
+
+For production, swap in `/opt/dotopoly/env/prod.env`, `docker-compose.prod.yml`, and `https://dotopoly.com/api/auth/session`.
+
 If migrations run during container startup in a future entrypoint, keep one clear migration owner. Do not run competing migration processes at the same time.
+
+## Rollback Notes
+
+If the new web image is unhealthy but migrations have not changed data, roll back the code and rebuild:
+
+```sh
+git log --oneline -5
+git checkout PREVIOUS_GOOD_COMMIT
+docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml build api web
+docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml up -d api web
+```
+
+If a migration or import changed data, stop and restore from the backup taken before deploy. Do not run ad hoc SQL against production unless the backup has been verified and the change is written down.
+
+The compose templates bind only localhost ports:
+
+- Production web: `127.0.0.1:3001`
+- Production API: `127.0.0.1:8001`
+- Staging web: `127.0.0.1:3002`
+- Staging API: `127.0.0.1:8002`
+
+Nginx is the public entry point. Do not expose container ports directly on `0.0.0.0`.
 
 ## Auth Validation Checks
 

@@ -1,6 +1,6 @@
-# Staging Deployment Templates
+# Deployment Templates
 
-These files are sanitized templates for the Dotopoly test/staging VPS. They are not live secrets and should be copied into place, reviewed, and edited on the server.
+These files are sanitized templates for the Dotopoly staging and production VPS setup. They are not live secrets and should be copied into place, reviewed, and edited on the server.
 
 ## Files
 
@@ -61,19 +61,37 @@ Run Compose with the env file so build-time public settings are loaded:
 
 ```sh
 cd /opt/dotopoly/app
+sudo /opt/dotopoly/backup-test.sh
+git fetch origin
+git pull --ff-only origin staging
 docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml build api web
 docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml up -d api web
+docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml exec api alembic upgrade head
+docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml ps
 ```
 
 For production, use the production env file:
 
 ```sh
 cd /opt/dotopoly/app
+sudo /opt/dotopoly/backup-prod.sh
+git fetch origin
+git pull --ff-only origin staging
 docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml build api web
 docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml up -d api web
+docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml exec api alembic upgrade head
 docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml ps web
 ```
 
 The web image runs `npm run build` during `docker compose build`; container startup should only run `npm run start` so Nginx is not pointed at a frontend container that is still compiling.
+
+The local port bindings are intentional and should match the Nginx templates:
+
+- Production web: `127.0.0.1:3001`
+- Production API: `127.0.0.1:8001`
+- Staging web: `127.0.0.1:3002`
+- Staging API: `127.0.0.1:8002`
+
+If a deploy needs rollback and no data migration/import changed production data, checkout the previous known-good commit, rebuild `api web`, and run `up -d api web`. If data changed, restore from the backup taken before deploy.
 
 Never commit `/opt/dotopoly/env/test.env`, `/opt/dotopoly/env/prod.env`, `.env`, htpasswd files, TLS private keys, database dumps, generated backups, uploaded card images, receipt images, or OCR artifacts. Uploaded images and backups are sensitive production data.
