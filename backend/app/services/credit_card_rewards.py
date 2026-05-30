@@ -225,7 +225,6 @@ def select_best_reward_rule(
     purchase: PurchaseBatch,
     purchase_date: date,
 ) -> tuple[CreditCardRewardRule | None, str]:
-    rules = get_effective_reward_rules(db, card_id=card_id, purchase_date=purchase_date)
     tokens = merchant_tokens(store, purchase)
     general_category = get_general_spending_category(db)
 
@@ -236,37 +235,58 @@ def select_best_reward_rule(
             -to_decimal(rule.value if rule.value is not None else rule.multiplier),
         )
 
-    merchant_rules = [
-        rule
-        for rule in rules
-        if rule_has_merchant_target(rule) and rule_matches_merchant(rule, store, tokens)
-    ]
-    if merchant_rules:
-        return sorted(merchant_rules, key=sort_key)[0], "merchant_reward_rule"
+    def select_from_rules(
+        rules: list[CreditCardRewardRule],
+    ) -> tuple[CreditCardRewardRule | None, str]:
+        merchant_rules = [
+            rule
+            for rule in rules
+            if rule_has_merchant_target(rule) and rule_matches_merchant(rule, store, tokens)
+        ]
+        if merchant_rules:
+            return sorted(merchant_rules, key=sort_key)[0], "merchant_reward_rule"
 
-    category_rules = [
-        rule
-        for rule in rules
-        if (
-            spending_category_id is not None
-            and rule.spending_category_id == spending_category_id
-            and not rule_has_merchant_target(rule)
-        )
-    ]
-    if category_rules:
-        return sorted(category_rules, key=sort_key)[0], "effective_reward_rule"
+        category_rules = [
+            rule
+            for rule in rules
+            if (
+                spending_category_id is not None
+                and rule.spending_category_id == spending_category_id
+                and not rule_has_merchant_target(rule)
+            )
+        ]
+        if category_rules:
+            return sorted(category_rules, key=sort_key)[0], "effective_reward_rule"
 
-    general_rules = [
-        rule
-        for rule in rules
-        if (
-            general_category is not None
-            and rule.spending_category_id == general_category.id
-            and not rule_has_merchant_target(rule)
+        general_rules = [
+            rule
+            for rule in rules
+            if (
+                general_category is not None
+                and rule.spending_category_id == general_category.id
+                and not rule_has_merchant_target(rule)
+            )
+        ]
+        if general_rules:
+            return sorted(general_rules, key=sort_key)[0], "general_reward_rule"
+
+        return None, "fallback"
+
+    rules = get_effective_reward_rules(db, card_id=card_id, purchase_date=purchase_date)
+    selected_rule, rule_source = select_from_rules(rules)
+    if selected_rule is not None:
+        return selected_rule, rule_source
+
+    current_date = date.today()
+    if current_date != purchase_date:
+        current_rules = get_effective_reward_rules(
+            db,
+            card_id=card_id,
+            purchase_date=current_date,
         )
-    ]
-    if general_rules:
-        return sorted(general_rules, key=sort_key)[0], "general_reward_rule"
+        selected_rule, rule_source = select_from_rules(current_rules)
+        if selected_rule is not None:
+            return selected_rule, rule_source
 
     return None, "fallback"
 

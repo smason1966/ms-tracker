@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import create_engine
@@ -262,6 +262,151 @@ def test_edit_purchase_payment_recalculates_rewards(monkeypatch):
         )
         assert len(transactions) == 1
         assert transactions[0].qualifying_spend == Decimal("1499.60")
+    finally:
+        db.close()
+
+
+def test_recalculate_rewards_updates_stale_fallback_payment_to_active_rule(monkeypatch):
+    session_factory = make_session_factory()
+    db = session_factory()
+    try:
+        category = SpendingCategory(key="grocery", name="Grocery")
+        program = RewardProgram(
+            name="Capital One Miles",
+            short_code="CAP1",
+            category="Bank",
+            active=True,
+        )
+        card = CreditCard(
+            nickname="Savor",
+            issuer="Capital One",
+            network="Mastercard",
+            credit_limit=Decimal("10000"),
+            rewards_type="points",
+        )
+        db.add_all([category, program, card])
+        db.flush()
+        card.reward_program_id = program.id
+        db.add(
+            Store(
+                name="Grocery Store",
+                spending_category_id=category.id,
+                merchant_category="grocery",
+                active=True,
+            )
+        )
+        purchase = PurchaseBatch(
+            store_name="Grocery Store",
+            purchase_date=datetime.combine(
+                date.today() - timedelta(days=30),
+                datetime.min.time(),
+            ),
+            total_amount=Decimal("100.00"),
+            purchase_total_paid=Decimal("100.00"),
+            credit_card_id=card.id,
+        )
+        db.add(purchase)
+        db.flush()
+        payment = PurchasePayment(
+            purchase_batch_id=purchase.id,
+            payment_type="CREDIT_CARD",
+            credit_card_id=card.id,
+            spending_category_id=category.id,
+            amount=Decimal("100.00"),
+            reward_program_id=None,
+            matched_rule_id=None,
+            reward_multiplier=Decimal("1.0000"),
+            calculated_rewards=Decimal("100.0000"),
+            reward_type="points",
+            points_earned=Decimal("100.0000"),
+            calculation_source="fallback_1x",
+        )
+        db.add(payment)
+        db.flush()
+        rule = CreditCardRewardRule(
+            credit_card_id=card.id,
+            spending_category_id=category.id,
+            reward_program_id=program.id,
+            reward_type="points",
+            multiplier=Decimal("3.0000"),
+            value=Decimal("3.0000"),
+            active=True,
+            priority=100,
+            effective_start_date=date.today(),
+        )
+        db.add(rule)
+        db.commit()
+        purchase_id = purchase.id
+        rule_id = rule.id
+        program_id = program.id
+    finally:
+        db.close()
+
+    monkeypatch.setattr(purchase_batches, "SessionLocal", session_factory)
+
+    result = purchase_batches.recalculate_purchase_rewards(purchase_id)
+
+    assert result["transaction_count"] == 1
+    db = session_factory()
+    try:
+        transaction = (
+            db.query(CreditCardRewardTransaction)
+            .filter(CreditCardRewardTransaction.purchase_id == purchase_id)
+            .one()
+        )
+        payment = (
+            db.query(PurchasePayment)
+            .filter(PurchasePayment.purchase_batch_id == purchase_id)
+            .one()
+        )
+        assert transaction.reward_program_id == program_id
+        assert transaction.matched_rule_id == rule_id
+        assert transaction.multiplier == Decimal("3.0000")
+        assert transaction.calculation_source == "effective_reward_rule"
+        assert transaction.points_earned == Decimal("300.0000")
+        assert payment.reward_program_id == program_id
+        assert payment.matched_rule_id == rule_id
+        assert payment.reward_multiplier == Decimal("3.0000")
+        assert payment.calculation_source == "effective_reward_rule"
+        assert payment.points_earned == Decimal("300.0000")
+    finally:
+        db.close()
+
+
+def test_recalculate_rewards_keeps_fallback_when_no_rule_exists(monkeypatch):
+    session_factory = make_session_factory()
+    purchase_id, card_id, category_id = seed_purchase_59_style_batch(session_factory)
+    db = session_factory()
+    try:
+        db.query(CreditCardRewardRule).delete()
+        db.add(
+            PurchasePayment(
+                purchase_batch_id=purchase_id,
+                payment_type="CREDIT_CARD",
+                credit_card_id=card_id,
+                spending_category_id=category_id,
+                amount=Decimal("100.00"),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    monkeypatch.setattr(purchase_batches, "SessionLocal", session_factory)
+
+    result = purchase_batches.recalculate_purchase_rewards(purchase_id)
+
+    assert result["transaction_count"] == 1
+    db = session_factory()
+    try:
+        transaction = (
+            db.query(CreditCardRewardTransaction)
+            .filter(CreditCardRewardTransaction.purchase_id == purchase_id)
+            .one()
+        )
+        assert transaction.matched_rule_id is None
+        assert transaction.multiplier == Decimal("1.0000")
+        assert transaction.calculation_source == "fallback_1x"
+        assert transaction.points_earned == Decimal("100.0000")
     finally:
         db.close()
 
