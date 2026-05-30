@@ -93,8 +93,27 @@ Enter the password interactively if prompted. Do not put admin passwords in shel
 From `/opt/dotopoly/app`:
 
 ```sh
-docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml up -d --build
+git pull origin staging
+docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml build api web
+docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml up -d api web
 docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml exec api alembic upgrade head
+```
+
+The frontend image runs `npm run build` during `docker compose build`. The test/prod web container startup command should only run the already-built app with `npm run start`; do not put `npm run build` in the Compose runtime command. This keeps Nginx from proxying to a container that is still compiling.
+
+For production, use the production env and compose file with the same build-then-start sequence:
+
+```sh
+git pull origin staging
+docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml build api web
+docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml up -d api web
+docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml exec api alembic upgrade head
+```
+
+Wait for the web healthcheck to become healthy before judging Nginx 502s during deploy:
+
+```sh
+docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml ps web
 ```
 
 If migrations run during container startup in a future entrypoint, keep one clear migration owner. Do not run competing migration processes at the same time.

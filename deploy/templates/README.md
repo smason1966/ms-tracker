@@ -71,6 +71,7 @@ For production, use the production env file:
 cd /opt/dotopoly/app
 docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml build api web
 docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml up -d api web
+docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml ps web
 ```
 
 The web image runs `npm run build` during `docker compose build`; container startup should only run `npm run start` so Nginx is not pointed at a frontend container that is still compiling.
