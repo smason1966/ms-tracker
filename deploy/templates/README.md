@@ -61,14 +61,18 @@ Run Compose with the env file so build-time public settings are loaded:
 
 ```sh
 cd /opt/dotopoly/app
-docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml up -d --build
+docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml build api web
+docker compose --env-file /opt/dotopoly/env/test.env -f docker-compose.test.yml up -d api web
 ```
 
 For production, use the production env file:
 
 ```sh
 cd /opt/dotopoly/app
-docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml up -d --build
+docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml build api web
+docker compose --env-file /opt/dotopoly/env/prod.env -f docker-compose.prod.yml up -d api web
 ```
+
+The web image runs `npm run build` during `docker compose build`; container startup should only run `npm run start` so Nginx is not pointed at a frontend container that is still compiling.
 
 Never commit `/opt/dotopoly/env/test.env`, `/opt/dotopoly/env/prod.env`, `.env`, htpasswd files, TLS private keys, database dumps, generated backups, uploaded card images, receipt images, or OCR artifacts. Uploaded images and backups are sensitive production data.
