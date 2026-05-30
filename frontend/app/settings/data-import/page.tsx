@@ -27,6 +27,9 @@ type ImportPreview = {
   plan?: {
     create: Record<string, number>;
     reuse: Record<string, number>;
+    update?: Record<string, number>;
+    skipped?: Record<string, number>;
+    skipped_reward_rules?: Array<Record<string, unknown>>;
     missing_dependencies: Array<Record<string, unknown>>;
     binary_payload_bytes: number;
     package_size_bytes?: number;
@@ -231,6 +234,7 @@ export default function DataImportPage() {
   const [saleIds, setSaleIds] = useState("");
   const [includeSensitiveCredentials, setIncludeSensitiveCredentials] =
     useState(false);
+  const [includeRewardSetup, setIncludeRewardSetup] = useState(true);
   const [imageMode, setImageMode] = useState<"exclude" | "inline" | "linked">(
     "exclude",
   );
@@ -384,6 +388,9 @@ export default function DataImportPage() {
         params.set("acknowledge_sensitive", "true");
       }
       params.set("image_mode", imageMode);
+      if (includeRewardSetup && imageMode !== "linked") {
+        params.set("include_reward_setup", "true");
+      }
 
       const response = await fetch(
         `${API_BASE_URL}/data-transfer/export?${params.toString()}`,
@@ -623,6 +630,25 @@ export default function DataImportPage() {
                 ))}
               </div>
             </fieldset>
+            <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              <input
+                checked={includeRewardSetup}
+                className="mt-1 h-4 w-4"
+                disabled={imageMode === "linked"}
+                onChange={(event) => setIncludeRewardSetup(event.target.checked)}
+                type="checkbox"
+              />
+              <span>
+                <span className="block font-semibold">
+                  Include reward setup and rules
+                </span>
+                <span className="block text-xs text-slate-600">
+                  Exports reward programs, spending categories, stores, card
+                  reward defaults, and credit card reward rules using natural
+                  keys. Linked image packages do not include setup data.
+                </span>
+              </span>
+            </label>
             <button
               className="h-10 cursor-pointer rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={isExporting}
@@ -864,6 +890,37 @@ export default function DataImportPage() {
                 </div>
               </div>
             </div>
+
+            {preview.plan?.update || preview.plan?.skipped ? (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                {preview.plan?.update ? (
+                  <div className="rounded-md border border-slate-200 p-3 text-sm">
+                    <p className="font-semibold text-slate-700">Update</p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {Object.entries(preview.plan.update).map(([key, value]) => (
+                        <p key={key}>
+                          {key.replaceAll("_", " ")}:{" "}
+                          <span className="font-semibold">{String(value)}</span>
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {preview.plan?.skipped ? (
+                  <div className="rounded-md border border-slate-200 p-3 text-sm">
+                    <p className="font-semibold text-slate-700">Skipped</p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {Object.entries(preview.plan.skipped).map(([key, value]) => (
+                        <p key={key}>
+                          {key.replaceAll("_", " ")}:{" "}
+                          <span className="font-semibold">{String(value)}</span>
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             {preview.manifest.sensitive_transfer ? (
               <div className={`mt-4 ${sensitiveWarningPanelClass}`}>

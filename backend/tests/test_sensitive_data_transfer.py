@@ -11,10 +11,15 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.models.buyer import Buyer
+from app.models.credit_card import CreditCard
+from app.models.credit_card_reward_rule import CreditCardRewardRule
 from app.models.gift_card import GiftCard
 from app.models.purchase_batch import PurchaseBatch
+from app.models.reward_program import RewardProgram
 from app.models.sale import Sale
 from app.models.sale_gift_card import SaleGiftCard
+from app.models.spending_category import SpendingCategory
+from app.models.store import Store
 from app.services.field_encryption import (
     ENCRYPTED_FIELD_PREFIX,
     _fernet,
@@ -73,6 +78,7 @@ def transfer_zip(manifest: dict, cards: list[dict] | None = None) -> bytes:
         "players.json": [],
         "reward_programs.json": [],
         "spending_categories.json": [],
+        "stores.json": [],
         "credit_card_reward_rules.json": [],
     }
     buffer = BytesIO()
@@ -1337,4 +1343,193 @@ def test_linked_image_preview_uses_manifest_counts_without_reading_binaries(
 
     assert preview["counts"]["card_images"] == 1
     assert preview["plan"]["package_size_bytes"] > 0
+    db.close()
+
+
+def reward_setup_zip() -> bytes:
+    now = utc_now().isoformat()
+    payloads = {
+        "manifest.json": {
+            "export_version": "1.0",
+            "exported_at": now,
+            "source_environment": "local-test",
+            "package_type": "core",
+            "include_reward_setup": True,
+            "source_record_ids": {"purchases": [], "sales": []},
+        },
+        "purchases.json": [],
+        "cards.json": [],
+        "purchase_payments.json": [],
+        "sales.json": [],
+        "fuel_transactions.json": [],
+        "receipts.json": [],
+        "card_images.json": [],
+        "sale_gift_cards.json": [],
+        "sale_fuel_accounts.json": [],
+        "sale_events.json": [],
+        "buyers.json": [],
+        "payment_accounts.json": [],
+        "fuel_accounts.json": [],
+        "players.json": [],
+        "credit_cards.json": [
+            {
+                "id": 10,
+                "nickname": "Savor",
+                "issuer": "Capital One",
+                "network": "Mastercard",
+                "last_four": "1234",
+                "reward_program_id": 5,
+                "rewards_type": "points",
+                "rewards_rate": None,
+                "is_active": True,
+            }
+        ],
+        "reward_programs.json": [
+            {
+                "id": 5,
+                "name": "Capital One Miles",
+                "short_code": "CAP1",
+                "category": "Bank",
+                "eligible_for_credit_cards": True,
+                "active": True,
+            }
+        ],
+        "spending_categories.json": [
+            {"id": 1, "key": "grocery", "name": "Grocery", "active": True}
+        ],
+        "stores.json": [
+            {
+                "id": 2,
+                "name": "Target",
+                "merchant_type": "target",
+                "merchant_category": "target",
+                "spending_category_id": 1,
+                "active": True,
+            }
+        ],
+        "credit_card_reward_rules.json": [
+            {
+                "id": 100,
+                "credit_card_id": 10,
+                "spending_category_id": 1,
+                "store_id": None,
+                "reward_program_id": 5,
+                "reward_type": "points",
+                "merchant_type": None,
+                "multiplier": "3.0000",
+                "value": "3.0000",
+                "priority": 100,
+                "effective_start_date": "2026-01-01",
+                "effective_end_date": None,
+                "active": True,
+            },
+            {
+                "id": 101,
+                "credit_card_id": 10,
+                "spending_category_id": 1,
+                "store_id": 2,
+                "reward_program_id": None,
+                "reward_type": "instant_discount_percent",
+                "merchant_type": "target",
+                "multiplier": "0.0000",
+                "value": "5.0000",
+                "priority": 10,
+                "effective_start_date": "2026-01-01",
+                "effective_end_date": None,
+                "active": True,
+            },
+        ],
+    }
+    buffer = BytesIO()
+    with ZipFile(buffer, "w", ZIP_DEFLATED) as zip_file:
+        for filename, payload in payloads.items():
+            zip_file.writestr(filename, json.dumps(payload, default=str))
+    return buffer.getvalue()
+
+
+def test_reward_setup_import_uses_natural_keys_and_updates_card(monkeypatch, tmp_path):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api import data_transfer
+
+    session_factory = make_session_factory()
+    monkeypatch.setattr(data_transfer, "SessionLocal", session_factory)
+    db = session_factory()
+    db.add(
+        CreditCard(
+            nickname="Savor",
+            issuer="Capital One",
+            network="Mastercard",
+            last_four="1234",
+            credit_limit="10000",
+            rewards_type="OTHER",
+        )
+    )
+    db.commit()
+    db.close()
+
+    result = asyncio.run(data_transfer.apply_transfer(FakeUpload(reward_setup_zip())))
+
+    assert result["created"]["purchases"] == 0
+    db = session_factory()
+    try:
+        card = db.query(CreditCard).filter(CreditCard.nickname == "Savor").one()
+        program = db.query(RewardProgram).filter(RewardProgram.short_code == "CAP1").one()
+        category = db.query(SpendingCategory).filter(SpendingCategory.name == "Grocery").one()
+        rules = db.query(CreditCardRewardRule).order_by(CreditCardRewardRule.priority.asc()).all()
+        assert card.reward_program_id == program.id
+        assert card.rewards_type == "points"
+        assert len(rules) == 2
+        assert rules[0].reward_type == "instant_discount_percent"
+        assert rules[0].merchant_type == "target"
+        assert rules[0].value == 5
+        assert rules[1].credit_card_id == card.id
+        assert rules[1].spending_category_id == category.id
+        assert rules[1].reward_program_id == program.id
+        assert rules[1].multiplier == 3
+    finally:
+        db.close()
+
+
+def test_reward_setup_repeated_import_reuses_rules(monkeypatch, tmp_path):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api import data_transfer
+
+    session_factory = make_session_factory()
+    monkeypatch.setattr(data_transfer, "SessionLocal", session_factory)
+    db = session_factory()
+    db.add(
+        CreditCard(
+            nickname="Savor",
+            issuer="Capital One",
+            network="Mastercard",
+            last_four="1234",
+            credit_limit="10000",
+            rewards_type="OTHER",
+        )
+    )
+    db.commit()
+    db.close()
+
+    contents = reward_setup_zip()
+    asyncio.run(data_transfer.apply_transfer(FakeUpload(contents)))
+    preview = data_transfer.preview_package(session_factory(), data_transfer.load_package(contents))
+
+    assert preview["plan"]["reuse"]["credit_card_reward_rules"] == 2
+    assert preview["plan"]["create"]["credit_card_reward_rules"] == 0
+    db = session_factory()
+    try:
+        assert db.query(CreditCardRewardRule).count() == 2
+    finally:
+        db.close()
+
+
+def test_reward_setup_preview_skips_rule_when_target_card_missing(monkeypatch, tmp_path):
+    configure_transfer_env(monkeypatch, tmp_path)
+    from app.api import data_transfer
+
+    db = make_session_factory()()
+    preview = data_transfer.preview_package(db, data_transfer.load_package(reward_setup_zip()))
+
+    assert preview["plan"]["skipped"]["credit_card_reward_rules"] == 2
+    assert preview["plan"]["skipped_reward_rules"][0]["missing"] == ["credit_card"]
     db.close()
