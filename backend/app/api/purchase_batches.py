@@ -32,6 +32,7 @@ from app.api.purchase_payments import PurchasePaymentCreate, create_purchase_pay
 from app.models.credit_card_reward_transaction import CreditCardRewardTransaction
 from app.services.operational_queues import get_purchases_needing_receipts
 from app.services.credit_card_rewards import (
+    AUTOMATIC_REWARD_SOURCES,
     calculate_reward_components,
     get_purchase_spending_category_id,
     replace_with_manual_reward_override,
@@ -1136,11 +1137,37 @@ def recalculate_purchase_rewards(purchase_batch_id: int):
         if not batch:
             raise HTTPException(status_code=404, detail="Purchase batch not found")
 
+        automatic_before_count = (
+            db.query(CreditCardRewardTransaction)
+            .filter(CreditCardRewardTransaction.purchase_id == purchase_batch_id)
+            .filter(CreditCardRewardTransaction.calculation_source.in_(AUTOMATIC_REWARD_SOURCES))
+            .count()
+        )
+        credit_card_payments = (
+            db.query(PurchasePayment)
+            .filter(PurchasePayment.purchase_batch_id == purchase_batch_id)
+            .filter(PurchasePayment.payment_type == "CREDIT_CARD")
+            .all()
+        )
+        eligible_payment_count = sum(
+            1 for payment in credit_card_payments if payment.credit_card_id is not None
+        )
+        skipped_reason = None
+        if not credit_card_payments:
+            skipped_reason = "No credit card funding/payment rows recorded."
+        elif eligible_payment_count == 0:
+            skipped_reason = "Credit card payment rows are missing a funding card."
+
         transactions = sync_automatic_reward_transactions(db, purchase_batch_id)
         db.commit()
+        transaction_count = len(transactions)
         return {
             "recalculated": True,
-            "transaction_count": len(transactions),
+            "transaction_count": transaction_count,
+            "created_count": max(transaction_count - automatic_before_count, 0),
+            "updated_count": min(transaction_count, automatic_before_count),
+            "skipped_reason": skipped_reason,
+            "eligible_payment_count": eligible_payment_count,
             "reward_transactions": [
                 serialize_reward_transaction(db, transaction)
                 for transaction in transactions

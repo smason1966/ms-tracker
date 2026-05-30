@@ -24,6 +24,8 @@ type PurchaseBatch = {
   notes: string | null;
   store_earns_fuel_points: boolean;
   store_default_fuel_multiplier: number | null;
+  spending_category_id: number | null;
+  reward_transactions?: RewardTransaction[];
   fuel_point_entries?: FuelPointEntry[];
 };
 
@@ -74,9 +76,61 @@ type PurchasePayment = {
   purchase_batch_id: number;
   payment_type: string;
   credit_card_id: number | null;
+  spending_category_id?: number | null;
+  reward_program_id?: number | null;
+  matched_rule_id?: number | null;
   amount: string | number;
+  reward_multiplier?: string | number | null;
+  calculated_rewards?: string | number | null;
+  reward_type?: string | null;
+  points_earned?: string | number | null;
+  cashback_amount?: string | number | null;
+  statement_credit_amount?: string | number | null;
+  purchase_discount_amount?: string | number | null;
+  effective_savings_amount?: string | number | null;
+  calculation_source?: string | null;
   notes: string | null;
   created_at: string;
+};
+
+type RewardTransaction = {
+  id: number;
+  credit_card_id: number;
+  reward_program_id: number | null;
+  spending_category_id: number | null;
+  qualifying_spend: string | number;
+  multiplier: string | number;
+  rewards_earned: string | number;
+  reward_type: string;
+  points_earned: string | number;
+  cashback_amount: string | number;
+  statement_credit_amount: string | number;
+  purchase_discount_amount: string | number;
+  effective_savings_amount: string | number;
+  calculation_source: string;
+  credit_card_product_snapshot: string | null;
+  notes: string | null;
+  credit_card?: {
+    id: number;
+    nickname: string;
+    last_four: string | null;
+  } | null;
+};
+
+type CreditCard = {
+  id: number;
+  nickname: string;
+  issuer: string;
+  network: string | null;
+  last_four: string | null;
+  is_active: boolean;
+};
+
+type SpendingCategory = {
+  id: number;
+  key: string;
+  name: string;
+  active: boolean;
 };
 
 type GiftCard = {
@@ -127,6 +181,13 @@ type FuelPointCorrectionForm = {
   fuel_points_notes: string;
 };
 
+type FundingPaymentForm = {
+  credit_card_id: string;
+  amount: string;
+  spending_category_id: string;
+  notes: string;
+};
+
 type PurchaseDeleteReport = {
   can_delete: boolean;
   blocking_dependencies: { message?: string }[];
@@ -171,6 +232,13 @@ const emptyFuelPointCorrectionForm: FuelPointCorrectionForm = {
   fuel_points_notes: "",
 };
 
+const emptyFundingPaymentForm: FundingPaymentForm = {
+  credit_card_id: "",
+  amount: "",
+  spending_category_id: "",
+  notes: "",
+};
+
 const cardImageAccept = "image/jpeg,image/png,image/webp,image/heic,.jpg,.jpeg,.png,.webp,.heic";
 
 function calculateFuelPointsQuantity(amount: string, unit: string) {
@@ -209,6 +277,8 @@ export default function PurchaseDetailPage() {
   const [destinationPurchases, setDestinationPurchases] = useState<PurchaseBatch[]>([]);
   const [cardBrands, setCardBrands] = useState<CardBrand[]>([]);
   const [fuelAccounts, setFuelAccounts] = useState<FuelAccount[]>([]);
+  const [creditCards, setCreditCards] = useState<CreditCard[]>([]);
+  const [spendingCategories, setSpendingCategories] = useState<SpendingCategory[]>([]);
   const [revealedCardNumbers, setRevealedCardNumbers] = useState<
     Record<number, boolean>
   >({});
@@ -219,6 +289,8 @@ export default function PurchaseDetailPage() {
   const [fuelPointForm, setFuelPointForm] = useState<FuelPointCorrectionForm>(
     emptyFuelPointCorrectionForm,
   );
+  const [fundingPaymentForm, setFundingPaymentForm] =
+    useState<FundingPaymentForm>(emptyFundingPaymentForm);
   const [cardImageFile, setCardImageFile] = useState<File | null>(null);
   const [cardImageInputKey, setCardImageInputKey] = useState(0);
   const [isEditingFinancials, setIsEditingFinancials] = useState(false);
@@ -231,11 +303,16 @@ export default function PurchaseDetailPage() {
     useState(true);
   const [isLoadingCardBrands, setIsLoadingCardBrands] = useState(true);
   const [isLoadingFuelAccounts, setIsLoadingFuelAccounts] = useState(true);
+  const [isLoadingCreditCards, setIsLoadingCreditCards] = useState(true);
+  const [isLoadingSpendingCategories, setIsLoadingSpendingCategories] =
+    useState(true);
   const [isRecalculatingAllocation, setIsRecalculatingAllocation] =
     useState(false);
   const [isSavingFinancials, setIsSavingFinancials] = useState(false);
   const [isEditingFuelPoints, setIsEditingFuelPoints] = useState(false);
   const [isSavingFuelPoints, setIsSavingFuelPoints] = useState(false);
+  const [isAddingFundingPayment, setIsAddingFundingPayment] = useState(false);
+  const [isRecalculatingRewards, setIsRecalculatingRewards] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [movingGiftCardId, setMovingGiftCardId] = useState<number | null>(null);
   const [moveTargetPurchaseId, setMoveTargetPurchaseId] = useState("");
@@ -255,6 +332,10 @@ export default function PurchaseDetailPage() {
   const [fuelAccountsError, setFuelAccountsError] = useState<string | null>(null);
   const [fuelPointError, setFuelPointError] = useState<string | null>(null);
   const [fuelPointMessage, setFuelPointMessage] = useState<string | null>(null);
+  const [fundingError, setFundingError] = useState<string | null>(null);
+  const [fundingMessage, setFundingMessage] = useState<string | null>(null);
+  const [rewardRecalculationMessage, setRewardRecalculationMessage] =
+    useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [moveMessage, setMoveMessage] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -267,6 +348,9 @@ export default function PurchaseDetailPage() {
   const giftCardsUrl = `${API_BASE_URL}/gift-cards/purchase/${purchaseId}`;
   const cardBrandsUrl = `${API_BASE_URL}/card-brands/`;
   const fuelAccountsUrl = `${API_BASE_URL}/fuel-accounts/active`;
+  const creditCardsUrl = `${API_BASE_URL}/credit-cards`;
+  const spendingCategoriesUrl = `${API_BASE_URL}/spending-categories/`;
+  const rewardRecalculateUrl = `${purchaseUrl}/reward-transaction/recalculate`;
   const financialFuelPointsQuantity = calculateFuelPointsQuantity(
     financialForm.fuel_points_amount,
     financialForm.fuel_points_unit,
@@ -286,6 +370,27 @@ export default function PurchaseDetailPage() {
     Boolean(currentFuelAccountId) &&
     Boolean(selectedFuelAccountId) &&
     currentFuelAccountId !== selectedFuelAccountId;
+  const rewardTransactions = purchase?.reward_transactions ?? [];
+  const hasCreditCardFunding = payments.some(
+    (payment) =>
+      payment.payment_type === "CREDIT_CARD" && payment.credit_card_id !== null,
+  );
+  const showMissingFundingDiagnostic =
+    !isLoadingPayments && payments.length === 0;
+  const showMissingRewardDiagnostic =
+    !isLoadingPayments &&
+    payments.length > 0 &&
+    hasCreditCardFunding &&
+    rewardTransactions.length === 0;
+  const defaultFundingAmount =
+    purchase?.purchase_total_paid === null ||
+    purchase?.purchase_total_paid === undefined
+      ? ""
+      : String(purchase.purchase_total_paid);
+  const selectedFundingAmount = fundingPaymentForm.amount || defaultFundingAmount;
+  const selectedFundingCategoryId =
+    fundingPaymentForm.spending_category_id ||
+    (purchase?.spending_category_id ? String(purchase.spending_category_id) : "");
 
   const purchaseSummary = useMemo(() => {
     const summary = giftCards.reduce(
@@ -766,6 +871,86 @@ export default function PurchaseDetailPage() {
   useEffect(() => {
     let isMounted = true;
 
+    async function loadCreditCards() {
+      setIsLoadingCreditCards(true);
+
+      try {
+        const response = await fetch(creditCardsUrl);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load credit cards (${response.status})`);
+        }
+
+        const data = (await response.json()) as CreditCard[];
+
+        if (isMounted) {
+          setCreditCards(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setFundingError(
+            err instanceof Error ? err.message : "Failed to load credit cards.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingCreditCards(false);
+        }
+      }
+    }
+
+    loadCreditCards();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [creditCardsUrl]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadSpendingCategories() {
+      setIsLoadingSpendingCategories(true);
+
+      try {
+        const response = await fetch(spendingCategoriesUrl);
+
+        if (!response.ok) {
+          throw new Error(
+            `Failed to load spending categories (${response.status})`,
+          );
+        }
+
+        const data = (await response.json()) as SpendingCategory[];
+
+        if (isMounted) {
+          setSpendingCategories(data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setFundingError(
+            err instanceof Error
+              ? err.message
+              : "Failed to load spending categories.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingSpendingCategories(false);
+        }
+      }
+    }
+
+    loadSpendingCategories();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [spendingCategoriesUrl]);
+
+  useEffect(() => {
+    let isMounted = true;
+
     async function loadInitialReceipts() {
       if (!purchaseId) {
         return;
@@ -1026,6 +1211,187 @@ export default function PurchaseDetailPage() {
     }
 
     return bodyText;
+  }
+
+  async function refreshPurchaseDetails() {
+    const response = await fetch(purchaseUrl);
+
+    if (!response.ok) {
+      throw new Error(`Failed to refresh purchase (${response.status})`);
+    }
+
+    setPurchase((await response.json()) as PurchaseBatch);
+  }
+
+  function updateFundingPaymentFormField(
+    field: keyof FundingPaymentForm,
+    value: string,
+  ) {
+    setFundingPaymentForm((currentForm) => ({
+      ...currentForm,
+      [field]: value,
+    }));
+    setFundingError(null);
+    setFundingMessage(null);
+  }
+
+  function creditCardLabel(cardId: number | null | undefined) {
+    if (!cardId) {
+      return "";
+    }
+
+    const card = creditCards.find((currentCard) => currentCard.id === cardId);
+    if (!card) {
+      return `Card #${cardId}`;
+    }
+
+    return `${card.nickname}${card.last_four ? ` · ${card.last_four}` : ""}`;
+  }
+
+  function spendingCategoryLabel(categoryId: number | null | undefined) {
+    if (!categoryId) {
+      return "Store/default category";
+    }
+
+    const category = spendingCategories.find(
+      (currentCategory) => currentCategory.id === categoryId,
+    );
+    return category?.name ?? `Category #${categoryId}`;
+  }
+
+  function formatRewardValue(transaction: RewardTransaction) {
+    if (Number(transaction.points_earned) > 0) {
+      return `${Number(transaction.points_earned).toLocaleString()} points`;
+    }
+
+    const savingsAmount = Number(transaction.effective_savings_amount);
+    if (savingsAmount > 0) {
+      return formatAmount(savingsAmount);
+    }
+
+    return String(transaction.rewards_earned);
+  }
+
+  async function handleAddFundingPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!purchaseId) {
+      return;
+    }
+
+    if (!fundingPaymentForm.credit_card_id) {
+      setFundingError("Choose the credit card used to fund this purchase.");
+      return;
+    }
+
+    if (!selectedFundingAmount || Number(selectedFundingAmount) <= 0) {
+      setFundingError("Enter a positive payment amount.");
+      return;
+    }
+
+    setIsAddingFundingPayment(true);
+    setFundingError(null);
+    setFundingMessage(null);
+    setRewardRecalculationMessage(null);
+
+    try {
+      const response = await fetch(paymentsUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          payment_type: "CREDIT_CARD",
+          credit_card_id: Number(fundingPaymentForm.credit_card_id),
+          amount: selectedFundingAmount,
+          spending_category_id: selectedFundingCategoryId
+            ? Number(selectedFundingCategoryId)
+            : null,
+          notes:
+            fundingPaymentForm.notes.trim() === ""
+              ? null
+              : fundingPaymentForm.notes.trim(),
+        }),
+      });
+
+      if (!response.ok) {
+        const bodyText = await response.text();
+        throw new Error(
+          apiErrorDetail(bodyText) ||
+            `Failed to add funding payment (${response.status})`,
+        );
+      }
+
+      setFundingMessage("Funding payment added and rewards recalculated.");
+      setFundingPaymentForm(emptyFundingPaymentForm);
+      await Promise.all([
+        refreshPurchaseDetails(),
+        loadDeleteReport({ showLoading: false }),
+      ]);
+      const paymentsResponse = await fetch(paymentsUrl);
+      if (paymentsResponse.ok) {
+        setPayments((await paymentsResponse.json()) as PurchasePayment[]);
+      }
+    } catch (err) {
+      setFundingError(
+        err instanceof Error ? err.message : "Failed to add funding payment.",
+      );
+    } finally {
+      setIsAddingFundingPayment(false);
+    }
+  }
+
+  async function handleRecalculateRewards() {
+    if (!purchaseId) {
+      return;
+    }
+
+    setIsRecalculatingRewards(true);
+    setFundingError(null);
+    setRewardRecalculationMessage(null);
+
+    try {
+      const response = await fetch(rewardRecalculateUrl, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const bodyText = await response.text();
+        throw new Error(
+          apiErrorDetail(bodyText) ||
+            `Failed to recalculate rewards (${response.status})`,
+        );
+      }
+
+      const result = (await response.json()) as {
+        transaction_count: number;
+        created_count?: number;
+        updated_count?: number;
+        skipped_reason?: string | null;
+      };
+      setRewardRecalculationMessage(
+        result.skipped_reason
+          ? result.skipped_reason
+          : `Reward transactions recalculated: ${
+              result.transaction_count
+            } active, ${result.created_count ?? 0} created, ${
+              result.updated_count ?? 0
+            } updated.`,
+      );
+      await refreshPurchaseDetails();
+      const paymentsResponse = await fetch(paymentsUrl);
+      if (paymentsResponse.ok) {
+        setPayments((await paymentsResponse.json()) as PurchasePayment[]);
+      }
+    } catch (err) {
+      setFundingError(
+        err instanceof Error
+          ? err.message
+          : "Failed to recalculate rewards.",
+      );
+    } finally {
+      setIsRecalculatingRewards(false);
+    }
   }
 
   async function handleMoveGiftCard(giftCard: GiftCard) {
@@ -1594,9 +1960,15 @@ export default function PurchaseDetailPage() {
         ) : null}
 
         <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <details>
+            <summary className="cursor-pointer text-lg font-semibold">
+              Purchase Cleanup
+            </summary>
+            <p className="mt-1 text-sm text-slate-500">
+              Delete eligibility and cleanup actions for empty purchase records.
+            </p>
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-lg font-semibold">Purchase Cleanup</h2>
               <p className="mt-1 text-sm text-slate-500">
                 Purchases with no gift cards or inventory records can be
                 deleted. Related receipt records and generated payment/reward
@@ -1709,6 +2081,7 @@ export default function PurchaseDetailPage() {
               </button>
             </div>
           </div>
+          </details>
         </section>
 
         <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
@@ -1903,7 +2276,62 @@ export default function PurchaseDetailPage() {
         ) : null}
 
         <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold">Payment Breakdown</h2>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Payments & Funding</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Funding rows drive credit card reward calculations for this
+                purchase.
+              </p>
+            </div>
+            <button
+              className="h-10 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+              disabled={isRecalculatingRewards}
+              onClick={handleRecalculateRewards}
+              type="button"
+            >
+              {isRecalculatingRewards ? "Recalculating..." : "Generate/Recalculate Rewards"}
+            </button>
+          </div>
+
+          {showMissingFundingDiagnostic ? (
+            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <p className="font-semibold">No funding/payment rows recorded.</p>
+              <p className="mt-1">
+                Credit card rewards cannot be calculated until a funding row is
+                added.
+              </p>
+            </div>
+          ) : null}
+
+          {showMissingRewardDiagnostic ? (
+            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <p className="font-semibold">Rewards have not been generated.</p>
+              <p className="mt-1">
+                Funding rows exist, but there are no credit card reward
+                transactions yet. Recalculate rewards to rebuild them.
+              </p>
+            </div>
+          ) : null}
+
+          {fundingMessage ? (
+            <p className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+              {fundingMessage}
+            </p>
+          ) : null}
+
+          {rewardRecalculationMessage ? (
+            <p className="mt-4 rounded-md border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm font-medium text-cyan-900">
+              {rewardRecalculationMessage}
+            </p>
+          ) : null}
+
+          {fundingError ? (
+            <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+              {fundingError}
+            </p>
+          ) : null}
+
           {isLoadingPayments ? (
             <p className="mt-4 text-sm text-slate-500">Loading payments...</p>
           ) : paymentsError ? (
@@ -1921,7 +2349,9 @@ export default function PurchaseDetailPage() {
                   <tr>
                     <th className="px-4 py-3">Type</th>
                     <th className="px-4 py-3">Funding Card</th>
+                    <th className="px-4 py-3">Category</th>
                     <th className="px-4 py-3">Amount</th>
+                    <th className="px-4 py-3">Reward Calc</th>
                     <th className="px-4 py-3">Notes</th>
                   </tr>
                 </thead>
@@ -1932,12 +2362,22 @@ export default function PurchaseDetailPage() {
                         {payment.payment_type.replace("_", " ")}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">
-                        {payment.credit_card_id
-                          ? `Card #${payment.credit_card_id}`
-                          : ""}
+                        {creditCardLabel(payment.credit_card_id)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                        {spendingCategoryLabel(payment.spending_category_id)}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 font-semibold">
                         {formatAmount(payment.amount)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                        {payment.calculated_rewards
+                          ? `${payment.calculated_rewards} ${
+                              payment.reward_type ?? "rewards"
+                            }`
+                          : payment.payment_type === "CREDIT_CARD"
+                            ? "Needs reward rule/card"
+                            : ""}
                       </td>
                       <td className="px-4 py-3 text-slate-600">
                         {payment.notes || ""}
@@ -1948,6 +2388,163 @@ export default function PurchaseDetailPage() {
               </table>
             </div>
           )}
+
+          <form
+            className="mt-5 grid gap-4 rounded-md border border-slate-200 bg-slate-50 p-4 md:grid-cols-4"
+            onSubmit={handleAddFundingPayment}
+          >
+            <label className="space-y-2 text-sm font-medium text-slate-700 md:col-span-2">
+              <span>Credit Card</span>
+              <select
+                className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                disabled={isLoadingCreditCards || isAddingFundingPayment}
+                onChange={(event) =>
+                  updateFundingPaymentFormField(
+                    "credit_card_id",
+                    event.target.value,
+                  )
+                }
+                required
+                value={fundingPaymentForm.credit_card_id}
+              >
+                <option value="">
+                  {isLoadingCreditCards ? "Loading cards..." : "Select funding card"}
+                </option>
+                {creditCards
+                  .filter((card) => card.is_active)
+                  .map((card) => (
+                    <option key={card.id} value={card.id}>
+                      {card.nickname}
+                      {card.last_four ? ` · ${card.last_four}` : ""}
+                    </option>
+                  ))}
+              </select>
+            </label>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Amount</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                min="0"
+                onChange={(event) =>
+                  updateFundingPaymentFormField("amount", event.target.value)
+                }
+                required
+                step="0.01"
+                type="number"
+                value={selectedFundingAmount}
+              />
+            </label>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700">
+              <span>Spending Category</span>
+              <select
+                className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                disabled={isLoadingSpendingCategories || isAddingFundingPayment}
+                onChange={(event) =>
+                  updateFundingPaymentFormField(
+                    "spending_category_id",
+                    event.target.value,
+                  )
+                }
+                value={selectedFundingCategoryId}
+              >
+                <option value="">Use store/default category</option>
+                {spendingCategories
+                  .filter((category) => category.active)
+                  .map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+
+            <label className="space-y-2 text-sm font-medium text-slate-700 md:col-span-3">
+              <span>Notes</span>
+              <input
+                className="h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-slate-950 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                onChange={(event) =>
+                  updateFundingPaymentFormField("notes", event.target.value)
+                }
+                placeholder="Optional funding note"
+                value={fundingPaymentForm.notes}
+              />
+            </label>
+
+            <div className="flex items-end">
+              <button
+                className="h-11 w-full rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                disabled={
+                  isAddingFundingPayment ||
+                  isLoadingCreditCards ||
+                  creditCards.length === 0
+                }
+                type="submit"
+              >
+                {isAddingFundingPayment ? "Adding..." : "Add Funding Payment"}
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold">Credit Card Rewards</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Rewards are generated from CREDIT_CARD funding rows.
+          </p>
+
+          {showMissingFundingDiagnostic ? (
+            <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
+              Missing funding payment: add a CREDIT_CARD payment row before
+              recalculating rewards.
+            </p>
+          ) : null}
+
+          {hasCreditCardFunding && rewardTransactions.length === 0 ? (
+            <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
+              No reward transaction found. Check funding card, spending
+              category, and matching reward rules, then recalculate.
+            </p>
+          ) : null}
+
+          {rewardTransactions.length > 0 ? (
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  <tr>
+                    <th className="px-4 py-3">Card</th>
+                    <th className="px-4 py-3">Spend</th>
+                    <th className="px-4 py-3">Reward</th>
+                    <th className="px-4 py-3">Rule/Source</th>
+                    <th className="px-4 py-3">Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 bg-white">
+                  {rewardTransactions.map((transaction) => (
+                    <tr key={transaction.id}>
+                      <td className="whitespace-nowrap px-4 py-3 font-medium">
+                        {transaction.credit_card?.nickname ??
+                          creditCardLabel(transaction.credit_card_id)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                        {formatAmount(transaction.qualifying_spend)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 font-semibold">
+                        {formatRewardValue(transaction)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                        {transaction.calculation_source.replaceAll("_", " ")}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">
+                        {transaction.notes || ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
         </section>
 
         <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
