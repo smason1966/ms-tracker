@@ -1314,10 +1314,12 @@ export default function PurchaseDetailPage() {
     return String(transaction.rewards_earned);
   }
 
-  async function handleSaveFundingPayment(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
+  async function saveFundingPayment() {
     if (!purchaseId) {
+      return;
+    }
+
+    if (isAddingFundingPayment) {
       return;
     }
 
@@ -1392,6 +1394,11 @@ export default function PurchaseDetailPage() {
     } finally {
       setIsAddingFundingPayment(false);
     }
+  }
+
+  async function handleSaveFundingPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await saveFundingPayment();
   }
 
   async function handleDeleteFundingPayment(payment: PurchasePayment) {
@@ -2516,6 +2523,7 @@ export default function PurchaseDetailPage() {
 
           <form
             className="mt-5 grid gap-4 rounded-md border border-slate-200 bg-slate-50 p-4 md:grid-cols-4"
+            noValidate
             onSubmit={handleSaveFundingPayment}
           >
             <div className="md:col-span-4">
@@ -2644,7 +2652,8 @@ export default function PurchaseDetailPage() {
                     (fundingPaymentForm.payment_type === "CREDIT_CARD" &&
                       (isLoadingCreditCards || creditCards.length === 0))
                   }
-                  type="submit"
+                  onClick={saveFundingPayment}
+                  type="button"
                 >
                   {isAddingFundingPayment
                     ? "Saving..."
